@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>M0110HUD</string>
+	<key>CFBundleDisplayName</key>
+	<string>M0110 HUD</string>
+	<key>CFBundleExecutable</key>
+	<string>M0110HUD</string>
+	<key>CFBundleIconFile</key>
+	<string>M0110</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.shaedil.m0110hud</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- Accessory app: no Dock icon, no menu bar. -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- Required for CoreBluetooth; shown in the permission prompt. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Reads your keyboard's battery level so it can be shown when the keyboard connects.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>
