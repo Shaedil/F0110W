@@ -1,0 +1,6 @@
+board:
+  name: framework_cb
+  full_name: Framework Wireless Keyboard Control Board
+  vendor: framework
+  socs:
+    - name: nrf54lm20a

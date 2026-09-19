@@ -1,0 +1,16 @@
+/*
+ * M0110 shield wiring for the Framework control board.
+ *
+ *   KSI1 = P0.01 -> M0110 DATA
+ *   KSI2 = P0.02 -> M0110 CLOCK
+ *   KSO0 = P1.00 -> bq25185 boost EN
+ *
+ * The board has no 5 V rail of its own: the PMIC produces two 3.3 V outputs,
+ * so an external boost is required.
+ */
+
+&m0110 {
+    data-gpios = <&gpio0 1 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+    clock-gpios = <&gpio0 2 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+    en-gpios = <&gpio1 0 GPIO_ACTIVE_HIGH>;
+};

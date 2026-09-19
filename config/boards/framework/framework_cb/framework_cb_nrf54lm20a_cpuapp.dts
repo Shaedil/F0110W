@@ -1,0 +1,146 @@
+/*
+ * Framework Wireless Keyboard Control Board, application core.
+ *
+ * Copyright (c) 2026 The ZMK Contributors
+ * SPDX-License-Identifier: MIT
+ *
+ * Written from Framework's published schematics, so parts of it are inferred
+ * rather than measured. Framework's own board definition is not public, so
+ * this is a stand-in: the node labels match the ones their MCUboot overlays
+ * name, so that swapping to their board later is close to free.
+ *
+ * This definition covers a converter build, which drives nothing on the board
+ * except the two M0110 signal lines and a boost enable. The touchpad, the
+ * scissor matrix, the backlight, the indicator LED and the nPM1300 are all
+ * present in hardware and deliberately absent here.
+ */
+
+/dts-v1/;
+
+#include <nordic/nrf54lm20a_cpuapp.dtsi>
+
+/ {
+	compatible = "framework,framework-cb-cpuapp";
+	model = "Framework Wireless Keyboard Control Board";
+
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+		zephyr,sram = &cpuapp_sram;
+		zephyr,flash-controller = &rram_controller;
+		zephyr,flash = &cpuapp_rram;
+	};
+};
+
+&cpuapp_sram {
+	status = "okay";
+};
+
+&hfpll {
+	clock-frequency = <DT_FREQ_M(128)>;
+};
+
+/* X1, 32.768 kHz, with 12 pF load capacitors fitted on both legs (C12, C26),
+ * so the SoC's internal capacitors stay out of circuit. */
+&lfxo {
+	load-capacitors = "external";
+};
+
+/* Y1, 32 MHz.  Its external load capacitor footprints (C34, C35) are marked NA
+ * on the schematic, so the internal capacitors are used.  The exact value is
+ * not documented; this is the figure Nordic's own boards use and it should be
+ * confirmed against a frequency measurement. */
+&hfxo {
+	load-capacitors = "internal";
+	load-capacitance-femtofarad = <15000>;
+};
+
+&vregmain {
+	status = "okay";
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+&vregusb {
+	status = "okay";
+};
+
+&grtc {
+	owned-channels = <0 1 2 3 4 5 6 7 8 9 10 11>;
+	/* Channels 7-11 are reserved for zero-latency interrupts. */
+	child-owned-channels = <7 8 9 10 11>;
+	status = "okay";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&gpio2 {
+	status = "okay";
+};
+
+&gpio3 {
+	status = "okay";
+};
+
+&gpiote20 {
+	status = "okay";
+};
+
+&gpiote30 {
+	status = "okay";
+};
+
+&radio {
+	status = "okay";
+};
+
+&clock {
+	status = "okay";
+};
+
+&temp {
+	status = "okay";
+};
+
+zephyr_udc0: &usbhs {
+	status = "okay";
+};
+
+/*
+ * Partition layout copied from Framework's MCUboot board files, because the
+ * bootloader already on the board is what decides where an application may
+ * live. Their boot partition is 96 kB rather than Zephyr's default 62 kB, so
+ * slot0 starts at 0x18000 instead of 0x10000.  Do not change these without
+ * changing the bootloader too.
+ */
+&cpuapp_rram {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x0 DT_SIZE_K(96)>;
+		};
+
+		slot0_partition: partition@18000 {
+			label = "image-0";
+			reg = <0x18000 DT_SIZE_K(934)>;
+		};
+
+		slot1_partition: partition@102000 {
+			label = "image-1";
+			reg = <0x102000 DT_SIZE_K(934)>;
+		};
+
+		storage_partition: partition@1f4000 {
+			label = "storage";
+			reg = <0x1f4000 DT_SIZE_K(36)>;
+		};
+	};
+};

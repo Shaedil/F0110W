@@ -1,0 +1,14 @@
+# Copyright (c) 2026 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+if BOARD_FRAMEWORK_CB_NRF54LM20A_CPUAPP
+
+config HW_STACK_PROTECTION
+	default ARCH_HAS_STACK_PROTECTION
+
+# The board ships with Framework's MCUboot in the boot partition, so an
+# application image is always chain-loaded rather than reset into directly.
+config BOOTLOADER_MCUBOOT
+	default y
+
+endif # BOARD_FRAMEWORK_CB_NRF54LM20A_CPUAPP

@@ -1,0 +1,14 @@
+identifier: framework_cb/nrf54lm20a/cpuapp
+name: Framework Wireless Keyboard Control Board
+type: mcu
+arch: arm
+toolchain:
+  - gnuarmemb
+  - zephyr
+sysbuild: true
+ram: 511
+flash: 934
+supported:
+  - gpio
+  - i2c
+  - usbd
