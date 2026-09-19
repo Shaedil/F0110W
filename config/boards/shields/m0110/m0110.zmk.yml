@@ -6,3 +6,4 @@ url: https://github.com/tmk/tmk_keyboard
 requires: [gpio]
 features:
   - keys
+  - studio

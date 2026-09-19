@@ -14,7 +14,9 @@ description: |
         compatible = "zmk,kscan-m0110";
         data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
         clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
-        poll-period-ms = <5>;
+        en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+        idle-timeout-ms = <300000>;
+        peek-interval-ms = <5000>;
         rows = <14>;
         columns = <8>;
     };
@@ -38,8 +40,33 @@ properties:
     type: int
     default: 5
     description: |
-      How often to poll the keyboard for key events, in milliseconds.
-      Lower values provide better responsiveness but use more CPU.
+      Deprecated — ignored by the interrupt-driven driver.
+      The driver now uses INQUIRY with a clock-line interrupt instead of
+      polling, so the CPU sleeps between key events.
+
+  en-gpios:
+    type: phandle-array
+    description: |
+      Optional GPIO connected to the 5V boost converter's EN (enable) pin.
+      When specified, the driver disables the boost converter after the idle
+      timeout to save power, and periodically re-enables it to check for
+      keyboard activity.  The TPS61023 draws only 0.1 µA when disabled.
+
+  idle-timeout-ms:
+    type: int
+    default: 300000
+    description: |
+      Milliseconds of inactivity before the driver disables the 5V boost
+      converter (requires en-gpios).  Default is 5 minutes.
+
+  peek-interval-ms:
+    type: int
+    default: 5000
+    description: |
+      How often (in milliseconds) to briefly re-enable the 5V boost and
+      check for keyboard activity while in power-save mode.  The keyboard
+      needs ~1 s to boot each time, so very short intervals reduce savings.
+      Default is 5 seconds.
 
   rows:
     type: int

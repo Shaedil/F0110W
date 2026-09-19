@@ -1,12 +1,8 @@
 /*
  * Apple M0110/M0110A Keyboard Keymap for ZMK
  *
- * This keymap matches the M0110A layout with integrated numpad.
- * The matrix is 14 rows x 8 columns (112 positions).
- *
- * Scancode mapping (from TMK unimap_trans.h):
- *   Row = (scancode >> 3) & 0x0F
- *   Col = scancode & 0x07
+ * This keymap uses a matrix transform that maps 79 physical keys
+ * to their positions in the M0110A scancode matrix (14x8).
  *
  * Physical layout (M0110A):
  * ,---------------------------------------------------------. ,---------------.
@@ -16,9 +12,9 @@
  * |-----------------------------------------------------'   | |---------------|
  * |CapsLo|  A|  S|  D|  F|  G|  H|  J|  K|  L|  ;|  '|Return| |  4|  5|  6|  +|
  * |---------------------------------------------------------| |---------------|
- * |Shift   |  Z|  X|  C|  V|  B|  N|  M|  ,|  ,|  /|Shft|Up | |  1|  2|  3|   |
+ * |Shft|ISO|  Z|  X|  C|  V|  B|  N|  M|  ,|  .|  /|Shft|Up | |  1|  2|  3|   |
  * |---------------------------------------------------------' |-----------|Ent|
- * |Optio|Mac    |           Space           |  \|Lft|Rgt|Dn | |      0|  .|   |
+ * | Opt|Cmd    |           Space           |  \|Lft|Rgt|Dn  | |      0|  .|   |
  * `---------------------------------------------------------' `---------------'
  */
 
@@ -34,112 +30,40 @@
         compatible = "zmk,keymap";
 
         default_layer {
-            /*
-             * Matrix positions mapped from M0110 scancodes:
-             *
-             * Row 0 (scancodes 0x00-0x07): A S D F H G Z X
-             * Row 1 (scancodes 0x08-0x0F): C V unused B Q W E R
-             * Row 2 (scancodes 0x10-0x17): Y T 1 2 3 4 6 5
-             * Row 3 (scancodes 0x18-0x1F): = 9 7 - 8 0 ] O
-             * Row 4 (scancodes 0x20-0x27): U [ I P Enter L J '
-             * Row 5 (scancodes 0x28-0x2F): K ; \ , / N M .
-             * Row 6 (scancodes 0x30-0x37): Tab Space ` Bksp RGUI unused unused LGUI
-             * Row 7 (scancodes 0x38-0x3F): LShift Caps LAlt unused unused unused unused unused
-             * Row 8 (scancodes 0x40-0x47): unused KP. Right unused unused unused Left NumLock
-             * Row 9 (scancodes 0x48-0x4F): Down unused unused unused KPEnter Up KP+ unused
-             * Row 10 (scancodes 0x50-0x57): unused unused KP0 KP1 KP2 KP3 KP4 KP5
-             * Row 11 (scancodes 0x58-0x5F): KP6 KP7 unused KP8 KP9 unused unused unused
-             * Row 12 (scancodes 0x60-0x67): unused unused KP- unused unused unused KP, unused
-             * Row 13 (scancodes 0x68-0x6F): KP/ unused unused unused unused KP* unused unused
-             */
             bindings = <
-                /* Row 0: A S D F H G Z X */
-                &kp A      &kp S      &kp D      &kp F      &kp H      &kp G      &kp Z      &kp X
+                /* Row 0: Number row + Numpad top */
+                &kp ESC    &kp N1     &kp N2     &kp N3     &kp N4     &kp N5     &kp N6     &kp N7     &kp N8     &kp N9     &kp N0     &kp MINUS  &kp EQUAL  &kp BSPC     &kp KP_NUM &kp KP_COMMA &kp KP_SLASH &kp KP_MULTIPLY
 
-                /* Row 1: C V NUBS B Q W E R */
-                &kp C      &kp V      &kp NUBS   &kp B      &kp Q      &kp W      &kp E      &kp R
+                /* Row 1: QWERTY + Numpad row 2 */
+                &kp TAB    &kp Q      &kp W      &kp E      &kp R      &kp T      &kp Y      &kp U      &kp I      &kp O      &kp P      &kp LBKT   &kp RBKT                &kp KP_N7  &kp KP_N8  &kp KP_N9  &kp KP_MINUS
 
-                /* Row 2: Y T 1 2 3 4 6 5 */
-                &kp Y      &kp T      &kp N1     &kp N2     &kp N3     &kp N4     &kp N6     &kp N5
+                /* Row 2: Home row + Numpad row 3 */
+                &kp CAPS   &kp A      &kp S      &kp D      &kp F      &kp G      &kp H      &kp J      &kp K      &kp L      &kp SEMI   &kp SQT    &kp RET                 &kp KP_N4  &kp KP_N5  &kp KP_N6  &kp KP_PLUS
 
-                /* Row 3: = 9 7 - 8 0 ] O */
-                &kp EQUAL  &kp N9     &kp N7     &kp MINUS  &kp N8     &kp N0     &kp RBKT   &kp O
+                /* Row 3: Shift row + Numpad row 4 */
+                &kp LSHFT  &kp NUBS   &kp Z      &kp X      &kp C      &kp V      &kp B      &kp N      &kp M      &kp COMMA  &kp DOT    &kp FSLH   &kp RGUI   &kp UP       &kp KP_N1  &kp KP_N2  &kp KP_N3
 
-                /* Row 4: U [ I P Enter L J ' */
-                &kp U      &kp LBKT   &kp I      &kp P      &kp RET    &kp L      &kp J      &kp SQT
-
-                /* Row 5: K ; \(FN) , / N M . */
-                &kp K      &kp SEMI   &lt FN BSLH &kp COMMA  &kp FSLH   &kp N      &kp M      &kp DOT
-
-                /* Row 6: Tab Space Esc Bksp RGUI unused unused LAlt */
-                &kp TAB    &kp SPACE  &kp ESC    &kp BSPC   &kp RGUI   &none      &none      &kp LALT
-
-                /* Row 7: LShift Caps LCtrl unused unused unused unused unused */
-                &kp LSHFT  &kp CAPS   &kp LCTRL  &none      &none      &none      &none      &none
-
-                /* Row 8: unused KP. Right unused unused unused Left NumLock */
-                &none      &kp KP_DOT &kp RIGHT  &none      &none      &none      &kp LEFT   &kp KP_NUM
-
-                /* Row 9: Down unused unused unused KPEnter Up KP+ unused */
-                &kp DOWN   &none      &none      &none      &kp KP_ENTER &kp UP   &kp KP_PLUS &none
-
-                /* Row 10: unused unused KP0 KP1 KP2 KP3 KP4 KP5 */
-                &none      &none      &kp KP_N0  &kp KP_N1  &kp KP_N2  &kp KP_N3  &kp KP_N4  &kp KP_N5
-
-                /* Row 11: KP6 KP7 unused KP8 KP9 unused unused unused */
-                &kp KP_N6  &kp KP_N7  &none      &kp KP_N8  &kp KP_N9  &none      &none      &none
-
-                /* Row 12: unused unused KP- unused unused unused KP, unused */
-                &none      &none      &kp KP_MINUS &none    &none      &none      &kp KP_COMMA &none
-
-                /* Row 13: KP/ unused unused unused unused KP* unused unused */
-                &kp KP_SLASH &none    &none      &none      &none      &kp KP_MULTIPLY &none &none
+                /* Row 4: Bottom row + Numpad row 5 */
+                &kp LCTRL  &kp LALT   &kp SPACE                                                          &lt FN BSLH &kp LEFT  &kp RIGHT  &kp DOWN                            &kp KP_N0  &kp KP_DOT &kp KP_ENTER
             >;
         };
 
         fn_layer {
             bindings = <
-                /* Row 0: VolDn VolUp Mute F H G Z X */
-                &kp C_VOL_DN &kp C_VOL_UP &kp C_MUTE &trans   &trans     &trans     &trans     &trans
+                /* Row 0: F-keys + Numpad top */
+                &kp GRAVE  &kp F1     &kp F2     &kp F3     &kp F4     &kp F5     &kp F6     &kp F7     &kp F8     &kp F9     &kp F10    &kp F11    &kp F12    &kp DEL      &trans     &trans     &trans     &trans
 
-                /* Row 1: C V NUBS BT_CLR BT0 BT1 BT2 BT3 */
-                &trans     &trans     &trans     &bt BT_CLR &bt BT_SEL 0 &bt BT_SEL 1 &bt BT_SEL 2 &bt BT_SEL 3
+                /* Row 1: BT profiles + Numpad row 2 */
+                &trans     &bt BT_SEL 0 &bt BT_SEL 1 &bt BT_SEL 2 &bt BT_SEL 3 &bt BT_SEL 4 &trans  &trans     &kp PSCRN  &kp SLCK   &kp PAUSE_BREAK &kp UP  &kp INS                 &trans     &trans     &trans     &trans
 
-                /* Row 2: Y BT4 1 2 3 4 6 5 */
-                &trans     &bt BT_SEL 4 &kp F1   &kp F2     &kp F3     &kp F4     &kp F6     &kp F5
+                /* Row 2: Media/Nav + Numpad row 3 */
+                &studio_unlock &kp C_VOL_DN &kp C_VOL_UP &kp C_MUTE &trans  &trans     &trans     &trans     &kp HOME   &kp PG_UP  &kp LEFT   &kp RIGHT  &trans                  &trans     &trans     &trans     &trans
 
-                /* Row 3: = 9 7 - 8 0 Ins ScrLk */
-                &kp F12    &kp F9     &kp F7     &kp F11    &kp F8     &kp F10    &kp INS    &kp SLCK
+                /* Row 3: Shift row + Numpad row 4 */
+                &trans     &trans     &trans     &trans     &trans     &trans     &bt BT_CLR &trans     &trans     &kp END    &kp PG_DN  &kp DOWN   &trans     &kp PG_UP    &trans     &trans     &trans
 
-                /* Row 4: U Up PrtSc Pause Enter PgUp J Right */
-                &trans     &kp UP     &kp PSCRN  &kp PAUSE_BREAK &trans &kp PG_UP &trans     &kp RIGHT
-
-                /* Row 5: Home Left \(FN) End Down N M PgDn */
-                &kp HOME   &kp LEFT   &trans     &kp END    &kp DOWN   &trans     &trans     &kp PG_DN
-
-                /* Row 6: Tab Space ` Bksp RGUI unused unused LGUI */
-                &trans     &trans     &kp GRAVE  &kp DEL    &trans     &none      &none      &trans
-
-                /* Row 7: LShift Caps LAlt unused unused unused unused unused */
-                &trans     &trans     &trans     &none      &none      &none      &none      &none
-
-                /* Row 8: unused KP. Right unused unused unused Left NumLock */
-                &none      &trans     &kp END    &none      &none      &none      &kp HOME   &trans
-
-                /* Row 9: Down unused unused unused KPEnter Up KP+ unused */
-                &kp PG_DN  &none      &none      &none      &trans     &kp PG_UP  &trans     &none
-
-                /* Row 10: unused unused KP0 KP1 KP2 KP3 KP4 KP5 */
-                &none      &none      &trans     &trans     &trans     &trans     &trans     &trans
-
-                /* Row 11: KP6 KP7 unused KP8 KP9 unused unused unused */
-                &trans     &trans     &none      &trans     &trans     &none      &none      &none
-
-                /* Row 12: unused unused KP- unused unused unused KP, unused */
-                &none      &none      &trans     &none      &none      &none      &trans     &none
-
-                /* Row 13: KP/ unused unused unused unused KP* unused unused */
-                &trans     &none      &none      &none      &none      &trans     &none      &none
+                /* Row 4: Bottom row + Numpad row 5 */
+                &trans     &trans     &trans                                                            &trans     &kp HOME   &kp END    &kp PG_DN                            &trans     &trans     &trans
             >;
         };
     };

@@ -4,16 +4,20 @@
  * Pin connections:
  *   nice!nano D2 (P0.17) -> M0110 Data (directly to keyboard)
  *   nice!nano D3 (P0.20) -> M0110 Clock (directly to keyboard)
- *   nice!nano VCC -> M0110 +5V
- *   nice!nano GND -> M0110 GND
+ *   nice!nano D1 (P0.06) -> bq25185 boost EN pad (optional, for power mgmt)
+ *   bq25185 5V out        -> M0110 +5V
+ *   nice!nano GND          -> M0110 GND
  *
  * The nice!nano communicates directly with the M0110 keyboard via
  * its SDA (D2) and SCL (D3) lines using the M0110 protocol.
  */
 
+#include "m0110-layouts.dtsi"
+
 / {
     chosen {
         zmk,kscan = &kscan0;
+        zmk,physical-layout = &m0110a_layout;
     };
 
     kscan0: kscan_m0110 {
@@ -27,7 +31,8 @@
         data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
         clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
 
-        poll-period-ms = <5>;
+        /* bq25185 boost EN pin — wire D1 (P0.06) to the EN pad */
+        en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
 
         /* Matrix dimensions for M0110A (14 rows x 8 cols = 112 positions) */
         rows = <14>;
@@ -35,9 +40,12 @@
     };
 };
 
-/* USB CDC ACM for logging */
+/* USB CDC ACM for logging and Studio RPC */
 &zephyr_udc0 {
     cdc_acm_uart0: cdc_acm_uart0 {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+    studio_uart: studio_uart {
         compatible = "zephyr,cdc-acm-uart";
     };
 };
@@ -45,5 +53,6 @@
 / {
     chosen {
         zephyr,console = &cdc_acm_uart0;
+        zmk,studio-rpc-uart = &studio_uart;
     };
 };

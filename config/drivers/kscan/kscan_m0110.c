@@ -59,10 +59,18 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define REQUEST_WAIT_MS     250
 #define INIT_DELAY_MS       1000
 
+/* Thread configuration */
+#define M0110_THREAD_STACK_SIZE 1024
+#define M0110_THREAD_PRIORITY   K_PRIO_COOP(10)
+
 struct kscan_m0110_config {
     struct gpio_dt_spec data_gpio;
     struct gpio_dt_spec clock_gpio;
-    uint32_t poll_period_ms;
+    struct gpio_dt_spec en_gpio; /* optional: 5V boost EN pin */
+    k_thread_stack_t *stack;
+    size_t stack_size;
+    uint32_t idle_timeout_ms;
+    uint32_t peek_interval_ms;
     uint8_t rows;
     uint8_t columns;
 };
@@ -70,18 +78,22 @@ struct kscan_m0110_config {
 struct kscan_m0110_data {
     const struct device *dev;
     kscan_callback_t callback;
-    struct k_work_delayable work;
+    struct k_thread thread;
+    struct k_sem data_ready;
+    struct gpio_callback clock_cb;
     uint8_t keybuf;
     uint8_t keybuf2;
     uint8_t rawbuf;
     uint8_t error;
     bool enabled;
+    bool caps_lock_down; /* physical locking switch state */
+    bool power_save;     /* 5V boost disabled to save power */
+    int64_t last_key_time;
 };
 
 /* Forward declarations */
 static int m0110_send(const struct device *dev, uint8_t data);
 static uint8_t m0110_recv(const struct device *dev);
-static uint8_t m0110_recv_key(const struct device *dev);
 
 /* GPIO helpers */
 static inline void clock_lo(const struct device *dev)
@@ -134,6 +146,15 @@ static inline void request(const struct device *dev)
 {
     clock_hi(dev);
     data_lo(dev);
+}
+
+/* Enable or disable the 5V boost converter via the EN pin (if wired) */
+static inline void boost_set(const struct device *dev, bool enable)
+{
+    const struct kscan_m0110_config *config = dev->config;
+    if (config->en_gpio.port != NULL) {
+        gpio_pin_set_dt(&config->en_gpio, enable ? 1 : 0);
+    }
 }
 
 /* Wait for clock to go low, returns remaining microseconds or 0 on timeout */
@@ -265,7 +286,7 @@ static uint8_t m0110_recv(const struct device *dev)
     return data;
 }
 
-/* Send INSTANT command and get response */
+/* Send INSTANT command and get response (used for follow-up bytes) */
 static uint8_t m0110_instant(const struct device *dev)
 {
     if (m0110_send(dev, M0110_INSTANT) < 0) {
@@ -279,9 +300,64 @@ static uint8_t m0110_instant(const struct device *dev)
 }
 
 /*
+ * Send INQUIRY and wait for the keyboard to respond via clock interrupt.
+ *
+ * The INQUIRY command (0x10) tells the keyboard to reply when a key event
+ * occurs, or with NULL (0x7B) after 250 ms.  Instead of busy-waiting for the
+ * response we arm a falling-edge interrupt on the clock line and block on a
+ * semaphore, allowing the CPU to sleep until the keyboard pulls clock low to
+ * start clocking out its response.
+ *
+ * The first clock LOW period lasts ~160 µs (per Apple's protocol spec), which
+ * gives the thread ample time to resume from the semaphore and enter
+ * m0110_recv() before the first bit's rising edge.
+ */
+static uint8_t m0110_inquiry_recv(const struct device *dev)
+{
+    struct kscan_m0110_data *data = dev->data;
+    const struct kscan_m0110_config *config = dev->config;
+
+    /* Send INQUIRY command */
+    if (m0110_send(dev, M0110_INQUIRY) < 0) {
+        return M0110_ERROR;
+    }
+
+    /* Arm clock interrupt — keyboard pulls clock low when it has data */
+    gpio_pin_interrupt_configure_dt(&config->clock_gpio,
+                                    GPIO_INT_EDGE_TO_INACTIVE);
+
+    /* Block until keyboard responds (key event or 250ms NULL timeout) */
+    k_sem_take(&data->data_ready, K_FOREVER);
+
+    /* Woken by disable_callback, not by keyboard */
+    if (!data->enabled) {
+        return M0110_NULL;
+    }
+
+    /* Clock is already low — read the 8-bit response */
+    uint8_t response = m0110_recv(dev);
+
+    if (response != M0110_NULL && response != M0110_ERROR) {
+        LOG_DBG("m0110_inquiry: 0x%02x", response);
+    }
+
+    return response;
+}
+
+/* Clear all key buffers — call on any protocol error to prevent stuck keys */
+static void clear_buffers(struct kscan_m0110_data *data)
+{
+    data->keybuf  = 0x00;
+    data->keybuf2 = 0x00;
+    data->rawbuf  = 0x00;
+}
+
+/*
  * Receive a key event with proper handling of M0110A special cases.
- * The M0110A has complex behavior for shift+keypad combinations.
- * See TMK m0110.c for detailed documentation.
+ *
+ * The first byte of each key event is obtained via INQUIRY (interrupt-driven,
+ * CPU sleeps while waiting).  Follow-up bytes in multi-byte sequences (shift +
+ * keypad combos) use INSTANT for immediate response.
  */
 static uint8_t m0110_recv_key(const struct device *dev)
 {
@@ -305,13 +381,17 @@ static uint8_t m0110_recv_key(const struct device *dev)
         raw = drv_data->rawbuf;
         drv_data->rawbuf = 0x00;
     } else {
-        raw = m0110_instant(dev);
+        raw = m0110_inquiry_recv(dev);
     }
 
     switch (KEY(raw)) {
         case M0110_KEYPAD:
             /* Keypad prefix - get the actual key */
             raw2 = m0110_instant(dev);
+            if (raw2 == M0110_ERROR || raw2 == M0110_NULL) {
+                clear_buffers(drv_data);
+                return M0110_NULL;
+            }
             switch (KEY(raw2)) {
                 case M0110_ARROW_UP:
                 case M0110_ARROW_DOWN:
@@ -330,6 +410,14 @@ static uint8_t m0110_recv_key(const struct device *dev)
         case M0110_SHIFT:
             /* Shift key or shift+keypad combo */
             raw2 = m0110_instant(dev);
+            if (raw2 == M0110_ERROR) {
+                clear_buffers(drv_data);
+                return RAW2SCAN(raw); /* best-effort: return shift alone */
+            }
+            if (raw2 == M0110_NULL) {
+                /* No follow-up key: shift stands alone */
+                return RAW2SCAN(raw);
+            }
             switch (KEY(raw2)) {
                 case M0110_SHIFT:
                     /* Double shift - buffer second and return first */
@@ -339,6 +427,10 @@ static uint8_t m0110_recv_key(const struct device *dev)
                 case M0110_KEYPAD:
                     /* Shift + keypad combo */
                     raw3 = m0110_instant(dev);
+                    if (raw3 == M0110_ERROR || raw3 == M0110_NULL) {
+                        clear_buffers(drv_data);
+                        return RAW2SCAN(raw);
+                    }
                     switch (KEY(raw3)) {
                         case M0110_ARROW_UP:
                         case M0110_ARROW_DOWN:
@@ -372,8 +464,12 @@ static uint8_t m0110_recv_key(const struct device *dev)
                     }
 
                 default:
-                    /* Shift + normal key */
-                    drv_data->keybuf = RAW2SCAN(raw2);
+                    /*
+                     * Shift + normal key. Put raw2 back in rawbuf so it is
+                     * processed naturally next iteration, preventing it from
+                     * getting stuck in keybuf if the connection drops.
+                     */
+                    drv_data->rawbuf = raw2;
                     return RAW2SCAN(raw);
             }
 
@@ -383,57 +479,141 @@ static uint8_t m0110_recv_key(const struct device *dev)
     }
 }
 
-/* Work handler for polling */
-static void kscan_m0110_work_handler(struct k_work *work)
+/* Process a single scancode and fire the kscan callback */
+static void process_scancode(const struct device *dev, uint8_t scancode)
 {
-    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    struct kscan_m0110_data *data = CONTAINER_OF(dwork, struct kscan_m0110_data, work);
-    const struct device *dev = data->dev;
+    struct kscan_m0110_data *data = dev->data;
     const struct kscan_m0110_config *config = dev->config;
 
-    if (!data->enabled || !data->callback) {
+    bool pressed = !(scancode & 0x80);
+    uint8_t code = scancode & 0x7F;
+
+    /* Convert scancode to row/column */
+    uint8_t row = (code >> 3) & 0x0F;
+    uint8_t col = code & 0x07;
+
+    if (row >= config->rows || col >= config->columns) {
+        LOG_WRN("Invalid scancode 0x%02x (row=%d, col=%d)", code, row, col);
         return;
     }
 
-    uint8_t scancode = m0110_recv_key(dev);
-
-    if (scancode != M0110_NULL && scancode != M0110_ERROR) {
-        bool pressed = !(scancode & 0x80);
-        uint8_t code = scancode & 0x7F;
-
-        /* Convert scancode to row/column */
-        uint8_t row = (code >> 3) & 0x0F;
-        uint8_t col = code & 0x07;
-
-        if (row < config->rows && col < config->columns) {
-            /*
-             * Special handling for locking Caps Lock key:
-             * The M0110 has a physically locking caps lock switch.
-             * When locked (pressed), we want caps ON.
-             * When unlocked (released), we want caps OFF.
-             * Since OS toggles caps on key press only, we send a
-             * tap (press+release) on both lock and unlock events.
-             */
-            if (code == M0110_CAPS_LOCK) {
-                LOG_DBG("Caps Lock %s: sending tap", pressed ? "lock" : "unlock");
-                data->callback(dev, row, col, true);   /* press */
-                data->callback(dev, row, col, false);  /* release */
-            } else {
-                LOG_DBG("Key %s: scancode=0x%02x row=%d col=%d",
-                        pressed ? "press" : "release", code, row, col);
-                data->callback(dev, row, col, pressed);
-            }
+    /*
+     * Special handling for locking Caps Lock key:
+     * The M0110 has a physically locking caps lock switch that sends a make
+     * code when it latches and a break code when it releases.  The OS only
+     * toggles on a key *press*, so we send a tap (press+release) on each
+     * state transition.
+     *
+     * We track the physical state to ignore duplicate make/break events that
+     * can occur on BLE reconnection, which would otherwise cause spurious
+     * caps lock toggles.
+     */
+    if (code == M0110_CAPS_LOCK) {
+        if (pressed != data->caps_lock_down) {
+            data->caps_lock_down = pressed;
+            LOG_DBG("Caps Lock %s: sending tap", pressed ? "lock" : "unlock");
+            data->callback(dev, row, col, true);   /* press */
+            data->callback(dev, row, col, false);  /* release */
         } else {
-            LOG_WRN("Invalid scancode 0x%02x (row=%d, col=%d)", code, row, col);
+            LOG_DBG("Caps Lock %s: duplicate event ignored",
+                    pressed ? "lock" : "unlock");
+        }
+    } else {
+        LOG_DBG("Key %s: scancode=0x%02x row=%d col=%d",
+                pressed ? "press" : "release", code, row, col);
+        data->callback(dev, row, col, pressed);
+    }
+}
+
+/* GPIO ISR: clock falling edge means the keyboard is starting a response */
+static void m0110_clock_isr(const struct device *port,
+                            struct gpio_callback *cb,
+                            uint32_t pins)
+{
+    struct kscan_m0110_data *data = CONTAINER_OF(cb, struct kscan_m0110_data,
+                                                 clock_cb);
+    const struct kscan_m0110_config *config = data->dev->config;
+
+    /* Disable interrupt during data reception */
+    gpio_pin_interrupt_configure_dt(&config->clock_gpio, GPIO_INT_DISABLE);
+
+    /* Wake the keyboard thread */
+    k_sem_give(&data->data_ready);
+}
+
+/*
+ * Keyboard thread — replaces the old polling work handler.
+ *
+ * Normal mode: sends INQUIRY, sleeps until the keyboard responds (or 250ms
+ * NULL timeout), reads the response, processes any key events, and loops.
+ *
+ * Power-save mode (when EN GPIO is wired): after idle_timeout_ms with no key
+ * activity, the 5V boost is disabled and the M0110 keyboard powers off.  The
+ * thread then periodically re-enables 5V, waits for the keyboard to boot,
+ * sends a quick INSTANT to check for activity, and powers back down if idle.
+ */
+static void m0110_thread_fn(void *p1, void *p2, void *p3)
+{
+    const struct device *dev = p1;
+    struct kscan_m0110_data *data = dev->data;
+    const struct kscan_m0110_config *config = dev->config;
+
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
+
+    while (1) {
+        if (!data->enabled || !data->callback) {
+            k_msleep(100);
+            continue;
+        }
+
+        /*
+         * Power-save mode: 5V boost is off, M0110 is unpowered.
+         * Periodically wake the keyboard to check for activity.
+         */
+        if (data->power_save) {
+            boost_set(dev, true);
+            k_msleep(INIT_DELAY_MS); /* wait for M0110 MCU to boot */
+
+            uint8_t raw = m0110_instant(dev);
+
+            if (raw != M0110_NULL && raw != M0110_ERROR) {
+                /* Key detected — exit power save */
+                data->power_save = false;
+                data->last_key_time = k_uptime_get();
+                k_sem_reset(&data->data_ready);
+                data->rawbuf = raw; /* process on next recv_key call */
+                LOG_INF("M0110 wake: key activity detected");
+            } else {
+                /* Still idle — power down and sleep */
+                boost_set(dev, false);
+                k_msleep(config->peek_interval_ms);
+            }
+            continue;
+        }
+
+        /* Normal mode: INQUIRY-based, CPU sleeps between events */
+        uint8_t scancode = m0110_recv_key(dev);
+
+        if (scancode != M0110_NULL && scancode != M0110_ERROR) {
+            data->last_key_time = k_uptime_get();
+            process_scancode(dev, scancode);
+        } else if (config->en_gpio.port != NULL) {
+            /* Check whether we've been idle long enough to power down */
+            int64_t idle_ms = k_uptime_get() - data->last_key_time;
+            if (idle_ms > (int64_t)config->idle_timeout_ms) {
+                LOG_INF("M0110 idle timeout (%u ms): disabling 5V boost",
+                        config->idle_timeout_ms);
+                boost_set(dev, false);
+                data->power_save = true;
+            }
         }
     }
-
-    /* Schedule next poll */
-    k_work_reschedule(&data->work, K_MSEC(config->poll_period_ms));
 }
 
 /* KSCAN API: configure callback */
-static int kscan_m0110_configure(const struct device *dev, kscan_callback_t callback)
+static int kscan_m0110_configure(const struct device *dev,
+                                 kscan_callback_t callback)
 {
     struct kscan_m0110_data *data = dev->data;
     data->callback = callback;
@@ -444,10 +624,12 @@ static int kscan_m0110_configure(const struct device *dev, kscan_callback_t call
 static int kscan_m0110_enable_callback(const struct device *dev)
 {
     struct kscan_m0110_data *data = dev->data;
-    const struct kscan_m0110_config *config = dev->config;
 
+    k_sem_reset(&data->data_ready);
     data->enabled = true;
-    k_work_reschedule(&data->work, K_MSEC(config->poll_period_ms));
+    data->power_save = false;
+    data->last_key_time = k_uptime_get();
+    boost_set(dev, true);
 
     return 0;
 }
@@ -456,9 +638,13 @@ static int kscan_m0110_enable_callback(const struct device *dev)
 static int kscan_m0110_disable_callback(const struct device *dev)
 {
     struct kscan_m0110_data *data = dev->data;
+    const struct kscan_m0110_config *config = dev->config;
 
     data->enabled = false;
-    k_work_cancel_delayable(&data->work);
+    gpio_pin_interrupt_configure_dt(&config->clock_gpio, GPIO_INT_DISABLE);
+
+    /* Wake the thread so it sees enabled=false */
+    k_sem_give(&data->data_ready);
 
     return 0;
 }
@@ -476,6 +662,11 @@ static int kscan_m0110_init(const struct device *dev)
     data->rawbuf = 0;
     data->error = 0;
     data->enabled = false;
+    data->caps_lock_down = false;
+    data->power_save = false;
+    data->last_key_time = 0;
+
+    k_sem_init(&data->data_ready, 0, 1);
 
     /* Configure GPIO pins */
     if (!gpio_is_ready_dt(&config->data_gpio)) {
@@ -500,16 +691,43 @@ static int kscan_m0110_init(const struct device *dev)
         return ret;
     }
 
+    /* Configure optional EN GPIO for 5V boost power management */
+    if (config->en_gpio.port != NULL) {
+        if (!gpio_is_ready_dt(&config->en_gpio)) {
+            LOG_ERR("EN GPIO not ready");
+            return -ENODEV;
+        }
+        ret = gpio_pin_configure_dt(&config->en_gpio, GPIO_OUTPUT_ACTIVE);
+        if (ret < 0) {
+            LOG_ERR("Failed to configure EN GPIO: %d", ret);
+            return ret;
+        }
+        LOG_INF("5V boost EN pin configured (idle timeout: %u ms)",
+                config->idle_timeout_ms);
+    }
+
+    /* Configure clock GPIO interrupt callback (not yet enabled) */
+    gpio_init_callback(&data->clock_cb, m0110_clock_isr,
+                       BIT(config->clock_gpio.pin));
+    ret = gpio_add_callback_dt(&config->clock_gpio, &data->clock_cb);
+    if (ret < 0) {
+        LOG_ERR("Failed to add clock GPIO callback: %d", ret);
+        return ret;
+    }
+
     /* Initialize to idle state */
     idle(dev);
 
     /* Wait for keyboard to initialize */
     k_msleep(INIT_DELAY_MS);
 
-    /* Initialize work item */
-    k_work_init_delayable(&data->work, kscan_m0110_work_handler);
+    /* Start the keyboard thread */
+    k_thread_create(&data->thread, config->stack, config->stack_size,
+                    m0110_thread_fn, (void *)dev, NULL, NULL,
+                    M0110_THREAD_PRIORITY, 0, K_NO_WAIT);
+    k_thread_name_set(&data->thread, "m0110");
 
-    LOG_INF("M0110 keyboard driver initialized");
+    LOG_INF("M0110 keyboard driver initialized (interrupt-driven)");
 
     return 0;
 }
@@ -523,12 +741,19 @@ static const struct kscan_driver_api kscan_m0110_api = {
 
 /* Device instantiation macro */
 #define KSCAN_M0110_INIT(n)                                                    \
+    K_THREAD_STACK_DEFINE(m0110_stack_##n, M0110_THREAD_STACK_SIZE);            \
     static struct kscan_m0110_data kscan_m0110_data_##n;                        \
                                                                                \
     static const struct kscan_m0110_config kscan_m0110_config_##n = {          \
         .data_gpio = GPIO_DT_SPEC_INST_GET(n, data_gpios),                     \
         .clock_gpio = GPIO_DT_SPEC_INST_GET(n, clock_gpios),                   \
-        .poll_period_ms = DT_INST_PROP(n, poll_period_ms),                     \
+        .en_gpio = COND_CODE_1(DT_INST_NODE_HAS_PROP(n, en_gpios),            \
+                               (GPIO_DT_SPEC_INST_GET(n, en_gpios)),           \
+                               ({.port = NULL})),                              \
+        .stack = m0110_stack_##n,                                               \
+        .stack_size = M0110_THREAD_STACK_SIZE,                                  \
+        .idle_timeout_ms = DT_INST_PROP(n, idle_timeout_ms),                   \
+        .peek_interval_ms = DT_INST_PROP(n, peek_interval_ms),                \
         .rows = DT_INST_PROP(n, rows),                                         \
         .columns = DT_INST_PROP(n, columns),                                   \
     };                                                                         \
