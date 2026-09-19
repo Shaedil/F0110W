@@ -1,0 +1,40 @@
+# Copyright (c) 2024 M0110 ZMK Driver
+# SPDX-License-Identifier: MIT
+
+if INPUT
+
+config INPUT_M0110
+	bool "Apple M0110/M0110A keyboard scanner driver"
+	default n
+	depends on GPIO
+	help
+	  Enable driver for Apple M0110, M0110A, and M0120 keyboards.
+	  These vintage Apple keyboards use a synchronous serial protocol
+	  with clock and data lines.
+
+	  Reports through the input subsystem: the column on INPUT_ABS_X, the
+	  row on INPUT_ABS_Y and the pressed state on INPUT_BTN_TOUCH, which is
+	  what ZMK's `zmk,matrix-input` chosen expects.
+
+if INPUT_M0110
+
+config INPUT_M0110_TRACE
+	bool "Trace every wire byte and key event"
+	default n
+	help
+	  Log each raw byte received from the keyboard and each key event handed
+	  to ZMK, both with an uptime stamp.  This is how you tell a keyboard that
+	  reports two transitions out of order from a driver that reorders them:
+	  the wire trace shows what actually arrived, in the order it arrived.
+
+	  Costs flash and adds work to the receive path, so it is off by default.
+
+config INPUT_M0110_POLL_PERIOD_MS
+	int "Polling period in milliseconds"
+	default 5
+	help
+	  How often to poll the keyboard for key events.
+
+endif # INPUT_M0110
+
+endif # INPUT

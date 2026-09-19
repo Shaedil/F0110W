@@ -4,14 +4,18 @@
 description: |
   Apple M0110/M0110A/M0120 keyboard scanner driver.
 
+  Reports through Zephyr's input subsystem, in the convention ZMK's own
+  matrix drivers use: INPUT_ABS_X carries the column, INPUT_ABS_Y the row,
+  and INPUT_BTN_TOUCH the pressed state, which is the synchronising event.
+
   These vintage Apple Macintosh keyboards use a 2-wire synchronous serial
   protocol with clock and data lines. The keyboard drives the clock, and
   data is bidirectional.
 
   Example configuration:
 
-    kscan0: kscan_m0110 {
-        compatible = "zmk,kscan-m0110";
+    m0110: m0110 {
+        compatible = "zmk,input-m0110";
         data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
         clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
         en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
@@ -22,9 +26,9 @@ description: |
         columns = <8>;
     };
 
-compatible: "zmk,kscan-m0110"
+compatible: "zmk,input-m0110"
 
-include: kscan.yaml
+include: base.yaml
 
 properties:
   data-gpios:
@@ -76,7 +80,7 @@ properties:
       Safety net for a lost M0110 "break" (key-release) byte.  If the release
       byte for a key is corrupted on the wire, the driver keeps reporting the
       key as held and the host auto-repeats its character indefinitely, so the
-      keyboard spams one letter.  Any key still held after this many
+      keyboard suddenly spams one letter.  Any key still held after this many
       milliseconds is force-released.
 
       Host auto-repeat is the only repeat this keyboard has, so the timeout must

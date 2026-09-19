@@ -1,49 +1,49 @@
 /*
- * M0110/M0110A Keyboard Converter Shield for nice!nano v2
+ * M0110 keyboard converter shield.
  *
- * Pin connections:
- *   nice!nano D2 (P0.17) -> M0110 Data (directly to keyboard)
- *   nice!nano D3 (P0.20) -> M0110 Clock (directly to keyboard)
- *   nice!nano D1 (P0.06) -> bq25185 boost EN pad (optional, for power mgmt)
- *   bq25185 5V out        -> M0110 +5V
- *   nice!nano GND          -> M0110 GND
+ * The keyboard speaks a two-wire synchronous serial protocol, so the shield
+ * needs three signals and no matrix at all:
  *
- * The nice!nano communicates directly with the M0110 keyboard via
- * its SDA (D2) and SCL (D3) lines using the M0110 protocol.
+ *   data   -> M0110 DATA   (open collector, pulled up on this side)
+ *   clock  -> M0110 CLOCK  (likewise; the keyboard always drives it)
+ *   en     -> bq25185 boost EN, which powers the M0110's +5 V rail
+ *
+ * Ground is shared.  The pins themselves are per-board and live in
+ * `boards/<board>.overlay` next to this file; the defaults below are the
+ * nice!nano v2 wiring.
  */
 
 #include "m0110-layouts.dtsi"
 
 / {
     chosen {
-        zmk,kscan = &kscan0;
-        zmk,physical-layout = &m0110a_layout;
+        zmk,matrix-input = &m0110;
+        zmk,physical-layout = &m0110_layout;
     };
 
-    kscan0: kscan_m0110 {
-        compatible = "zmk,kscan-m0110";
+    m0110: m0110 {
+        compatible = "zmk,input-m0110";
         status = "okay";
 
-        /* nice!nano v2 Pro Micro compatible pinout
-         * D2 (P0.17) = Data line (directly to keyboard)
-         * D3 (P0.20) = Clock line (directly to keyboard)
-         */
+        // nice!nano v2, Pro Micro pinout: D2 = P0.17, D3 = P0.20, D1 = P0.06
         data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
         clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
 
-        /* bq25185 boost EN: D1 (P0.06) driven high to power the M0110's
-         * +5V rail on battery.  Without this the matrix is unpowered off-USB,
-         * so BLE connects but no keys register.  Driver holds it enabled and
-         * only power-saves after idle-timeout-ms (default 5 min). */
+        /* bq25185 boost EN, held high to power the M0110's +5 V rail on
+         * battery. Without it the matrix is unpowered off USB, so BLE
+         * connects but no keys register. The driver only power-saves after
+         * idle-timeout-ms (default 5 minutes). */
         en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
 
-        /* Matrix dimensions for M0110A (14 rows x 8 cols = 112 positions) */
+        /* Virtual matrix the driver spreads scancodes over: 14 rows x 8 columns.
+         * A plain M0110 only ever uses the first eight rows; the keypad and
+         * arrow blocks above them belong to the M0110A and M0120. */
         rows = <14>;
         columns = <8>;
     };
 };
 
-/* USB CDC ACM for logging and Studio RPC */
+// USB CDC ACM for logging and Studio RPC
 &zephyr_udc0 {
     cdc_acm_uart0: cdc_acm_uart0 {
         compatible = "zephyr,cdc-acm-uart";

@@ -1,5 +1,8 @@
 # Build artifacts
 build/
+build-debug/
+.cache/
+*.uf2
 *.o
 *.eep
 *.elf
@@ -19,6 +22,10 @@ optional/
 
 # HtDP working state
 .htdp/
+
+# Autocode per-worktree construction state
+.ac/
+docs/
 
 # Editor/OS
 tags

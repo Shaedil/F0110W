@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 zephyr_library()
-zephyr_library_sources_ifdef(CONFIG_KSCAN_M0110 kscan_m0110.c)
+zephyr_library_sources_ifdef(CONFIG_INPUT_M0110 input_m0110.c m0110_decode.c)
 
 # The driver's USB-power check uses zmk_usb_is_powered() from <zmk/usb.h>, which
 # lives in the main ZMK app (APPLICATION_SOURCE_DIR is zmk/app) rather than the

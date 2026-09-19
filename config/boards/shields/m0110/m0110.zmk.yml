@@ -2,7 +2,7 @@ file_format: "1"
 id: m0110
 name: M0110 Converter
 type: shield
-url: https://github.com/tmk/tmk_keyboard
+url: https://github.com/Shaedil/zmk-config
 requires: [gpio]
 features:
   - keys

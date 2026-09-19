@@ -18,7 +18,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -51,22 +51,28 @@ do_west_update() {
     west update
 }
 
-# This repo lives at a path containing a space ("/Volumes/Project Backups/...").
 # Zephyr splits path lists on whitespace in several places and emits some paths
-# into the compiler/linker command line unquoted, so an unpatched tree cannot
-# build from here.  scripts/zephyr-space-path.patch fixes those sites.
-# west update restores the pristine zephyr/ tree, so re-apply after every update.
+# into the compiler/linker command line unquoted, so a tree checked out under a
+# path containing a space cannot build at all. scripts/zephyr-space-path.patch
+# fixes those sites. west update restores the pristine zephyr/ tree, so
+# re-apply after every update.
 apply_space_path_patch() {
     local patch="$SCRIPT_DIR/zephyr-space-path.patch"
 
     [ -f "$patch" ] || { log_warn "Missing $patch"; return 0; }
+
+    case "$REPO_ROOT" in
+        *\ *) ;;
+        *) log_info "No spaces in the repository path; skipping the Zephyr space-path patch."
+           return 0 ;;
+    esac
 
     if git -C "$REPO_ROOT/zephyr" apply --reverse --check "$patch" 2>/dev/null; then
         log_info "Zephyr space-path patch already applied."
     elif git -C "$REPO_ROOT/zephyr" apply "$patch" 2>/dev/null; then
         log_success "Applied Zephyr space-path patch."
     else
-        log_error "Could not apply $patch. The build will fail from a path with spaces."
+        log_error "Could not apply $patch; the build will fail from a path with spaces."
         return 1
     fi
 }

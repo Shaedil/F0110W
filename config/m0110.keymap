@@ -1,21 +1,22 @@
 /*
- * Apple M0110/M0110A Keyboard Keymap for ZMK
+ * Apple M0110 keymap for ZMK
  *
- * This keymap uses a matrix transform that maps 79 physical keys
- * to their positions in the M0110A scancode matrix (14x8).
+ * 57 keys, matching the transform in
+ * config/boards/shields/m0110/m0110-layouts.dtsi.  The M0110 has no keypad, no
+ * arrow keys and no function row, so those live on the Fn layer, reached by
+ * holding the backslash key.
  *
- * Physical layout (M0110A):
- * ,---------------------------------------------------------. ,---------------.
- * |  `|  1|  2|  3|  4|  5|  6|  7|  8|  9|  0|  -|  =|Bcksp| |Clr|  =|  /|  *|
- * |---------------------------------------------------------| |---------------|
- * |Tab  |  Q|  W|  E|  R|  T|  Y|  U|  I|  O|  P|  [|  ]|   | |  7|  8|  9|  -|
- * |-----------------------------------------------------'   | |---------------|
- * |CapsLo|  A|  S|  D|  F|  G|  H|  J|  K|  L|  ;|  '|Return| |  4|  5|  6|  +|
- * |---------------------------------------------------------| |---------------|
- * |Shft|ISO|  Z|  X|  C|  V|  B|  N|  M|  ,|  .|  /|Shft|Up | |  1|  2|  3|   |
- * |---------------------------------------------------------' |-----------|Ent|
- * | Opt|Cmd    |           Space           |  \|Lft|Rgt|Dn  | |      0|  .|   |
- * `---------------------------------------------------------' `---------------'
+ * +---+---+---+---+---+---+---+---+---+---+---+---+---+-----+
+ * | ` | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 0 | - | = | bsp |
+ * +---+---+---+---+---+---+---+---+---+---+---+---+---+-----+
+ * |  tab  | q | w | e | r | t | y | u | i | o | p | [ | ]   |
+ * +-------+---+---+---+---+---+---+---+---+---+---+---+-----+
+ * |  caps  | a | s | d | f | g | h | j | k | l | ; | ' |ret |
+ * +--------+---+---+---+---+---+---+---+---+---+---+---+----+
+ * |  shift   | z | x | c | v | b | n | m | , | . | / | shift|
+ * +----------+---+---+---+---+---+---+---+---+---+---+------+
+ * | opt | cmd |          space          |  \  |    enter    |
+ * +-----+-----+-------------------------+-----+-------------+
  */
 
 #include <behaviors.dtsi>
@@ -32,39 +33,40 @@
 
         default_layer {
             bindings = <
-                /* Row 0: Number row + Numpad top */
-                &kp GRAVE  &kp N1     &kp N2     &kp N3     &kp N4     &kp N5     &kp N6     &kp N7     &kp N8     &kp N9     &kp N0     &kp MINUS  &kp EQUAL  &kp BSPC     &kp KP_NUM &kp KP_COMMA &kp KP_SLASH &kp KP_MULTIPLY
+                /* Row 0: number row */
+                &kp GRAVE  &kp N1     &kp N2     &kp N3     &kp N4     &kp N5     &kp N6     &kp N7     &kp N8     &kp N9     &kp N0     &kp MINUS  &kp EQUAL  &kp BSPC
 
-                /* Row 1: QWERTY + Numpad row 2 */
-                &kp TAB    &kp Q      &kp W      &kp E      &kp R      &kp T      &kp Y      &kp U      &kp I      &kp O      &kp P      &kp LBKT   &kp RBKT                &kp KP_N7  &kp KP_N8  &kp KP_N9  &kp KP_MINUS
+                /* Row 1: QWERTY */
+                &kp TAB    &kp Q      &kp W      &kp E      &kp R      &kp T      &kp Y      &kp U      &kp I      &kp O      &kp P      &kp LBKT   &kp RBKT
 
-                /* Row 2: Home row + Numpad row 3 */
-                &kp CAPS   &kp A      &kp S      &kp D      &kp F      &kp G      &kp H      &kp J      &kp K      &kp L      &kp SEMI   &kp SQT    &kp RET                 &kp KP_N4  &kp KP_N5  &kp KP_N6  &kp KP_PLUS
+                /* Row 2: home row */
+                &kp CAPS   &kp A      &kp S      &kp D      &kp F      &kp G      &kp H      &kp J      &kp K      &kp L      &kp SEMI   &kp SQT    &kp RET
 
-                /* Row 3: Shift row + Numpad row 4 */
-                &kp LSHFT  &kp NUBS   &kp Z      &kp X      &kp C      &kp V      &kp B      &kp N      &kp M      &kp COMMA  &kp DOT    &kp FSLH   &kp RALT   &kp UP       &kp KP_N1  &kp KP_N2  &kp KP_N3
+                /* Row 3: shift row.  The right shift never fires; both shifts
+                 * report the same scancode, so it arrives as the left one. */
+                &kp LSHFT  &kp Z      &kp X      &kp C      &kp V      &kp B      &kp N      &kp M      &kp COMMA  &kp DOT    &kp FSLH   &kp RSHFT
 
-                /* Row 4: Bottom row + Numpad row 5 */
-                &kp LCTRL  &kp LGUI   &kp SPACE                                                          &lt FN BSLH &kp LEFT  &kp RIGHT  &kp DOWN                            &kp KP_N0  &kp KP_DOT &kp KP_ENTER
+                /* Row 4: bottom row */
+                &kp LCTRL  &kp LGUI   &kp SPACE                                                                    &lt FN BSLH           &kp KP_ENTER
             >;
         };
 
         fn_layer {
             bindings = <
-                /* Row 0: F-keys + Numpad top */
-                &kp ESC    &kp F1     &kp F2     &kp F3     &kp F4     &kp F5     &kp F6     &kp F7     &kp F8     &kp F9     &kp F10    &kp F11    &kp F12    &kp DEL      &trans     &trans     &trans     &trans
+                /* Row 0: function keys */
+                &kp ESC    &kp F1     &kp F2     &kp F3     &kp F4     &kp F5     &kp F6     &kp F7     &kp F8     &kp F9     &kp F10    &kp F11    &kp F12    &kp DEL
 
-                /* Row 1: BT profiles + Numpad row 2 */
-                &trans     &bt BT_SEL 0 &bt BT_SEL 1 &bt BT_SEL 2 &bt BT_SEL 3 &bt BT_SEL 4 &out OUT_USB &out OUT_BLE &kp PSCRN  &kp SLCK   &kp PAUSE_BREAK &kp UP  &kp INS                 &trans     &trans     &trans     &trans
+                /* Row 1: outputs and Bluetooth profiles */
+                &trans     &bt BT_SEL 0 &bt BT_SEL 1 &bt BT_SEL 2 &bt BT_SEL 3 &bt BT_SEL 4 &out OUT_USB &out OUT_BLE &kp PSCRN &kp SLCK &kp PAUSE_BREAK &kp UP &kp INS
 
-                /* Row 2: Media/Nav + Numpad row 3 */
-                &trans     &kp C_VOL_DN &kp C_VOL_UP &kp C_MUTE &trans  &trans     &trans     &trans     &kp HOME   &kp PG_UP  &kp LEFT   &kp RIGHT  &trans                  &trans     &trans     &trans     &trans
+                /* Row 2: volume and navigation */
+                &trans     &kp C_VOL_DN &kp C_VOL_UP &kp C_MUTE &trans  &trans     &trans     &trans     &kp HOME   &kp PG_UP  &kp LEFT   &kp RIGHT  &trans
 
-                /* Row 3: Shift row + Numpad row 4 */
-                &trans     &trans     &studio_unlock &bootloader &trans  &trans     &bt BT_CLR &trans     &trans     &kp END    &kp PG_DN  &kp DOWN   &trans     &kp PG_UP    &trans     &trans     &trans
+                /* Row 3: firmware controls and the rest of navigation */
+                &trans     &studio_unlock &bootloader &trans  &trans     &bt BT_CLR &trans     &trans     &kp END    &kp PG_DN  &kp DOWN   &trans
 
-                /* Row 4: Bottom row + Numpad row 5 */
-                &trans     &trans     &trans                                                            &trans     &kp HOME   &kp END    &kp PG_DN                            &trans     &trans     &trans
+                /* Row 4 */
+                &trans     &trans     &trans                                                                       &trans                &trans
             >;
         };
     };
