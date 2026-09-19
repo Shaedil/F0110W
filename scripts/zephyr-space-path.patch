@@ -1,0 +1,155 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cd141c12d..7a27c3485 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -320,9 +320,20 @@ if(CONFIG_CODING_GUIDELINE_CHECK)
+ endif()
+ 
+ # @Intent: Set compiler specific macro inclusion of AUTOCONF_H
+-zephyr_compile_options("SHELL: $<$<COMPILE_LANGUAGE:C>:$<TARGET_PROPERTY:compiler,imacros> ${AUTOCONF_H}>")
+-zephyr_compile_options("SHELL: $<$<COMPILE_LANGUAGE:CXX>:$<TARGET_PROPERTY:compiler,imacros> ${AUTOCONF_H}>")
+-zephyr_compile_options("SHELL: $<$<COMPILE_LANGUAGE:ASM>:$<TARGET_PROPERTY:asm,imacros> ${AUTOCONF_H}>")
++# NOTE: paths are quoted so a build directory containing spaces survives the
++# shell-splitting that the "SHELL:" prefix performs.
++zephyr_compile_options("SHELL: $<$<COMPILE_LANGUAGE:C>:$<TARGET_PROPERTY:compiler,imacros> \"${AUTOCONF_H}\">")
++zephyr_compile_options("SHELL: $<$<COMPILE_LANGUAGE:CXX>:$<TARGET_PROPERTY:compiler,imacros> \"${AUTOCONF_H}\">")
++zephyr_compile_options("SHELL: $<$<COMPILE_LANGUAGE:ASM>:$<TARGET_PROPERTY:asm,imacros> \"${AUTOCONF_H}\">")
++
++# Support building from a workspace whose path contains spaces.
++# Zephyr derives unique section names from __FILE__ (see __in_section_unique /
++# __noinit), which the assembler then splits on whitespace.  Rewriting __FILE__
++# to a space-free prefix keeps those generated section names well-formed.
++get_filename_component(ZEPHYR_WORKSPACE_ROOT "${ZEPHYR_BASE}" DIRECTORY)
++if(ZEPHYR_WORKSPACE_ROOT MATCHES " ")
++  zephyr_compile_options("-fmacro-prefix-map=${ZEPHYR_WORKSPACE_ROOT}/=ws/")
++endif()
+ 
+ if(CONFIG_COMPILER_FREESTANDING)
+   # @Intent: Set compiler specific flag for bare metal freestanding option
+@@ -367,9 +378,9 @@ zephyr_compile_options($<$<COMPILE_LANGUAGE:ASM>:$<TARGET_PROPERTY:asm,required>
+ # @Intent: Enforce standard integer type correspondence to match Zephyr usage.
+ # (must be after compiler specific flags)
+ if(CONFIG_ENFORCE_ZEPHYR_STDINT)
+-  zephyr_compile_options("SHELL:$<$<COMPILE_LANGUAGE:C>:$<TARGET_PROPERTY:compiler,imacros> ${ZEPHYR_BASE}/include/zephyr/toolchain/zephyr_stdint.h>")
+-  zephyr_compile_options("SHELL:$<$<COMPILE_LANGUAGE:CXX>:$<TARGET_PROPERTY:compiler,imacros> ${ZEPHYR_BASE}/include/zephyr/toolchain/zephyr_stdint.h>")
+-  zephyr_compile_options("SHELL:$<$<COMPILE_LANGUAGE:ASM>:$<TARGET_PROPERTY:asm,imacros> ${ZEPHYR_BASE}/include/zephyr/toolchain/zephyr_stdint.h>")
++  zephyr_compile_options("SHELL:$<$<COMPILE_LANGUAGE:C>:$<TARGET_PROPERTY:compiler,imacros> \"${ZEPHYR_BASE}/include/zephyr/toolchain/zephyr_stdint.h\">")
++  zephyr_compile_options("SHELL:$<$<COMPILE_LANGUAGE:CXX>:$<TARGET_PROPERTY:compiler,imacros> \"${ZEPHYR_BASE}/include/zephyr/toolchain/zephyr_stdint.h\">")
++  zephyr_compile_options("SHELL:$<$<COMPILE_LANGUAGE:ASM>:$<TARGET_PROPERTY:asm,imacros> \"${ZEPHYR_BASE}/include/zephyr/toolchain/zephyr_stdint.h\">")
+ endif()
+ 
+ # Common toolchain-agnostic assembly flags
+diff --git a/cmake/linker/ld/target.cmake b/cmake/linker/ld/target.cmake
+index 37a88b837..7430f556f 100644
+--- a/cmake/linker/ld/target.cmake
++++ b/cmake/linker/ld/target.cmake
+@@ -129,13 +129,15 @@ function(toolchain_ld_link_elf)
+     ${TOOLCHAIN_LD_LINK_ELF_LINKER_SCRIPT}
+     ${TOOLCHAIN_LD_LINK_ELF_LIBRARIES_POST_SCRIPT}
+ 
+-    ${LINKERFLAGPREFIX},-Map=${TOOLCHAIN_LD_LINK_ELF_OUTPUT_MAP}
++    # Paths are shell-quoted: raw link flags are emitted verbatim, so an
++    # unquoted path containing spaces would be split into separate arguments.
++    "${LINKERFLAGPREFIX},-Map=\"${TOOLCHAIN_LD_LINK_ELF_OUTPUT_MAP}\""
+     ${LINKERFLAGPREFIX},--whole-archive
+     ${WHOLE_ARCHIVE_LIBS}
+     ${LINKERFLAGPREFIX},--no-whole-archive
+     ${NO_WHOLE_ARCHIVE_LIBS}
+     $<TARGET_OBJECTS:${OFFSETS_LIB}>
+-    -L${PROJECT_BINARY_DIR}
++    "-L\"${PROJECT_BINARY_DIR}\""
+ 
+     ${TOOLCHAIN_LD_LINK_ELF_DEPENDENCIES}
+   )
+diff --git a/cmake/modules/configuration_files.cmake b/cmake/modules/configuration_files.cmake
+index fe1ff3bf1..943ecd987 100644
+--- a/cmake/modules/configuration_files.cmake
++++ b/cmake/modules/configuration_files.cmake
+@@ -42,7 +42,8 @@ if(NOT DEFINED CONF_FILE)
+   zephyr_file(CONF_FILES ${APPLICATION_CONFIG_DIR}/boards KCONF CONF_FILE SUFFIX ${FILE_SUFFIX})
+ else()
+   string(CONFIGURE "${CONF_FILE}" CONF_FILE_EXPANDED)
+-  string(REPLACE " " ";" CONF_FILE_AS_LIST "${CONF_FILE_EXPANDED}")
++  # Space-splitting breaks paths containing spaces; inputs are already lists.
++  set(CONF_FILE_AS_LIST "${CONF_FILE_EXPANDED}")
+   list(LENGTH CONF_FILE_AS_LIST CONF_FILE_LENGTH)
+   if(${CONF_FILE_LENGTH} EQUAL 1)
+     get_filename_component(CONF_FILE_NAME ${CONF_FILE} NAME)
+diff --git a/cmake/modules/extensions.cmake b/cmake/modules/extensions.cmake
+index 0102e32b3..7f0ca2a6e 100644
+--- a/cmake/modules/extensions.cmake
++++ b/cmake/modules/extensions.cmake
+@@ -3127,18 +3127,22 @@ function(zephyr_list transform list_var action)
+   else()
+     set(out_var ${list_var})
+   endif()
+-  set(input ${${list_var}})
++  set(input "${${list_var}}")
+ 
+   # Perform the transformation.
+   set(ret)
+   string(CONFIGURE "${input}" input_expanded)
+-  string(REPLACE " " ";" input_raw_list "${input_expanded}")
++  # NOTE: upstream splits on " " here to support space-separated file lists.
++  # That makes paths containing spaces unrepresentable, which breaks builds
++  # from directories like "/Volumes/Project Backups/...".  Inputs already
++  # arrive as proper CMake (semicolon) lists, so the split is not needed.
++  set(input_raw_list "${input_expanded}")
+   foreach(file ${input_raw_list})
+     file(TO_CMAKE_PATH "${file}" cmake_path_file)
+-    list(APPEND ret ${cmake_path_file})
++    list(APPEND ret "${cmake_path_file}")
+   endforeach()
+ 
+-  set(${out_var} ${ret} PARENT_SCOPE)
++  set(${out_var} "${ret}" PARENT_SCOPE)
+ endfunction()
+ 
+ # Usage:
+diff --git a/cmake/modules/kconfig.cmake b/cmake/modules/kconfig.cmake
+index af8c1e33f..db0c60967 100644
+--- a/cmake/modules/kconfig.cmake
++++ b/cmake/modules/kconfig.cmake
+@@ -97,13 +97,15 @@ set(PARSED_KCONFIG_SOURCES_TXT ${PROJECT_BINARY_DIR}/kconfig/sources.txt)
+ 
+ if(CONF_FILE)
+   string(CONFIGURE "${CONF_FILE}" CONF_FILE_EXPANDED)
+-  string(REPLACE " " ";" CONF_FILE_AS_LIST "${CONF_FILE_EXPANDED}")
++  # Space-splitting breaks paths containing spaces; inputs are already lists.
++  set(CONF_FILE_AS_LIST "${CONF_FILE_EXPANDED}")
+   build_info(kconfig user-files PATH ${CONF_FILE_AS_LIST})
+ endif()
+ 
+ if(EXTRA_CONF_FILE)
+   string(CONFIGURE "${EXTRA_CONF_FILE}" EXTRA_CONF_FILE_EXPANDED)
+-  string(REPLACE " " ";" EXTRA_CONF_FILE_AS_LIST "${EXTRA_CONF_FILE_EXPANDED}")
++  # Space-splitting breaks paths containing spaces; inputs are already lists.
++  set(EXTRA_CONF_FILE_AS_LIST "${EXTRA_CONF_FILE_EXPANDED}")
+   build_info(kconfig extra-user-files PATH ${EXTRA_CONF_FILE_AS_LIST})
+ endif()
+ 
+@@ -312,18 +314,18 @@ set(
+ # merge_config_files, which is a mix of absolute and relative paths.
+ set(merge_config_files_with_absolute_paths "")
+ foreach(f ${merge_config_files})
+-  if(IS_ABSOLUTE ${f})
+-    set(path ${f})
++  if(IS_ABSOLUTE "${f}")
++    set(path "${f}")
+   else()
+-    set(path ${APPLICATION_CONFIG_DIR}/${f})
++    set(path "${APPLICATION_CONFIG_DIR}/${f}")
+   endif()
+ 
+-  list(APPEND merge_config_files_with_absolute_paths ${path})
++  list(APPEND merge_config_files_with_absolute_paths "${path}")
+ endforeach()
+-set(merge_config_files ${merge_config_files_with_absolute_paths})
++set(merge_config_files "${merge_config_files_with_absolute_paths}")
+ 
+ foreach(f ${merge_config_files})
+-  if(NOT EXISTS ${f} OR IS_DIRECTORY ${f})
++  if(NOT EXISTS "${f}" OR IS_DIRECTORY "${f}")
+     message(FATAL_ERROR "File not found: ${f}")
+   endif()
+ endforeach()

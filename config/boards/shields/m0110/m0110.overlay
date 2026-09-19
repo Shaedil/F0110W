@@ -31,7 +31,10 @@
         data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
         clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
 
-        /* bq25185 boost EN pin — wire D1 (P0.06) to the EN pad */
+        /* bq25185 boost EN: D1 (P0.06) driven high to power the M0110's
+         * +5V rail on battery.  Without this the matrix is unpowered off-USB,
+         * so BLE connects but no keys register.  Driver holds it enabled and
+         * only power-saves after idle-timeout-ms (default 5 min). */
         en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
 
         /* Matrix dimensions for M0110A (14 rows x 8 cols = 112 positions) */

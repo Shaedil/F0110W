@@ -35,7 +35,7 @@ GND   -------------------- GND --- GND ------------ GND
 
 ## Building
 
-### Using the Build Script (Recommended)
+### Using the build script (recommended)
 
 The build script initializes the workspace and builds the firmware:
 
@@ -47,7 +47,7 @@ The build script initializes the workspace and builds the firmware:
 ./scripts/build.sh --quick
 ```
 
-### Manual Build
+### Manual build
 
 Initialize the workspace and build manually:
 

@@ -51,12 +51,41 @@ do_west_update() {
     west update
 }
 
+# This repo lives at a path containing a space ("/Volumes/Project Backups/...").
+# Zephyr splits path lists on whitespace in several places and emits some paths
+# into the compiler/linker command line unquoted, so an unpatched tree cannot
+# build from here.  scripts/zephyr-space-path.patch fixes those sites.
+# west update restores the pristine zephyr/ tree, so re-apply after every update.
+apply_space_path_patch() {
+    local patch="$SCRIPT_DIR/zephyr-space-path.patch"
+
+    [ -f "$patch" ] || { log_warn "Missing $patch"; return 0; }
+
+    if git -C "$REPO_ROOT/zephyr" apply --reverse --check "$patch" 2>/dev/null; then
+        log_info "Zephyr space-path patch already applied."
+    elif git -C "$REPO_ROOT/zephyr" apply "$patch" 2>/dev/null; then
+        log_success "Applied Zephyr space-path patch."
+    else
+        log_error "Could not apply $patch. The build will fail from a path with spaces."
+        return 1
+    fi
+}
+
 do_build() {
+    apply_space_path_patch
+
     log_info "Building ZMK firmware..."
+
+    # gnuarmemb toolchain from Homebrew; Zephyr isn't registered in the CMake
+    # package registry, so point at this workspace's copy explicitly.
+    export ZEPHYR_TOOLCHAIN_VARIANT=gnuarmemb
+    export GNUARMEMB_TOOLCHAIN_PATH=/opt/homebrew
+    export ZEPHYR_BASE="$REPO_ROOT/zephyr"
 
     west build -s zmk/app -b nice_nano -- \
         -DSHIELD=m0110 \
-        -DZMK_CONFIG="$REPO_ROOT/config"
+        -DZMK_CONFIG="$REPO_ROOT/config" \
+        -DZephyr_DIR="$REPO_ROOT/zephyr/share/zephyr-package/cmake"
 
     log_success "Build complete!"
 

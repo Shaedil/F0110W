@@ -17,6 +17,7 @@ description: |
         en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
         idle-timeout-ms = <300000>;
         peek-interval-ms = <5000>;
+        stuck-key-timeout-ms = <10000>;
         rows = <14>;
         columns = <8>;
     };
@@ -40,7 +41,7 @@ properties:
     type: int
     default: 5
     description: |
-      Deprecated — ignored by the interrupt-driven driver.
+      Deprecated; ignored by the interrupt-driven driver.
       The driver now uses INQUIRY with a clock-line interrupt instead of
       polling, so the CPU sleeps between key events.
 
@@ -50,7 +51,7 @@ properties:
       Optional GPIO connected to the 5V boost converter's EN (enable) pin.
       When specified, the driver disables the boost converter after the idle
       timeout to save power, and periodically re-enables it to check for
-      keyboard activity.  The TPS61023 draws only 0.1 µA when disabled.
+      keyboard activity.  The TPS61023 draws only 0.1 uA when disabled.
 
   idle-timeout-ms:
     type: int
@@ -67,6 +68,22 @@ properties:
       check for keyboard activity while in power-save mode.  The keyboard
       needs ~1 s to boot each time, so very short intervals reduce savings.
       Default is 5 seconds.
+
+  stuck-key-timeout-ms:
+    type: int
+    default: 10000
+    description: |
+      Safety net for a lost M0110 "break" (key-release) byte.  If the release
+      byte for a key is corrupted on the wire, the driver keeps reporting the
+      key as held and the host auto-repeats its character indefinitely, so the
+      keyboard spams one letter.  Any key still held after this many
+      milliseconds is force-released.
+
+      Host auto-repeat is the only repeat this keyboard has, so the timeout must
+      outlast every deliberate hold (holding backspace or an arrow to scroll is
+      a few seconds at most).  The 10 s default leaves those untouched while
+      bounding a stranded key to a burst instead of forever.  Set to 0 to
+      disable the watchdog.
 
   rows:
     type: int

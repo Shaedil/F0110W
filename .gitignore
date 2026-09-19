@@ -17,6 +17,9 @@ modules/
 optional/
 .west/
 
+# HtDP working state
+.htdp/
+
 # Editor/OS
 tags
 *~
