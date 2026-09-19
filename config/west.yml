@@ -1,11 +1,20 @@
+# Branch `framework` builds against ZMK's unmerged Zephyr 4.4 work, because the
+# Framework control board's nRF54LM20A is not supported by any Zephyr release
+# ZMK's `main` pins.  The `nice-nano` branch still tracks upstream `main`.
+#
+# The revision below is a draft pull request (zmkfirmware/zmk#3387) whose author
+# has marked it not for use.  It is pinned deliberately: it will not move, and
+# its own `app/west.yml` pins Zephyr at `petejohanson/zephyr@v4.4.1+zmk-fixes`,
+# which is nine commits ahead of upstream v4.4.1 and carries the nRF54LM20A
+# support that ships in stock Zephyr from v4.2.0 onward.
 manifest:
   remotes:
-    - name: zmkfirmware
-      url-base: https://github.com/zmkfirmware
+    - name: petejohanson
+      url-base: https://github.com/petejohanson
   projects:
     - name: zmk
-      remote: zmkfirmware
-      revision: main
+      remote: petejohanson
+      revision: core/move-to-zephyr-4-4-0
       import: app/west.yml
   self:
     path: config
