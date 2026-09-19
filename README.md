@@ -35,7 +35,21 @@ GND   -------------------- GND --- GND ------------ GND
 
 ## Building
 
-Initialize the workspace and build:
+### Using the Build Script (Recommended)
+
+The build script initializes the workspace and builds the firmware:
+
+```bash
+# Full build (initializes workspace, updates dependencies, builds firmware)
+./scripts/build.sh
+
+# Quick rebuild (skips west init/update)
+./scripts/build.sh --quick
+```
+
+### Manual Build
+
+Initialize the workspace and build manually:
 
 ```bash
 west init -l config
@@ -46,7 +60,7 @@ west build -s zmk/app -b nice_nano -- -DSHIELD=m0110 -DZMK_CONFIG="$(pwd)/config
 ## Flashing
 
 1. Double-tap the reset button on the nice!nano v2
-2. Copy `build/zephyr/zmk.uf2` to the mounted `NICENANO` drive
+2. Copy `build/zephyr/zmk.uf2` (or `zmk_working.uf2`) to the mounted `NICENANO` drive
 
 ## License
 

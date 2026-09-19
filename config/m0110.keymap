@@ -24,6 +24,7 @@
 
 #include <behaviors.dtsi>
 #include <dt-bindings/zmk/keys.h>
+#include <dt-bindings/zmk/bt.h>
 
 #define DEFAULT 0
 #define FN      1
@@ -101,11 +102,11 @@
                 /* Row 0: VolDn VolUp Mute F H G Z X */
                 &kp C_VOL_DN &kp C_VOL_UP &kp C_MUTE &trans   &trans     &trans     &trans     &trans
 
-                /* Row 1: C V NUBS B Q W E R */
-                &trans     &trans     &trans     &trans     &trans     &trans     &trans     &trans
+                /* Row 1: C V NUBS BT_CLR BT0 BT1 BT2 BT3 */
+                &trans     &trans     &trans     &bt BT_CLR &bt BT_SEL 0 &bt BT_SEL 1 &bt BT_SEL 2 &bt BT_SEL 3
 
-                /* Row 2: Y T 1 2 3 4 6 5 */
-                &trans     &trans     &kp F1     &kp F2     &kp F3     &kp F4     &kp F6     &kp F5
+                /* Row 2: Y BT4 1 2 3 4 6 5 */
+                &trans     &bt BT_SEL 4 &kp F1   &kp F2     &kp F3     &kp F4     &kp F6     &kp F5
 
                 /* Row 3: = 9 7 - 8 0 Ins ScrLk */
                 &kp F12    &kp F9     &kp F7     &kp F11    &kp F8     &kp F10    &kp INS    &kp SLCK
