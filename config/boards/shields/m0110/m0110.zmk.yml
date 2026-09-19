@@ -1,0 +1,8 @@
+file_format: "1"
+id: m0110
+name: M0110 Converter
+type: shield
+url: https://github.com/tmk/tmk_keyboard
+requires: [gpio]
+features:
+  - keys

@@ -1,0 +1,15 @@
+# Copyright (c) 2024 M0110 ZMK Driver
+# SPDX-License-Identifier: MIT
+
+if SHIELD_M0110
+
+config ZMK_KEYBOARD_NAME
+    default "M0110 Converter"
+
+config KSCAN
+    default y
+
+config KSCAN_M0110
+    default y
+
+endif # SHIELD_M0110

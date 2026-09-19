@@ -1,0 +1,49 @@
+/*
+ * M0110/M0110A Keyboard Converter Shield for nice!nano v2
+ *
+ * Pin connections:
+ *   nice!nano D2 (P0.17) -> M0110 Data (directly to keyboard)
+ *   nice!nano D3 (P0.20) -> M0110 Clock (directly to keyboard)
+ *   nice!nano VCC -> M0110 +5V
+ *   nice!nano GND -> M0110 GND
+ *
+ * The nice!nano communicates directly with the M0110 keyboard via
+ * its SDA (D2) and SCL (D3) lines using the M0110 protocol.
+ */
+
+/ {
+    chosen {
+        zmk,kscan = &kscan0;
+    };
+
+    kscan0: kscan_m0110 {
+        compatible = "zmk,kscan-m0110";
+        status = "okay";
+
+        /* nice!nano v2 Pro Micro compatible pinout
+         * D2 (P0.17) = Data line (directly to keyboard)
+         * D3 (P0.20) = Clock line (directly to keyboard)
+         */
+        data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+        clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+
+        poll-period-ms = <5>;
+
+        /* Matrix dimensions for M0110A (14 rows x 8 cols = 112 positions) */
+        rows = <14>;
+        columns = <8>;
+    };
+};
+
+/* USB CDC ACM for logging */
+&zephyr_udc0 {
+    cdc_acm_uart0: cdc_acm_uart0 {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};
+
+/ {
+    chosen {
+        zephyr,console = &cdc_acm_uart0;
+    };
+};

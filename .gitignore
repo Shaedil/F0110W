@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+*.o
+*.eep
+*.elf
+*.hex
+*.lss
+*.lst
+*.map
+*.sym
+.dep
+
+# West/Zephyr dependencies (fetched via west update)
+zephyr/
+zmk/
+modules/
+optional/
+.west/
+
+# Editor/OS
+tags
+*~
+*.bak
+.DS_Store

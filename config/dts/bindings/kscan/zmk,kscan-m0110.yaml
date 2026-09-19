@@ -1,0 +1,56 @@
+# Copyright (c) 2024 M0110 ZMK Driver
+# SPDX-License-Identifier: MIT
+
+description: |
+  Apple M0110/M0110A/M0120 keyboard scanner driver.
+
+  These vintage Apple Macintosh keyboards use a 2-wire synchronous serial
+  protocol with clock and data lines. The keyboard drives the clock, and
+  data is bidirectional.
+
+  Example configuration:
+
+    kscan0: kscan_m0110 {
+        compatible = "zmk,kscan-m0110";
+        data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+        clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
+        poll-period-ms = <5>;
+        rows = <14>;
+        columns = <8>;
+    };
+
+compatible: "zmk,kscan-m0110"
+
+include: kscan.yaml
+
+properties:
+  data-gpios:
+    type: phandle-array
+    required: true
+    description: GPIO connected to the M0110 data line (directly to keyboard)
+
+  clock-gpios:
+    type: phandle-array
+    required: true
+    description: GPIO connected to the M0110 clock line (directly to keyboard)
+
+  poll-period-ms:
+    type: int
+    default: 5
+    description: |
+      How often to poll the keyboard for key events, in milliseconds.
+      Lower values provide better responsiveness but use more CPU.
+
+  rows:
+    type: int
+    required: true
+    description: |
+      Number of rows in the virtual key matrix.
+      For M0110A this should be 14 (scancodes 0x00-0x6F mapped as row = scancode >> 3).
+
+  columns:
+    type: int
+    required: true
+    description: |
+      Number of columns in the virtual key matrix.
+      For M0110A this should be 8 (scancodes mapped as col = scancode & 0x07).
