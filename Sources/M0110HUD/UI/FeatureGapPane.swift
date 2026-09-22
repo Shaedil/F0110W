@@ -80,36 +80,6 @@ extension FeatureGapPane {
             + "sensing, and could be surfaced in the Keys pane."
     )
 
-    static let backlight = FeatureGapPane(
-        title: "Backlight",
-        summary: "The M0110 has no LEDs. Its keycaps are unlit and the matrix carries no "
-            + "lighting rail, so there is nothing for a backlight control to drive.",
-        requiresHardware: [
-            "LEDs plus a driver on a PWM-capable nice!nano pin",
-            "Or addressable RGB (WS2812) on a data pin, for underglow",
-        ],
-        firmwareNote: "ZMK does support this (CONFIG_ZMK_BACKLIGHT for PWM and "
-            + "CONFIG_ZMK_RGB_UNDERGLOW for addressable strips), but neither is enabled in "
-            + "config/m0110.conf, and the shield overlay declares no LED nodes.",
-        availableToday: "The nice!nano has one onboard blue LED on P0.15, already declared in "
-            + "the board devicetree. That is a status LED, not a backlight, but it could be "
-            + "driven for connection or charge indication."
-    )
-
-    static let audio = FeatureGapPane(
-        title: "Audio",
-        summary: "There is no speaker, piezo, or buzzer anywhere in this build, on either "
-            + "the M0110 or the nice!nano.",
-        requiresHardware: [
-            "A piezo buzzer or small speaker on a PWM-capable pin",
-            "A series resistor or driver transistor depending on the element",
-        ],
-        firmwareNote: "ZMK mainline has no audio subsystem, so this would mean a custom "
-            + "Zephyr PWM tone driver plus a ZMK behaviour to trigger it, rather than a "
-            + "config flag.",
-        availableToday: nil
-    )
-
     static let haptics = FeatureGapPane(
         title: "Haptics",
         summary: "No haptic actuator is fitted. The converter drives the keyboard's original "

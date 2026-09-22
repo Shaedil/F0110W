@@ -19,7 +19,13 @@ struct BoardScene {
     /// camera and lights fixed, which is what makes the light sweep across the
     /// case as it goes round.
     let boardNode = SCNNode()
+    /// Unit-hundredths to a scene unit. One constant, because the wedge, the
+    /// caps and the textures all have to agree about it.
+    static let sceneUnit: CGFloat = 1000
+
     private let topMaterial = SCNMaterial()
+    private let bottomMaterial = SCNMaterial()
+    private let backMaterial = SCNMaterial()
 
     /// Case beige, matching `Theme.caseFlat`. The sides of the real case are
     /// the same plastic as the top, just turned away from the light.
@@ -27,7 +33,14 @@ struct BoardScene {
 
     init() {
         scene.rootNode.addChildNode(boardNode)
-        boardNode.addChildNode(SCNNode(geometry: makeBox()))
+        boardNode.addChildNode(SCNNode(geometry: makeWedge()))
+        // The caps are solids standing in the well, not paint on its floor.
+        // They turn with the case, so they hang off the same node.
+        let hull = BoardHull.m0110
+        for cap in BoardCaps.make(hull: hull, u: Self.sceneUnit,
+                                  deckY: { BoardWedge.deckY(hull: hull, u: Self.sceneUnit, z: $0) }) {
+            boardNode.addChildNode(cap)
+        }
         scene.rootNode.addChildNode(makeCamera())
         for light in makeLights() { scene.rootNode.addChildNode(light) }
     }
@@ -35,32 +48,35 @@ struct BoardScene {
     /// `BoardHull` measures in hundredths of a key unit; the scene works in
     /// scene units, so everything divides by the same constant and the
     /// proportions carry over untouched.
-    private func makeBox() -> SCNBox {
-        let hull = BoardHull.m0110
-        let u: CGFloat = 1000
-        let width = hull.footprint.width / u
-        let depth = hull.footprint.height / u
-        // A box cannot be a wedge, so the solid takes the mean of the front and
-        // back heights and loses the case's 12° rake.
-        let height = hull.meanHeight / u
+    private func makeWedge() -> SCNGeometry {
+        let geometry = BoardWedge.make(hull: BoardHull.m0110, u: Self.sceneUnit)
 
-        let box = SCNBox(width: width, height: height, length: depth,
-                         chamferRadius: min(width, depth) * 0.02)
+        func cream() -> SCNMaterial {
+            let m = SCNMaterial()
+            m.diffuse.contents = Self.caseCream
+            m.lightingModel = .blinn
+            m.specular.contents = NSColor(white: 0.30, alpha: 1)
+            m.shininess = 0.18
+            return m
+        }
 
-        let cream = SCNMaterial()
-        cream.diffuse.contents = Self.caseCream
-        cream.lightingModel = .blinn
-        cream.specular.contents = NSColor(white: 0.30, alpha: 1)
-        cream.shininess = 0.18
+        for face in [topMaterial, bottomMaterial, backMaterial] {
+            face.lightingModel = .blinn
+            face.diffuse.contents = Self.caseCream
+            face.specular.contents = NSColor(white: 0.20, alpha: 1)
+            face.shininess = 0.10
+        }
 
-        topMaterial.lightingModel = .blinn
-        topMaterial.diffuse.contents = Self.caseCream
-        topMaterial.specular.contents = NSColor(white: 0.20, alpha: 1)
-        topMaterial.shininess = 0.10
+        let groove = SCNMaterial()
+        groove.diffuse.contents = NSColor(srgbRed: 0.506, green: 0.494, blue: 0.453, alpha: 1)
+        groove.lightingModel = .blinn
+        groove.specular.contents = NSColor(white: 0.10, alpha: 1)
+        groove.shininess = 0.05
 
-        // SCNBox material order: front, right, back, left, top, bottom.
-        box.materials = [cream, cream, cream, cream, topMaterial, cream]
-        return box
+        // In `BoardWedge.Face` order: top, underside, back, seam, shell.
+        geometry.materials = [topMaterial, bottomMaterial, backMaterial,
+                              groove, cream()]
+        return geometry
     }
 
     private func makeCamera() -> SCNNode {
@@ -75,16 +91,17 @@ struct BoardScene {
 
         let node = SCNNode()
         node.camera = camera
-        // 35° up, and far enough back for the *widest* point of the turn rather
-        // than the head-on view: a board seen at 30° projects wider than the
-        // same board seen square on, so framing it flush at 0° clips its
-        // corners for most of every rotation.
+        // 35° up, and far enough back for the tallest pose of the roll.
         //
-        // The elevation is what decides whether it fits vertically. A rotating
-        // footprint projects to `depth × sin(elevation)`, so a steeper, more
-        // top-down camera, which looks closer to the reference photograph, is
-        // the one that sprawls out of a short frame. 35° keeps the top face
-        // readable and the sweep inside the slot.
+        // The board turns about its long axis, so its horizontal extent is the
+        // case width at every angle and the framing never has to chase it. What
+        // moves is the vertical: it sweeps between the case seen edge-on, which
+        // is only its thickness, and the full depth of the top face when that
+        // comes round to face the camera. 2.4 back clears the tall pose.
+        //
+        // The elevation is a look rather than a fit. 35° is where the top face
+        // reads like the reference photograph instead of like a plan view, and
+        // it sets which face leads into the roll.
         node.position = SCNVector3(0, 1.7, 2.4)
         node.look(at: SCNVector3(0, 0, 0))
         return node
@@ -111,15 +128,21 @@ struct BoardScene {
         return [ambientNode, keyNode]
     }
 
-    /// Lay the vector art on the top face for a given theme.
+    /// Lay the vector art on the two drawn faces for a given theme.
     ///
     /// Separate from `init` because the art is built from dynamic colours,
     /// which resolve only once something knows which appearance it is in, and
     /// it has to be redone when that changes under a HUD already on screen.
     @MainActor
     func applyArt(colorScheme: ColorScheme, pixelsWide: CGFloat = 1024) {
-        guard let image = BoardArt.topFace(pixelsWide: pixelsWide, colorScheme: colorScheme)
-        else { return }
-        topMaterial.diffuse.contents = image
+        if let top = BoardArt.topFace(pixelsWide: pixelsWide, colorScheme: colorScheme) {
+            topMaterial.diffuse.contents = top
+        }
+        if let bottom = BoardArt.bottomFace(pixelsWide: pixelsWide, colorScheme: colorScheme) {
+            bottomMaterial.diffuse.contents = bottom
+        }
+        if let back = BoardArt.backFace(pixelsWide: pixelsWide, colorScheme: colorScheme) {
+            backMaterial.diffuse.contents = back
+        }
     }
 }

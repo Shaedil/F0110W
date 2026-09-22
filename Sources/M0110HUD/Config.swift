@@ -11,7 +11,12 @@ struct Config {
     /// Zero turns milestones off, leaving only the single low-battery alert.
     var batteryMilestone = 10
     /// Seconds the HUD stays fully visible before fading out.
-    var hudDuration = 3.2
+    ///
+    /// Seven, not the three it was: the HUD's own reason for existing is the
+    /// wake-from-sleep reconnect, where the keyboard is picked up, typed on,
+    /// and only answers a few seconds later. A three second hold was routinely
+    /// over before the user had looked up, and seven still was.
+    var hudDuration = 7.0
     var showDisconnect = true
     /// Suppress the HUD for a keyboard that was already connected at launch.
     var suppressInitial = false
@@ -42,6 +47,11 @@ struct Config {
     var appearance: String? = nil
     /// Vibrancy material name; see HUDController.material(named:).
     var material = "toolTip"
+    /// Transparency of the HUD as a 0...1 level, 1 being full vibrancy. `nil`
+    /// follows System Settings; see SystemTransparency.
+    var transparency: Double? = nil
+    /// Show one sample HUD, hold it for the full duration, then quit.
+    var testHUD = false
 
     static func resolve(_ args: [String]) -> Config {
         var c = Config()
@@ -58,6 +68,7 @@ struct Config {
         if d.object(forKey: "insetX") != nil { c.insetX = d.double(forKey: "insetX") }
         if d.object(forKey: "insetY") != nil { c.insetY = d.double(forKey: "insetY") }
         if let m = d.string(forKey: "material"), !m.isEmpty { c.material = m }
+        if d.object(forKey: "transparency") != nil { c.transparency = d.double(forKey: "transparency") }
 
         var it = args.makeIterator()
         _ = it.next() // executable path
@@ -74,6 +85,18 @@ struct Config {
             case "--inset-x":         if let v = it.next(), let n = Double(v) { c.insetX = n }
             case "--inset-y":         if let v = it.next(), let n = Double(v) { c.insetY = n }
             case "--material":        if let v = it.next() { c.material = v }
+            case "--test":            c.testHUD = true
+            case "--transparency":
+                if let v = it.next() {
+                    if v == "auto" {
+                        c.transparency = nil
+                    } else if let n = Double(v), (0...1).contains(n) {
+                        c.transparency = n
+                    } else {
+                        FileHandle.standardError.write("--transparency must be 0..1 or auto\n".data(using: .utf8)!)
+                        exit(2)
+                    }
+                }
             case "--appearance":
                 if let v = it.next() {
                     guard ["light", "dark", "auto"].contains(v) else {
@@ -113,20 +136,24 @@ struct Config {
           --rearm <pct>     level the battery must return to before re-alerting (default: 30)
           --milestone <pct> announce each drop through a multiple of this (default: 10;
                             0 disables, leaving only the low-battery alert)
-          --duration <sec>  how long the HUD stays visible (default: 3.2)
+          --duration <sec>  how long the HUD stays visible (default: 7)
           --no-disconnect   don't show a HUD when the keyboard disconnects
           --no-initial      stay quiet if the keyboard is already connected at launch
           --scale <factor>  resize the whole HUD (default 1.0; try 0.85 or 1.2)
           --inset-x <pt>    inset of the right edge from the screen edge (default 110)
           --inset-y <pt>    gap below the menu bar (default 6)
           --appearance <a>  force light|dark instead of following the system
+          --transparency <n> HUD transparency as 0..1, 1 being full vibrancy;
+                            default "auto" follows System Settings (Accessibility
+                            > Display > Reduce transparency)
+          --test            show one sample HUD for the full duration, then quit
           --material <m>    vibrancy material (popover, hudWindow, menu, sidebar,
                             headerView, windowBackground, contentBackground,
                             underWindowBackground, fullScreenUI, toolTip, titlebar)
           --window          open the editor window at launch instead of waiting
                             for the menu bar item
           --snapshot <path> render the UI offscreen to a PNG and exit
-          --snapshot-pane <n> which pane to render (Keys, Settings, Backlight, ...)
+          --snapshot-pane <n> which pane to render (Keys, Settings, ...)
           --board-snapshot <path>  render the HUD's spinning 3D board to a PNG
                             strip, one frame per sixth of a turn, and exit
           --studio-probe    check the ZMK Studio RPC link (USB, then Bluetooth) and exit

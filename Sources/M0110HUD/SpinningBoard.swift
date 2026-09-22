@@ -8,8 +8,10 @@ import SwiftUI
 /// rotating object; faster and it reads as a flicker at the edge of the screen,
 /// which is the opposite of what a status HUD wants.
 final class SpinningBoardView: NSView {
-    /// Seconds for one full turn.
-    private static let turnDuration: TimeInterval = 7.5
+    /// Seconds for one full turn: 5, which is the 7.5 the yaw spin used at
+    /// 1.5× the rate. A roll spends part of every turn edge-on, where there is
+    /// nothing to look at, so it wants to get through that sooner.
+    private static let turnDuration: TimeInterval = 5
 
     /// Texture resolution. The art is around 2.6:1, so this is generous for a
     /// glyph-sized view and cheap enough to redraw when the theme changes.
@@ -44,7 +46,11 @@ final class SpinningBoardView: NSView {
         sceneView.frame = bounds
         addSubview(sceneView)
 
-        let turn = SCNAction.rotateBy(x: 0, y: .pi * 2, z: 0, duration: Self.turnDuration)
+        // A barrel roll, not a yaw: X is the board's long axis, so turning
+        // about it rolls the case top-over-bottom, showing the keys, then the
+        // front edge, then the underside. Turning about Y instead spun it flat
+        // like a record, which reads as the board sliding rather than rolling.
+        let turn = SCNAction.rotateBy(x: .pi * 2, y: 0, z: 0, duration: Self.turnDuration)
         turn.timingMode = .linear
         board.boardNode.runAction(.repeatForever(turn))
     }

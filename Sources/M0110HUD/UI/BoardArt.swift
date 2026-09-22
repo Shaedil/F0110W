@@ -60,7 +60,10 @@ enum BoardArt {
     private struct CacheKey: Hashable {
         let pixelsWide: Int
         let isDark: Bool
+        let face: Face
     }
+
+    private enum Face: Hashable { case top, underside, back }
     private static var cache: [CacheKey: NSImage] = [:]
 
     /// The board's top face at roughly `pixelsWide` across.
@@ -74,7 +77,8 @@ enum BoardArt {
     /// palette from the environment, and an offscreen render has no window to
     /// inherit one from. `Snapshot` sets it for the same reason.
     static func topFace(pixelsWide: CGFloat, colorScheme: ColorScheme) -> NSImage? {
-        let key = CacheKey(pixelsWide: Int(pixelsWide), isDark: colorScheme == .dark)
+        let key = CacheKey(pixelsWide: Int(pixelsWide), isDark: colorScheme == .dark,
+                           face: .top)
         if let hit = cache[key] { return hit }
 
         let started = Date()
@@ -96,9 +100,56 @@ enum BoardArt {
         return image
     }
 
+    /// The board's underside, cached on the same terms as the top.
+    ///
+    /// Much cheaper to draw than the top face — a handful of shapes against
+    /// sixty keycaps — but it goes through the same cache because it is wanted
+    /// at the same moment, and a roll shows it within a second of the HUD
+    /// appearing.
+    static func bottomFace(pixelsWide: CGFloat, colorScheme: ColorScheme) -> NSImage? {
+        let key = CacheKey(pixelsWide: Int(pixelsWide), isDark: colorScheme == .dark,
+                           face: .underside)
+        if let hit = cache[key] { return hit }
+
+        let span = CGFloat(M0110Layout.unitsWide) + BoardCase.Bezel.m0110.side * 2
+        let scale = (pixelsWide / 2) / span
+
+        let renderer = ImageRenderer(
+            content: BoardUndersideView(scale: scale)
+                .environment(\.colorScheme, colorScheme))
+        renderer.scale = 2
+        guard let image = renderer.nsImage else { return nil }
+
+        cache[key] = image
+        return image
+    }
+
+    /// The board's back face, cached on the same terms.
+    static func backFace(pixelsWide: CGFloat, colorScheme: ColorScheme) -> NSImage? {
+        let key = CacheKey(pixelsWide: Int(pixelsWide), isDark: colorScheme == .dark,
+                           face: .back)
+        if let hit = cache[key] { return hit }
+
+        let hull = BoardHull.m0110
+        let span = CGSize(width: hull.footprint.width,
+                          height: hull.backHeight - hull.rimDrop)
+        let scale = (pixelsWide / 2) / span.width
+
+        let renderer = ImageRenderer(
+            content: BoardBackView(scale: scale, span: span)
+                .environment(\.colorScheme, colorScheme))
+        renderer.scale = 2
+        guard let image = renderer.nsImage else { return nil }
+
+        cache[key] = image
+        return image
+    }
+
     /// Rasterise ahead of the first HUD, so the cost is not paid at connect
     /// time. Cheap to call twice; the second one is a cache hit.
     static func warm(pixelsWide: CGFloat, colorScheme: ColorScheme) {
         _ = topFace(pixelsWide: pixelsWide, colorScheme: colorScheme)
+        _ = bottomFace(pixelsWide: pixelsWide, colorScheme: colorScheme)
+        _ = backFace(pixelsWide: pixelsWide, colorScheme: colorScheme)
     }
 }

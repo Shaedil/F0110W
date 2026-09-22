@@ -30,15 +30,21 @@ open build/M0110HUD.app          # first launch prompts for Bluetooth access
 Launch with `open` rather than from a shell, so macOS attributes the Bluetooth
 permission to the app instead of your terminal.
 
-Without hardware, `--preview` cycles the three HUD states and `--snapshot
-<path>` renders a pane offscreen to a PNG.
+Without hardware, `--test` shows a single HUD, `--preview` cycles the three HUD
+states and `--snapshot <path>` renders a pane offscreen to a PNG.
 
 ## Options
 
 `--help` lists every flag with its default. The common ones are `--name`,
-`--low`, `--rearm`, `--duration`, `--scale`, `--appearance`, `--headless`,
-`--studio-probe` and `--verbose`. Every setting also reads from `UserDefaults`
-under `com.shaedil.m0110hud`, with flags taking precedence.
+`--low`, `--rearm`, `--duration`, `--scale`, `--appearance`, `--transparency`,
+`--headless`, `--studio-probe` and `--verbose`. Every setting also reads from
+`UserDefaults` under `com.shaedil.m0110hud`, with flags taking precedence.
+
+The HUD holds for seven seconds, long enough to still be there when a keyboard
+that has been asleep all night finishes reconnecting. Its transparency follows
+Accessibility > Display > Reduce transparency: on, and the blur is replaced by
+an opaque background. macOS publishes that setting as a switch rather than a
+level, so the in-between values are reachable only through `--transparency`.
 
 ## Known limits
 

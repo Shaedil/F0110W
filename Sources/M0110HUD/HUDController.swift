@@ -1,11 +1,36 @@
 import AppKit
 
+/// The opaque fill that stands in for the blur as transparency is dialled down.
+///
+/// It draws rather than holding a layer background colour so the fill tracks a
+/// light/dark switch on its own: `draw(_:)` re-runs on an appearance change and
+/// resolves `windowBackgroundColor` against whatever is current, where a colour
+/// baked into a layer would keep the old one.
+private final class HUDBacking: NSView {
+    private let radius: CGFloat
+
+    init(radius: CGFloat) {
+        self.radius = radius
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
+    }
+}
+
 /// Owns the borderless panel: slides it in at the top-right of the active
 /// screen, holds it, then fades it out. Re-showing while visible updates the
 /// content in place and restarts the hold timer.
 final class HUDController {
     private var panel: NSPanel?
     private var view: HUDView?
+    /// Opaque fill under the content, revealed as the transparency level drops.
+    private var backing: HUDBacking?
+    private var effect: NSVisualEffectView?
     private var dismissWork: DispatchWorkItem?
     /// Bumped on every show so a stale fade completion can't hide a newer HUD.
     private var fadeGeneration = 0
@@ -14,6 +39,7 @@ final class HUDController {
     private let metrics: HUDMetrics
     private let forcedAppearance: NSAppearance?
     private let materialName: String
+    private let transparency: SystemTransparency
 
     private var slideOffset: CGFloat { 26 * metrics.scale }
 
@@ -21,17 +47,35 @@ final class HUDController {
          lowThreshold: Int,
          metrics: HUDMetrics,
          appearance: String? = nil,
-         material: String = "toolTip") {
+         material: String = "toolTip",
+         transparency: SystemTransparency) {
         self.duration = duration
         self.lowThreshold = lowThreshold
         self.metrics = metrics
         self.materialName = material
+        self.transparency = transparency
         switch appearance {
         case "light": self.forcedAppearance = NSAppearance(named: .vibrantLight)
         case "dark":  self.forcedAppearance = NSAppearance(named: .vibrantDark)
         // nil leaves the panel following the system, which is the default.
         default:      self.forcedAppearance = nil
         }
+        // Changing "Reduce transparency" while a HUD is up restyles it in place
+        // rather than waiting for the next connect.
+        transparency.onChange = { [weak self] level in self?.apply(level: level) }
+    }
+
+    /// Paint the transparency level onto the panel.
+    ///
+    /// The vibrancy view stays in the hierarchy at every level; what changes is
+    /// how much of the opaque fill sitting on top of it shows through. At 1 the
+    /// fill is invisible and the HUD is pure behind-window blur; at 0 the fill
+    /// covers it and the blur is switched off outright, which is what "Reduce
+    /// transparency" is asking for and also stops the window server doing work
+    /// nobody can see.
+    private func apply(level: Double) {
+        backing?.alphaValue = CGFloat(1 - level)
+        effect?.state = level <= 0.01 ? .inactive : .active
     }
 
 
@@ -87,14 +131,29 @@ final class HUDController {
         // the only thing that shapes the vibrancy itself (and the shadow).
         effect.maskImage = Self.capsuleMask(radius: metrics.cornerRadius)
 
+        // Between the vibrancy and the content, so lowering the transparency
+        // level hides the blur without touching the text or the battery ring.
+        let fill = HUDBacking(radius: metrics.cornerRadius)
+        fill.translatesAutoresizingMaskIntoConstraints = false
+        effect.addSubview(fill)
+
         content.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(content)
         NSLayoutConstraint.activate([
+            fill.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
+            fill.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+            fill.topAnchor.constraint(equalTo: effect.topAnchor),
+            fill.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
+
             content.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
             content.topAnchor.constraint(equalTo: effect.topAnchor),
             content.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
         ])
+
+        self.effect = effect
+        self.backing = fill
+        apply(level: transparency.level)
 
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: metrics.minWidth, height: metrics.height),
                         styleMask: [.borderless, .nonactivatingPanel],
@@ -117,6 +176,11 @@ final class HUDController {
     }
 
     func show(kind: HUDKind, name: String, battery: Int?) {
+        // The accessibility notification covers a switch flipped while the app
+        // is running; this covers the level being different from whatever it
+        // was when the panel was built, at no cost worth measuring.
+        transparency.refresh()
+
         if panel == nil {
             let (p, v) = makePanel()
             panel = p

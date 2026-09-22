@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Renders the spinning board offscreen as a strip of frames through one turn.
 ///
-/// The HUD is a borderless panel that lives for three seconds, so the usual way
+/// The HUD is a borderless panel that lives for seven seconds, so the usual way
 /// to look at it is a screen capture with the timing guessed right. This draws
 /// the same scene straight to a PNG instead, with no keyboard, no screen
 /// recording permission, and every frame at a known angle.
@@ -36,7 +36,10 @@ enum BoardSnapshot {
 
         for i in 0..<frameCount {
             let angle = CGFloat(i) / CGFloat(frameCount) * 2 * .pi
-            board.boardNode.eulerAngles = SCNVector3(0, angle, 0)
+            // X, matching the barrel roll `SpinningBoardView` runs: a strip
+            // sampled about a different axis than the HUD turns on would be
+            // checking a rotation nobody ever sees.
+            board.boardNode.eulerAngles = SCNVector3(angle, 0, 0)
             let frame = renderer.snapshot(atTime: 0, with: frameSize,
                                           antialiasingMode: .multisampling4X)
             frame.draw(in: NSRect(x: CGFloat(i) * frameSize.width, y: 0,

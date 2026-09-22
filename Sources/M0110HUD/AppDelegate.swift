@@ -3,6 +3,9 @@ import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let config: Config
+    /// Held for the lifetime of the app: it owns the accessibility observer
+    /// that keeps a live HUD in step with System Settings.
+    private let transparency: SystemTransparency
     private let hud: HUDController
     private var monitor: BluetoothMonitor?
     private let keyboard = KeyboardController()
@@ -34,13 +37,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     init(config: Config) {
         self.config = config
+        let transparency = SystemTransparency(override: config.transparency,
+                                              verbose: config.verbose)
+        self.transparency = transparency
         self.hud = HUDController(duration: config.hudDuration,
                                  lowThreshold: config.lowThreshold,
                                  metrics: HUDMetrics(scale: config.scale,
                                                      insetX: config.insetX,
                                                      insetY: config.insetY),
                                  appearance: config.appearance,
-                                 material: config.material)
+                                 material: config.material,
+                                 transparency: transparency)
         super.init()
     }
 
@@ -108,6 +115,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.statusItem?.connectionSummary = Self.summary(for: state)
         }
 
+        if config.testHUD {
+            runTestHUD()
+            return
+        }
         if config.themeCycle {
             runThemeCycle()
             return
@@ -238,6 +249,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { NSApp.terminate(nil) }
+    }
+
+    /// One HUD, held for the configured duration, then quit: what `--test` is
+    /// for. Unlike `--preview` it shows a single notification, so the hold time
+    /// and the transparency can be read off it without three of them going by.
+    private func runTestHUD() {
+        hud.show(kind: .connected, name: config.deviceName, battery: 76)
+        // The fade runs after the hold, so wait out both before quitting.
+        DispatchQueue.main.asyncAfter(deadline: .now() + config.hudDuration + 1.2) {
+            NSApp.terminate(nil)
+        }
     }
 
     /// Walk through each HUD state so the look can be checked without hardware.

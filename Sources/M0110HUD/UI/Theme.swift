@@ -92,6 +92,37 @@ enum Theme {
     static let caseFlat = dynamic(light: NSColor(srgbRed: 0.855, green: 0.839, blue: 0.780, alpha: 1),
                                   dark: NSColor(srgbRed: 0.839, green: 0.824, blue: 0.765, alpha: 1))
 
+    /// The underside's fittings, all from the reference photograph of the real
+    /// case. The feet are the grey-green translucent rubber Apple used, seated
+    /// in a moulded well; the label is the silver foil spec plate; the vents
+    /// read as shadow rather than as plastic, because that is what a slot into
+    /// an empty case looks like.
+    static let footRubber = dynamic(light: NSColor(srgbRed: 0.282, green: 0.306, blue: 0.278, alpha: 1),
+                                    dark: NSColor(srgbRed: 0.259, green: 0.282, blue: 0.255, alpha: 1))
+    static let footRim = dynamic(light: NSColor(srgbRed: 0.639, green: 0.627, blue: 0.576, alpha: 1),
+                                 dark: NSColor(srgbRed: 0.616, green: 0.604, blue: 0.553, alpha: 1))
+    static let specLabel = dynamic(light: NSColor(srgbRed: 0.945, green: 0.953, blue: 0.965, alpha: 1),
+                                   dark: NSColor(srgbRed: 0.929, green: 0.937, blue: 0.949, alpha: 1))
+    static let specLabelRim = dynamic(light: NSColor(srgbRed: 0.667, green: 0.678, blue: 0.690, alpha: 1),
+                                      dark: NSColor(srgbRed: 0.647, green: 0.659, blue: 0.671, alpha: 1))
+    static let specLabelInk = dynamic(light: NSColor(srgbRed: 0.416, green: 0.427, blue: 0.447, alpha: 1),
+                                      dark: NSColor(srgbRed: 0.400, green: 0.412, blue: 0.431, alpha: 1))
+    static let ventSlot = dynamic(light: NSColor(srgbRed: 0.196, green: 0.192, blue: 0.176, alpha: 1),
+                                  dark: NSColor(srgbRed: 0.176, green: 0.173, blue: 0.157, alpha: 1))
+
+    /// The front face's sockets: the moulded recess, and the darker mouth of
+    /// the socket sitting inside it. Both read as shadow, because an opening
+    /// into an empty case is what they are.
+    static let portRecess = dynamic(light: NSColor(srgbRed: 0.404, green: 0.396, blue: 0.365, alpha: 1),
+                                    dark: NSColor(srgbRed: 0.380, green: 0.373, blue: 0.341, alpha: 1))
+    static let portMouth = dynamic(light: NSColor(srgbRed: 0.071, green: 0.067, blue: 0.059, alpha: 1),
+                                   dark: NSColor(srgbRed: 0.059, green: 0.055, blue: 0.047, alpha: 1))
+
+    /// The line where the case's two shells meet, and the shadowed walls of
+    /// the key well. Both are seen, not lit: a groove and a recess.
+    static let caseSeam = dynamic(light: NSColor(srgbRed: 0.518, green: 0.506, blue: 0.463, alpha: 1),
+                                  dark: NSColor(srgbRed: 0.494, green: 0.482, blue: 0.443, alpha: 1))
+
     /// The plate showing between the keycaps.
     static let plate = dynamic(light: NSColor(srgbRed: 0.075, green: 0.071, blue: 0.063, alpha: 1),
                                dark: NSColor(srgbRed: 0.063, green: 0.059, blue: 0.051, alpha: 1))

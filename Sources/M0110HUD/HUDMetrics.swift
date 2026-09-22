@@ -15,8 +15,25 @@ struct HUDMetrics {
     /// footprint on purpose: a rotating solid sweeps its depth through the
     /// frame, and a slot cut to the head-on silhouette clips the corners for
     /// most of every turn.
-    var glyphWidth: CGFloat { 46 * scale }
-    var glyphHeight: CGFloat { glyphWidth / 1.45 }
+    ///
+    /// 92, twice the 46 it started at, and that factor is also how much bigger
+    /// the board itself draws. The scene camera fixes its *horizontal* field of view, so the
+    /// board fills a constant fraction of the slot however wide the slot is:
+    /// widening the slot is what enlarges the model, and scaling the model node
+    /// as well would compound the two and shear its ends off against the edge.
+    ///
+    /// The first 23pt of that came free: `minWidth` used to be the binding
+    /// constraint, stretching the text stack past the 61.5pt its labels
+    /// actually want, and the glyph took that slack. Past 69 the capsule does
+    /// grow, to about 231.
+    var glyphWidth: CGFloat { 92 * scale }
+
+    /// The slot's 1.45 aspect, but never taller than the capsule holding it.
+    /// At 1.5× the derived height passes the HUD's own 46pt, which is an
+    /// unsatisfiable pair of constraints rather than a bigger glyph. Clamping
+    /// squares the slot up instead, and the roll's vertical sweep is far
+    /// shorter than its width, so it still has room.
+    var glyphHeight: CGFloat { min(glyphWidth / 1.45, height) }
 
     var titleSize: CGFloat { 13 * scale }
     var statusSize: CGFloat { 11 * scale }

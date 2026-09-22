@@ -3,8 +3,6 @@ import SwiftUI
 enum Pane: String, CaseIterable, Identifiable {
     case keys = "Keys"
     case gestures = "Gestures"
-    case backlight = "Backlight"
-    case audio = "Audio"
     case haptics = "Haptics"
     case settings = "Settings"
 
@@ -14,8 +12,6 @@ enum Pane: String, CaseIterable, Identifiable {
         switch self {
         case .keys: return .keys
         case .gestures: return .gestures
-        case .backlight: return .backlight
-        case .audio: return .audio
         case .haptics: return .haptics
         case .settings: return .settings
         }
@@ -26,8 +22,6 @@ enum Pane: String, CaseIterable, Identifiable {
         switch self {
         case .keys: return Color(red: 0.85, green: 0.72, blue: 0.50)
         case .gestures: return Color(red: 0.93, green: 0.55, blue: 0.30)
-        case .backlight: return Color(red: 0.95, green: 0.78, blue: 0.32)
-        case .audio: return Color(red: 0.55, green: 0.72, blue: 0.92)
         case .haptics: return Color(red: 0.80, green: 0.50, blue: 0.85)
         case .settings: return Color(red: 0.90, green: 0.45, blue: 0.36)
         }
@@ -286,8 +280,6 @@ struct RootView: View {
         switch pane {
         case .keys: KeysPane(controller: controller)
         case .gestures: FeatureGapPane.gestures
-        case .backlight: FeatureGapPane.backlight
-        case .audio: FeatureGapPane.audio
         case .haptics: FeatureGapPane.haptics
         case .settings: SettingsPane()
         }
