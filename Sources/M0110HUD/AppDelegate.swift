@@ -2,11 +2,18 @@ import AppKit
 import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let config: Config
+    /// Mutable so the debug panel can change thresholds and the HUD's look
+    /// while the app runs.
+    var config: Config
     /// Held for the lifetime of the app: it owns the accessibility observer
     /// that keeps a live HUD in step with System Settings.
-    private let transparency: SystemTransparency
-    private let hud: HUDController
+    let transparency: SystemTransparency
+    private(set) var hud: HUDController
+    private var debugPanel: DebugPanelController?
+    /// Where the alert latch and milestone live. Debug runs get their own
+    /// domain, so walking the state machine by hand never disturbs the real
+    /// app's memory of what it has already announced.
+    private let state: UserDefaults
     private var monitor: BluetoothMonitor?
     private let keyboard = KeyboardController()
     private var statusItem: StatusItemController?
@@ -23,32 +30,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
 
     /// Persisted so a relaunch on an already-low battery doesn't re-nag.
-    private var lowAlertArmed: Bool {
-        get { UserDefaults.standard.object(forKey: "lowAlertArmed") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "lowAlertArmed") }
+    var lowAlertArmed: Bool {
+        get { state.object(forKey: "lowAlertArmed") as? Bool ?? true }
+        set { state.set(newValue, forKey: "lowAlertArmed") }
     }
 
     /// The last milestone announced, persisted for the same reason: a relaunch
     /// should not re-announce a level the user has already been told about.
-    private var lastMilestone: Int? {
-        get { UserDefaults.standard.object(forKey: "lastMilestone") as? Int }
-        set { UserDefaults.standard.set(newValue, forKey: "lastMilestone") }
+    var lastMilestone: Int? {
+        get { state.object(forKey: "lastMilestone") as? Int }
+        set { state.set(newValue, forKey: "lastMilestone") }
     }
+
+    /// When the keyboard last connected and last left, for telling the first
+    /// connect of the day from the rest. Persisted: the gap that makes an
+    /// arrival is usually a night, and the app may well restart inside it.
+    var lastConnectAt: Date? {
+        get { state.object(forKey: "lastConnectAt") as? Date }
+        set { state.set(newValue, forKey: "lastConnectAt") }
+    }
+    var lastDisconnectAt: Date? {
+        get { state.object(forKey: "lastDisconnectAt") as? Date }
+        set { state.set(newValue, forKey: "lastDisconnectAt") }
+    }
+
+    /// The last level the keyboard reported. BluetoothMonitor forgets it on
+    /// disconnect, but that is exactly when it decides between "disconnected"
+    /// and "died".
+    var lastBattery: Int? {
+        get { state.object(forKey: "lastBattery") as? Int }
+        set { state.set(newValue, forKey: "lastBattery") }
+    }
+
+    /// Set once the empty-battery HUD has been shown, until the battery is
+    /// charged again, so a level bouncing on 0 does not repeat it.
+    var diedAnnounced: Bool {
+        get { state.bool(forKey: "diedAnnounced") }
+        set { state.set(newValue, forKey: "diedAnnounced") }
+    }
+
+    /// The keyboard's active profile as last reported, and which profile is
+    /// this computer. Not persisted: the keyboard reports both afresh on every
+    /// connect, and a stale value would announce a move that never happened.
+    private(set) var activeProfile: Int?
+    private(set) var ownProfile: Int?
+
+    /// Hours apart that make a connect the first of a new day, on top of any
+    /// connect on a new calendar day.
+    static let arrivalGap: TimeInterval = 4 * 3600
+    /// A disconnect at or below this level is the battery dying, not leaving.
+    static let diedLevel = 2
 
     init(config: Config) {
         self.config = config
         let transparency = SystemTransparency(override: config.transparency,
                                               verbose: config.verbose)
         self.transparency = transparency
-        self.hud = HUDController(duration: config.hudDuration,
-                                 lowThreshold: config.lowThreshold,
-                                 metrics: HUDMetrics(scale: config.scale,
-                                                     insetX: config.insetX,
-                                                     insetY: config.insetY),
-                                 appearance: config.appearance,
-                                 material: config.material,
-                                 transparency: transparency)
+        self.hud = Self.makeHUD(config: config, transparency: transparency)
+        self.state = config.debug
+            ? UserDefaults(suiteName: "com.shaedil.m0110hud.debug") ?? .standard
+            : .standard
         super.init()
+    }
+
+    private static func makeHUD(config: Config, transparency: SystemTransparency) -> HUDController {
+        HUDController(duration: config.hudDuration,
+                      lowThreshold: config.lowThreshold,
+                      metrics: HUDMetrics(scale: config.scale,
+                                          insetX: config.insetX,
+                                          insetY: config.insetY),
+                      appearance: config.appearance,
+                      material: config.material,
+                      transparency: transparency)
+    }
+
+    /// Replace the HUD with one built from the current config. The metrics,
+    /// material and appearance are fixed when a panel is made, so changing any
+    /// of them live means starting over. Pinning, styles, the Reduce Motion override and the show hook carry over.
+    func rebuildHUD() {
+        let pinned = hud.pinned
+        let onShow = hud.onShow
+        let onMoveBack = hud.onMoveBack
+        let styles = hud.styles
+        let forceReduceMotion = hud.forceReduceMotion
+        hud.tearDown()
+        hud = Self.makeHUD(config: config, transparency: transparency)
+        hud.pinned = pinned
+        hud.onShow = onShow
+        hud.onMoveBack = onMoveBack
+        hud.styles = styles
+        hud.forceReduceMotion = forceReduceMotion
     }
 
     /// Closing the window leaves the HUD running in the background.
@@ -99,6 +170,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       colorScheme: NSApp.effectiveAppearance
                           .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light)
 
+        if config.debug {
+            runDebug()
+            return
+        }
+
         // The app lives in the menu bar. It has no Dock icon and opens no
         // window until asked, so this is its only permanent presence.
         statusItem = StatusItemController(
@@ -130,13 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let m = BluetoothMonitor(config: config)
         m.onConnect = { [weak self] name, battery, isInitial in
-            guard let self else { return }
-            if isInitial && self.config.suppressInitial { return }
-            self.hud.show(kind: .connected, name: name, battery: battery)
+            self?.handleConnect(name: name, battery: battery, isInitial: isInitial)
         }
         m.onDisconnect = { [weak self] name in
-            guard let self, self.config.showDisconnect else { return }
-            self.hud.show(kind: .disconnected, name: name, battery: nil)
+            self?.handleDisconnect(name: name)
         }
         m.onBattery = { [weak self] name, level in
             self?.handleBattery(name: name, level: level)
@@ -144,9 +217,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor = m
     }
 
-    private func handleBattery(name: String, level: Int) {
+    // The events the keyboard reports. The debug panel calls these directly,
+    // so what it shows is what the real link would produce.
+
+    func handleConnect(name: String, battery: Int?, isInitial: Bool, now: Date = Date()) {
+        let arrival = isArrival(at: now)
+        lastConnectAt = now
+        if isInitial && config.suppressInitial { return }
+        hud.show(kind: arrival ? .arrived : .connected, name: name, battery: battery ?? lastBattery)
+    }
+
+    /// The first connect of the day: none before, a new calendar day since the
+    /// last, or long enough away that it is a new stretch of work.
+    func isArrival(at now: Date) -> Bool {
+        guard let last = lastConnectAt else { return true }
+        if !Calendar.current.isDate(last, inSameDayAs: now) { return true }
+        guard let left = lastDisconnectAt, left >= last else { return false }
+        return now.timeIntervalSince(left) >= Self.arrivalGap
+    }
+
+    func handleDisconnect(name: String, now: Date = Date()) {
+        lastDisconnectAt = now
+        activeProfile = nil
+        if let level = lastBattery, level <= Self.diedLevel {
+            // Leaving on an empty battery is dying, whatever else is set: it
+            // is the one disconnect worth knowing about. Unless a report of 0%
+            // already said so a moment ago.
+            if !diedAnnounced {
+                diedAnnounced = true
+                hud.show(kind: .died, name: name, battery: level)
+            }
+            return
+        }
+        guard config.showDisconnect else { return }
+        hud.show(kind: .disconnected, name: name, battery: nil)
+    }
+
+    /// The keyboard switched Bluetooth profile. `active` is the profile it now
+    /// types to, `own` the one that is this computer, both 0-based; `own` is
+    /// nil when the keyboard did not say.
+    ///
+    /// Only the moves that involve this computer say anything: away from it,
+    /// or back to it. The first report after a connect only sets the scene.
+    func handleProfileSwitch(name: String, active: Int, own: Int?) {
+        let previous = activeProfile
+        activeProfile = active
+        if let own { ownProfile = own }
+        guard let mine = ownProfile, let previous, previous != active else { return }
+
+        if previous == mine {
+            hud.show(kind: .movedAway, name: name, battery: lastBattery,
+                     detail: ProfileNames.name(for: active))
+        } else if active == mine {
+            hud.show(kind: .movedBack, name: name, battery: lastBattery)
+        }
+    }
+
+    func handleBattery(name: String, level: Int) {
+        lastBattery = level
         // The BAS read lands shortly after connect; fill it into the live HUD.
-        hud.updateBatteryIfVisible(kind: .connected, name: name, battery: level)
+        hud.updateBatteryIfVisible(name: name, battery: level)
+
+        if level <= 0, !diedAnnounced {
+            diedAnnounced = true
+            hud.show(kind: .died, name: name, battery: level)
+            return
+        } else if level > Self.diedLevel + 3 {
+            diedAnnounced = false
+        }
 
         if lowAlertArmed, level <= config.lowThreshold {
             lowAlertArmed = false
@@ -194,6 +332,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                  name: name, battery: level)
     }
 
+    /// Forget the day and battery history, for the debug panel.
+    func resetHistory() {
+        lastConnectAt = nil
+        lastDisconnectAt = nil
+        lastBattery = nil
+        diedAnnounced = false
+        activeProfile = nil
+        ownProfile = nil
+    }
+
     /// A programmatic menu bar, since this app has no nib. Without it a
     /// `.regular` app has no way to quit or reopen its window.
     private func installMainMenu() {
@@ -230,6 +378,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { openWindow() }
         return true
+    }
+
+    /// The debug panel, in place of the monitor, the clipboard and the menu
+    /// bar item. A regular app for the duration, so the panel takes focus and
+    /// ⌘Q quits it.
+    private func runDebug() {
+        installMainMenu()
+        NSApp.setActivationPolicy(.regular)
+        // Launch callbacks arrive on the main thread.
+        MainActor.assumeIsolated {
+            let panel = DebugPanelController(app: self)
+            debugPanel = panel
+            panel.show()
+        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// Show one HUD, then flip the app's appearance beneath it. Overriding

@@ -43,6 +43,63 @@ final class HUDController {
 
     private var slideOffset: CGFloat { 26 * metrics.scale }
 
+    /// Strong ease-out (expo) for arriving. The named `.easeOut` is too weak
+    /// to feel quick; a steep start lets the entrance run a little longer and
+    /// still read as instant.
+    private static let arrive = CAMediaTimingFunction(controlPoints: 0.19, 1, 0.22, 1)
+    /// Leaving is a fade in place, the way Apple's HUDs go: nothing moves,
+    /// it just thins out. `ease`, the curve for an opacity change.
+    private static let leave = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1)
+    static let fadeOut: TimeInterval = 0.5
+
+    /// Force Reduce Motion on or off, for checking both variants from the
+    /// debug panel. `nil` follows System Settings.
+    var forceReduceMotion: Bool?
+
+    private var reduceMotion: Bool {
+        forceReduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// Where the panel starts from for an entrance.
+    private func offset(_ frame: NSRect, for entrance: HUDEntrance, by distance: CGFloat) -> NSRect {
+        var f = frame
+        switch entrance {
+        case .slide: f.origin.x += distance
+        case .drop:  f.origin.y += distance
+        case .fade:  break
+        }
+        return f
+    }
+
+    /// Hold the HUD on screen indefinitely, for the debug panel. Unpinning a
+    /// visible HUD starts its normal hold timer from that moment.
+    var pinned = false {
+        didSet {
+            guard pinned != oldValue else { return }
+            if pinned {
+                dismissWork?.cancel()
+            } else if let panel, panel.isVisible, panel.alphaValue > 0.01 {
+                scheduleDismiss()
+            }
+        }
+    }
+
+    /// How each state animates; see HUDStyle.
+    var styles = HUDStyle.defaults
+
+    /// Called with whatever each `show` puts on screen, so a debugger can log
+    /// the HUDs the state machine produced.
+    var onShow: ((HUDKind, String, Int?) -> Void)?
+
+    /// Asks the keyboard to switch back to this computer. Nil until there is
+    /// a way to reach it, and the moved-away HUD shows its button only when
+    /// this is set.
+    var onMoveBack: (() -> Void)?
+
+    /// What the HUD on screen is showing, so a late battery reading can be
+    /// filled into it without changing what it says.
+    private var current: (kind: HUDKind, detail: String?)?
+
     init(duration: TimeInterval,
          lowThreshold: Int,
          metrics: HUDMetrics,
@@ -175,7 +232,8 @@ final class HUDController {
         return (p, content)
     }
 
-    func show(kind: HUDKind, name: String, battery: Int?) {
+    /// `detail` is the profile name on a moved-away HUD.
+    func show(kind: HUDKind, name: String, battery: Int?, detail: String? = nil) {
         // The accessibility notification covers a switch flipped while the app
         // is running; this covers the level being different from whatever it
         // was when the panel was built, at no cost worth measuring.
@@ -188,7 +246,15 @@ final class HUDController {
         }
         guard let panel, let view else { return }
 
-        view.configure(kind: kind, name: name, battery: battery, lowThreshold: lowThreshold)
+        let canMoveBack = kind == .movedAway && onMoveBack != nil
+        view.onMoveBack = { [weak self] in self?.onMoveBack?() }
+        view.configure(kind: kind, name: name, battery: battery, lowThreshold: lowThreshold,
+                       detail: detail, canMoveBack: canMoveBack)
+        // The HUD lets clicks through to whatever is under it, except when it
+        // has a button to press.
+        panel.ignoresMouseEvents = !canMoveBack
+        current = (kind, detail)
+        let style = styles[kind] ?? HUDStyle.defaults[kind]!
 
         let size = view.preferredSize
         if ProcessInfo.processInfo.arguments.contains("--verbose") {
@@ -201,37 +267,67 @@ final class HUDController {
                             width: size.width,
                             height: size.height)
 
-        // Only treat it as "already up" when it is fully opaque; mid-fade we must
-        // cancel the fade and bring the alpha back, or it will vanish under us.
-        let wasVisible = panel.isVisible && panel.alphaValue > 0.99
+        let reduced = reduceMotion
+        let onScreen = panel.isVisible && panel.alphaValue > 0.01
 
-        if wasVisible {
-            // Already on screen: just resize/reposition, no slide.
+        if onScreen && panel.alphaValue > 0.99 {
+            // Already up: just resize/reposition, no entrance.
             panel.setFrame(target, display: true, animate: false)
+        } else if onScreen {
+            // Caught mid-fade. Carry on from where it is rather than snapping
+            // back to the start of an entrance: retarget, don't restart.
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.25
+                ctx.timingFunction = Self.arrive
+                panel.animator().setFrame(target, display: true)
+                panel.animator().alphaValue = 1
+            }
         } else {
-            var start = target
-            start.origin.x += slideOffset
-            panel.setFrame(start, display: false)
+            // Under Reduce Motion the panel does not travel; it only fades.
+            let entrance: HUDEntrance = reduced ? .fade : style.entrance
+            panel.setFrame(offset(target, for: entrance, by: slideOffset), display: false)
             panel.alphaValue = 0
             panel.orderFrontRegardless()
 
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.24
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.duration = entrance == .fade ? 0.3 : 0.4
+                ctx.timingFunction = Self.arrive
                 panel.animator().setFrame(target, display: true)
                 panel.animator().alphaValue = 1
             }
         }
 
         view.setSpinning(true)
+        view.animateBoard(style, battery: battery, reduced: reduced)
+        holdFor = Self.hold(for: style, configured: duration)
         scheduleDismiss()
+        onShow?(kind, name, battery)
+    }
+
+    /// Fade the HUD out now rather than at the end of its hold.
+    func dismissNow() {
+        dismissWork?.cancel()
+        dismiss()
+    }
+
+    /// Take the panel off screen at once, for a controller being replaced.
+    func tearDown() {
+        dismissWork?.cancel()
+        fadeGeneration += 1
+        view?.setSpinning(false)
+        panel?.orderOut(nil)
+        panel = nil
+        view = nil
     }
 
     /// Update the battery on an already-visible HUD (the BAS read lands a moment
     /// after the connect event) without restarting the hold timer.
-    func updateBatteryIfVisible(kind: HUDKind, name: String, battery: Int) {
-        guard let panel, let view, panel.isVisible, panel.alphaValue > 0.01 else { return }
-        view.configure(kind: kind, name: name, battery: battery, lowThreshold: lowThreshold)
+    func updateBatteryIfVisible(name: String, battery: Int) {
+        guard let panel, let view, let current, panel.isVisible, panel.alphaValue > 0.01 else { return }
+        view.configure(kind: current.kind, name: name, battery: battery, lowThreshold: lowThreshold,
+                       detail: current.detail,
+                       canMoveBack: current.kind == .movedAway && onMoveBack != nil)
+        view.dimBoard(styles[current.kind] ?? HUDStyle.defaults[current.kind]!, battery: battery)
         var frame = panel.frame
         let size = view.preferredSize
         if ProcessInfo.processInfo.arguments.contains("--verbose") {
@@ -243,20 +339,35 @@ final class HUDController {
         panel.setFrame(frame, display: true, animate: false)
     }
 
+    /// How long the HUD on screen holds, set per show.
+    private var holdFor: TimeInterval = 0
+
+    /// The configured hold, except for a board that crumbles away: an empty
+    /// capsule left standing after the dust reads as stuck. That hold ends
+    /// the moment the last of the board is gone, so the HUD fades out while
+    /// the loose grains are still drifting off. Starting the fade any earlier
+    /// cut into the crumble itself.
+    static func hold(for style: HUDStyle, configured: TimeInterval) -> TimeInterval {
+        guard style.motion == .dust else { return configured }
+        return min(configured, SpinningBoardView.dustEnds)
+    }
+
     private func scheduleDismiss() {
         dismissWork?.cancel()
         fadeGeneration += 1
+        if pinned { return }
         let work = DispatchWorkItem { [weak self] in self?.dismiss() }
         dismissWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (holdFor > 0 ? holdFor : duration),
+                                      execute: work)
     }
 
     private func dismiss() {
         guard let panel else { return }
         let generation = fadeGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.35
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            ctx.duration = Self.fadeOut
+            ctx.timingFunction = Self.leave
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             // A new HUD may have arrived mid-fade; only hide if none did.

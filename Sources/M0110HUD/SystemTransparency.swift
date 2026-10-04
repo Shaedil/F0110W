@@ -22,8 +22,14 @@ final class SystemTransparency {
     /// 1 = full vibrancy, 0 = fully opaque. Never read before `init` returns.
     private(set) var level: Double = 1
 
-    /// Set from `--transparency`; `nil` follows the system.
-    private let override: Double?
+    /// Set from `--transparency`, or live from the debug panel; `nil` follows
+    /// the system.
+    var override: Double? {
+        didSet {
+            override = override.map { min(max($0, 0), 1) }
+            refresh()
+        }
+    }
     private let verbose: Bool
 
     private static let domain = "com.apple.universalaccess"

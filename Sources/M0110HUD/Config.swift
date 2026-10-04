@@ -52,6 +52,9 @@ struct Config {
     var transparency: Double? = nil
     /// Show one sample HUD, hold it for the full duration, then quit.
     var testHUD = false
+    /// Open the debug panel: drive the HUD's state machine by hand, with no
+    /// Bluetooth and no clipboard. What tools/hud-dev.sh launches.
+    var debug = false
 
     static func resolve(_ args: [String]) -> Config {
         var c = Config()
@@ -86,6 +89,7 @@ struct Config {
             case "--inset-y":         if let v = it.next(), let n = Double(v) { c.insetY = n }
             case "--material":        if let v = it.next() { c.material = v }
             case "--test":            c.testHUD = true
+            case "--debug":           c.debug = true
             case "--transparency":
                 if let v = it.next() {
                     if v == "auto" {
@@ -147,6 +151,8 @@ struct Config {
                             default "auto" follows System Settings (Accessibility
                             > Display > Reduce transparency)
           --test            show one sample HUD for the full duration, then quit
+          --debug           open a panel that walks the HUD through every state by
+                            hand; no Bluetooth needed (see tools/hud-dev.sh)
           --material <m>    vibrancy material (popover, hudWindow, menu, sidebar,
                             headerView, windowBackground, contentBackground,
                             underWindowBackground, fullScreenUI, toolTip, titlebar)

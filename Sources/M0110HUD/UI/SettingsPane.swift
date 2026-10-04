@@ -34,6 +34,17 @@ struct SettingsPane: View {
                 }
             }
 
+            group("Bluetooth profiles") {
+                ForEach(0..<ProfileNames.count, id: \.self) { index in
+                    profileField(index)
+                }
+                Text("Names for the keyboard's five profiles, used when it switches away: "
+                     + "\"Moved to Work Laptop\" rather than \"Moved to Profile 2\".")
+                    .font(Theme.small)
+                    .foregroundStyle(Theme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             group("Events") {
                 toggle("Show a popup on disconnect", $showDisconnect)
                 toggle("Stay quiet if already connected at launch", $suppressInitial)
@@ -84,6 +95,21 @@ struct SettingsPane: View {
                 .font(Theme.small.monospacedDigit())
                 .foregroundStyle(Theme.text)
             ThemeStepper(value: value, range: range)
+        }
+    }
+
+    /// One profile's name, written straight to the key ProfileNames reads, so
+    /// a rename shows on the very next HUD.
+    private func profileField(_ index: Int) -> some View {
+        let name = Binding<String>(
+            get: { UserDefaults.standard.string(forKey: ProfileNames.key(index)) ?? "" },
+            set: { UserDefaults.standard.set($0, forKey: ProfileNames.key(index)) })
+        return HStack {
+            Text("Profile \(index + 1)").font(Theme.body).foregroundStyle(Theme.textDim)
+            Spacer()
+            TextField("", text: name, prompt: Text("Profile \(index + 1)"))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 220)
         }
     }
 

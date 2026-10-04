@@ -33,6 +33,11 @@ permission to the app instead of your terminal.
 Without hardware, `--test` shows a single HUD, `--preview` cycles the three HUD
 states and `--snapshot <path>` renders a pane offscreen to a PNG.
 
+To iterate on the HUD, run `tools/hud-dev.sh`. It opens a debug panel that
+drives the real connect, disconnect and battery handlers by hand, and rebuilds
+and relaunches on every save under `Sources/`, putting the last HUD back on
+screen.
+
 ## Options
 
 `--help` lists every flag with its default. The common ones are `--name`,
