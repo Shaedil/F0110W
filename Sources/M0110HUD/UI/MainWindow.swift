@@ -234,6 +234,15 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             // The titlebar container is not flipped, so down is -y.
             button.setFrameOrigin(NSPoint(x: origin.x + Self.controlOffset.dx,
                                           y: origin.y - Self.controlOffset.dy))
+            // The nudge moves the buttons below the titlebar view's own
+            // bounds, and the view clips to them, which cut the bottom off
+            // each button. The chain is AppKit's, so the clip is lifted on
+            // every level the buttons could be cut by.
+            var ancestor: NSView? = button.superview
+            while let view = ancestor, view !== window.contentView?.superview {
+                view.clipsToBounds = false
+                ancestor = view.superview
+            }
         }
     }
 

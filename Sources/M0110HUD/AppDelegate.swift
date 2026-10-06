@@ -204,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let m = BluetoothMonitor(config: config)
         m.onConnect = { [weak self] name, battery, isInitial in
+            self?.clipboard?.keyboardReconnected()
             self?.handleConnect(name: name, battery: battery, isInitial: isInitial)
         }
         m.onDisconnect = { [weak self] name in

@@ -40,9 +40,6 @@ final class ClipboardBridge: NSObject {
     /// Ticks between HELLOs. The firmware stops waiting on a helper that
     /// misses an acknowledgement; this is what gets it trusted again.
     private static let helloEveryTicks = 15
-    /// How long to leave a keyboard alone after finding no clipboard service
-    /// on it, which is what older firmware looks like.
-    private static let unsupportedBackoff: TimeInterval = 60
 
     private let deviceName: String
     private let log: (String) -> Void
@@ -55,6 +52,12 @@ final class ClipboardBridge: NSObject {
     /// HELLO has been sent: the keyboard counts this Mac as having a helper.
     private var announced = false
     private var retryAfter = Date.distantPast
+    /// The keyboard has no usable clipboard service, which is what older
+    /// firmware looks like. It is left completely alone until it reconnects,
+    /// which a reflash forces: probing it again on a timer opens a second GATT
+    /// connection to the keyboard every time, and the HUD has no business
+    /// doing that to firmware that cannot answer.
+    private var unsupported = false
     private var ticksSinceHello = 0
     private var lastLogged = ""
 
@@ -157,7 +160,7 @@ final class ClipboardBridge: NSObject {
     /// once, and macOS keeps the HID service to itself, so on a freshly
     /// flashed keyboard it is the battery service that finds it.
     private func search() {
-        guard enabled, Date() >= retryAfter else { return }
+        guard enabled, !unsupported, Date() >= retryAfter else { return }
 
         let connected = central.retrieveConnectedPeripherals(
             withServices: [Self.serviceUUID, Self.batteryServiceUUID])
@@ -189,6 +192,19 @@ final class ClipboardBridge: NSObject {
         send(ClipWire.bye)
         announced = false
         outbox.dropClip()
+    }
+
+    /// Gives up on this keyboard until `keyboardReconnected()`.
+    private func markUnsupported() {
+        unsupported = true
+        drop()
+    }
+
+    /// The keyboard went away and came back, so it may be running new
+    /// firmware. Whatever was concluded about its services no longer holds.
+    func keyboardReconnected() {
+        unsupported = false
+        retryAfter = .distantPast
     }
 
     private func drop(retryIn delay: TimeInterval = 0) {
@@ -304,7 +320,7 @@ extension ClipboardBridge: CBPeripheralDelegate {
               let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID })
         else {
             log("clipboard: the keyboard's firmware has no clipboard service")
-            drop(retryIn: Self.unsupportedBackoff)
+            markUnsupported()
             return
         }
         peripheral.discoverCharacteristics([Self.rxUUID, Self.txUUID], for: service)
@@ -318,7 +334,7 @@ extension ClipboardBridge: CBPeripheralDelegate {
               let tx = characteristics.first(where: { $0.uuid == Self.txUUID })
         else {
             log("clipboard: the clipboard service is missing a characteristic")
-            drop(retryIn: Self.unsupportedBackoff)
+            markUnsupported()
             return
         }
         self.rx = rx
@@ -331,7 +347,7 @@ extension ClipboardBridge: CBPeripheralDelegate {
             // The service needs an encrypted link, so this is where a keyboard
             // that is connected but not paired shows up.
             log("clipboard: could not subscribe (\(error.localizedDescription))")
-            drop(retryIn: Self.unsupportedBackoff)
+            markUnsupported()
             return
         }
         subscribed = characteristic.isNotifying
