@@ -79,17 +79,4 @@ extension FeatureGapPane {
             + "behaviours, with no new hardware. That is a keymap feature rather than gesture "
             + "sensing, and could be surfaced in the Keys pane."
     )
-
-    static let haptics = FeatureGapPane(
-        title: "Haptics",
-        summary: "No haptic actuator is fitted. The converter drives the keyboard's original "
-            + "mechanical switches, whose feel is fixed by the 1984 hardware.",
-        requiresHardware: [
-            "An LRA or ERM motor with a driver such as a DRV2605L",
-            "I²C wiring to the nice!nano, plus current the 5V boost budget can spare",
-        ],
-        firmwareNote: "ZMK mainline has no haptics subsystem. Community modules exist, but "
-            + "they would need porting into this config as an external module.",
-        availableToday: nil
-    )
 }

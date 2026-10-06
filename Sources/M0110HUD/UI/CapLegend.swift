@@ -17,7 +17,7 @@ import Foundation
 /// Pairs and words are derived from the HID usage rather than written out per
 /// key, so a cap rebound in the picker reprints itself correctly instead of
 /// keeping the legend of whatever used to be bound there.
-enum CapLegend {
+enum CapLegend: Equatable {
     case blank
     case single(String)
     case pair(shifted: String, base: String)

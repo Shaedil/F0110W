@@ -84,7 +84,7 @@ enum PreviewFixture {
 extension KeyboardController {
     /// Fill in fixture data and pretend the link is up, for offscreen renders.
     func loadPreviewFixture() {
-        connection = .connected(port: "/dev/cu.usbmodem1104", device: "M0110")
+        connection = .connected(port: "Bluetooth", device: "M0110")
         lockState = .unlocked
         layout = PreviewFixture.layout()
         keymap = PreviewFixture.keymap()

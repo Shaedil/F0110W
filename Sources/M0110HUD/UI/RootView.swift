@@ -1,9 +1,10 @@
 import SwiftUI
 
 enum Pane: String, CaseIterable, Identifiable {
-    case keys = "Keys"
+    case keys = "Keyboard"
+    case bluetooth = "Bluetooth"
+    case battery = "Battery"
     case gestures = "Gestures"
-    case haptics = "Haptics"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -11,8 +12,9 @@ enum Pane: String, CaseIterable, Identifiable {
     var icon: PixelIcon.Kind {
         switch self {
         case .keys: return .keys
+        case .bluetooth: return .bluetooth
+        case .battery: return .battery
         case .gestures: return .gestures
-        case .haptics: return .haptics
         case .settings: return .settings
         }
     }
@@ -21,8 +23,9 @@ enum Pane: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .keys: return Color(red: 0.85, green: 0.72, blue: 0.50)
+        case .bluetooth: return Color(red: 0.50, green: 0.68, blue: 0.93)
+        case .battery: return Color(red: 0.55, green: 0.82, blue: 0.48)
         case .gestures: return Color(red: 0.93, green: 0.55, blue: 0.30)
-        case .haptics: return Color(red: 0.80, green: 0.50, blue: 0.85)
         case .settings: return Color(red: 0.90, green: 0.45, blue: 0.36)
         }
     }
@@ -32,8 +35,17 @@ struct RootView: View {
     @ObservedObject var controller: KeyboardController
     @State private var pane: Pane
     @State private var sidebarVisible = true
+    /// Full screen hides the window controls the collapsed toggle sits beside.
+    @State private var fullScreen = false
+    /// Read here too, so the 3D board can follow the Settings tab.
+    @AppStorage("settingsTab") private var settingsTab: SettingsTab = .popup
+    /// The keyboard's link and battery, for the 3D battery's gauge.
+    @ObservedObject private var status = StatusModel.shared
+    /// The detail pane's inset from its leading and trailing edges.
+    private static let contentPadding: CGFloat = 28
     @Environment(\.classicSnapshot) private var snapshot
     var onClose: (() -> Void)?
+    var onPaneChange: ((Pane) -> Void)?
     /// The window sizes itself to what is on screen, so it has to hear when
     /// that changes. Absent for offscreen renders, which have no window.
     var onLayoutChange: ((WindowLayout) -> Void)?
@@ -63,10 +75,12 @@ struct RootView: View {
     init(controller: KeyboardController,
          initialPane: Pane = .keys,
          onClose: (() -> Void)? = nil,
+         onPaneChange: ((Pane) -> Void)? = nil,
          onLayoutChange: ((WindowLayout) -> Void)? = nil) {
         self.controller = controller
         self._pane = State(initialValue: initialPane)
         self.onClose = onClose
+        self.onPaneChange = onPaneChange
         self.onLayoutChange = onLayoutChange
     }
 
@@ -97,9 +111,11 @@ struct RootView: View {
             } else {
                 // With the sidebar hidden its own copy goes with it, so this is
                 // the only way back. It sits beside the window controls, which
-                // are now over the content.
+                // are now over the content; in full screen there are none, so
+                // it lines up with the content's edge instead.
                 toggleButton
-                    .padding(.leading, MainWindowController.controlsTrailingX + 12)
+                    .padding(.leading, fullScreen ? Self.contentPadding
+                                                  : MainWindowController.controlsTrailingX + 12)
                     .padding(.top, MainWindowController.controlCentreY
                                    - Self.toggleSize.height / 2)
             }
@@ -116,6 +132,13 @@ struct RootView: View {
         // shortcut, the picker's Done button, switching panes, a reload that
         // empties the board.
         .onChange(of: windowLayout) { layout in onLayoutChange?(layout) }
+        .onChange(of: pane) { pane in onPaneChange?(pane) }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
+            fullScreen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { _ in
+            fullScreen = false
+        }
         .onAppear { if case .disconnected = controller.connection { controller.connect() } }
     }
 
@@ -151,7 +174,6 @@ struct RootView: View {
 
     private var sidebarContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            deviceCard
             VStack(spacing: 2) {
                 ForEach(Pane.allCases) { item in row(item) }
             }
@@ -196,16 +218,16 @@ struct RootView: View {
 
     private func row(_ item: Pane) -> some View {
         let active = pane == item
-        return HStack(spacing: 9) {
+        return HStack(spacing: 10) {
             PixelIcon(kind: item.icon, tint: item.tint)
-                .frame(width: 16)
+                .frame(width: 18)
             Text(item.rawValue)
-                .font(Theme.body.weight(active ? .semibold : .regular))
+                .font(Theme.sidebarRow.weight(active ? .semibold : .regular))
                 .foregroundStyle(active ? Theme.text : Theme.textDim)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, 6)
+        .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(active ? Theme.key : .clear)
@@ -214,92 +236,76 @@ struct RootView: View {
         .onTapGesture { pane = item }
     }
 
-    /// Device thumbnail and connection state, like the Altar II sidebar header.
-    private var deviceCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Circle().fill(indicator).frame(width: 7, height: 7)
-                Text(deviceName)
-                    .font(Theme.small.weight(.medium))
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            KeyboardThumbnail(keys: controller.displayKeys,
-                              unitsWide: controller.displayWidth,
-                              tint: Theme.text.opacity(0.72))
-                .frame(maxWidth: .infinity)
-                .padding(8)
-                .background(Theme.key, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            Text(connectionDetail)
-                .font(.system(size: 10))
-                .foregroundStyle(Theme.textDim)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-            if case .failed = controller.connection {
-                Button("Retry") { controller.connect() }
-                    .buttonStyle(PillButtonStyle())
-            }
-        }
-        .padding(10)
-        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Theme.panelStroke, lineWidth: 1)
-        )
-    }
-
-    private var deviceName: String {
-        if case .connected(_, let device) = controller.connection { return device }
-        return "M0110"
-    }
-
-    private var indicator: Color {
-        switch controller.connection {
-        case .connected: return controller.lockState == .unlocked ? Theme.good : Theme.warn
-        case .connecting: return Theme.warn
-        case .failed: return Theme.bad
-        case .disconnected: return Theme.textDim
-        }
-    }
-
-    private var connectionDetail: String {
-        switch controller.connection {
-        case .disconnected: return "Not connected"
-        case .connecting: return "Looking for the keyboard\u{2026}"
-        case .connected(let port, _):
-            let lock = controller.lockState == .unlocked ? "unlocked" : "locked"
-            return "\((port as NSString).lastPathComponent) · \(lock)"
-        case .failed(let why): return why
-        }
-    }
-
     // MARK: - Detail
 
     @ViewBuilder private var paneBody: some View {
         switch pane {
         case .keys: KeysPane(controller: controller)
+        case .bluetooth: BluetoothPane()
+        case .battery: BatteryPane()
         case .gestures: FeatureGapPane.gestures
-        case .haptics: FeatureGapPane.haptics
         case .settings: SettingsPane()
         }
     }
 
+    /// The side panes are a column of text; the 3D board fills the rest of the
+    /// width beside them. It stays mounted on the Keyboard pane, collapsed and
+    /// paused, so leaving that pane flies the camera in from the whole board
+    /// instead of starting cold.
     private var detail: some View {
-        ClassicScroll {
+        // The Clipboard tab has nothing on the board worth pointing at.
+        let showStage = pane != .keys && !(pane == .settings && settingsTab == .clipboard)
+        // No spacing: the column's own trailing padding is the gap, and on
+        // the Keyboard pane any spacing would come out of the board's width.
+        return HStack(alignment: .top, spacing: 0) {
+            paneColumn
+                .frame(maxWidth: pane == .keys ? .infinity : Self.paneColumnWidth,
+                       alignment: .leading)
+            // The Popup tab shows the popup itself rather than the board. The
+            // stage stays underneath, paused, so the camera has somewhere to
+            // fly from when another tab is picked.
+            let popupDemo = pane == .settings && settingsTab == .popup
+            // Centred in the column, so the short popup preview sits level
+            // with the middle of the settings beside it.
+            //
+            // Swapped without animation: the column also changes width when
+            // coming from a tab without the stage, and animating the two
+            // together dragged a sliver of the board across the preview.
+            ZStack {
+                BoardStageView(focus: BoardFocus(pane: pane, settingsTab: settingsTab),
+                               active: showStage && !popupDemo,
+                               battery: status.linked ? status.battery : nil)
+                    .opacity(popupDemo ? 0 : 1)
+                if popupDemo {
+                    PopupDemoView(active: showStage)
+                }
+            }
+            .frame(maxWidth: showStage ? .infinity : 0)
+            .opacity(showStage ? 1 : 0)
+            .padding(.top, 54)
+            .padding(.bottom, 24)
+            .padding(.trailing, showStage ? Self.contentPadding : 0)
+        }
+    }
+
+    /// The width side panes use for their text, matching `FeatureGapPane`.
+    private static let paneColumnWidth: CGFloat = 620 + contentPadding * 2
+
+    private var paneColumn: some View {
+        // The Keyboard pane is laid out to fit; scrolling it only ever moved
+        // it a few points and back.
+        ClassicScroll(scrolls: pane != .keys) {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .center, spacing: 14) {
-                    Text(pane.rawValue)
-                        .font(Theme.pageTitle)
-                        .foregroundStyle(Theme.text)
-                    RacingStripes()
+                    DitheredTitle(text: pane.rawValue)
+                    RacingStripes(colour: pane.tint)
                         .frame(maxWidth: 220)
                     Spacer(minLength: 0)
                 }
                 paneBody
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 28)
+            .padding(.horizontal, Self.contentPadding)
             // Clear of the title bar and the sidebar toggle, both of which the
             // content now runs underneath.
             .padding(.top, 54)

@@ -15,18 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// app's memory of what it has already announced.
     private let state: UserDefaults
     private var monitor: BluetoothMonitor?
+    private var clipboard: ClipboardBridge?
     private let keyboard = KeyboardController()
     private var statusItem: StatusItemController?
     private var connectionWatch: AnyCancellable?
 
-    private static func summary(for state: KeyboardController.Connection) -> String {
-        switch state {
-        case .disconnected: return "Not connected"
-        case .connecting: return "Looking for the keyboard..."
-        case .connected(let via, let device): return "\(device) via \(via)"
-        case .failed(let why): return String(why.prefix(60))
-        }
-    }
     private var mainWindow: MainWindowController?
 
     /// Persisted so a relaunch on an already-low battery doesn't re-nag.
@@ -174,6 +167,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runDebug()
             return
         }
+        if config.uiDev {
+            runUIDev()
+            return
+        }
 
         // The app lives in the menu bar. It has no Dock icon and opens no
         // window until asked, so this is its only permanent presence.
@@ -187,8 +184,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Mirror the link state into the menu, so the menu bar can answer
         // "is it connected?" without opening the window.
+        statusItem?.model.name = config.deviceName
         connectionWatch = keyboard.$connection.receive(on: RunLoop.main).sink { [weak self] state in
-            self?.statusItem?.connectionSummary = Self.summary(for: state)
+            self?.statusItem?.model.editor = state
         }
 
         if config.testHUD {
@@ -215,6 +213,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleBattery(name: name, level: level)
         }
         monitor = m
+
+        if config.clipboard {
+            let verbose = config.verbose
+            clipboard = ClipboardBridge(deviceName: config.deviceName) { message in
+                if verbose { print(message) }
+            }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        guard let clipboard else { return }
+        clipboard.shutdown()
+        // The goodbye is a queued Bluetooth write; give it a moment to leave
+        // before the process does.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
     }
 
     // The events the keyboard reports. The debug panel calls these directly,
@@ -223,6 +236,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func handleConnect(name: String, battery: Int?, isInitial: Bool, now: Date = Date()) {
         let arrival = isArrival(at: now)
         lastConnectAt = now
+        statusItem?.model.linked = true
+        if let battery { statusItem?.model.battery = battery }
         if isInitial && config.suppressInitial { return }
         hud.show(kind: arrival ? .arrived : .connected, name: name, battery: battery ?? lastBattery)
     }
@@ -239,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func handleDisconnect(name: String, now: Date = Date()) {
         lastDisconnectAt = now
         activeProfile = nil
+        statusItem?.model.linked = false
         if let level = lastBattery, level <= Self.diedLevel {
             // Leaving on an empty battery is dying, whatever else is set: it
             // is the one disconnect worth knowing about. Unless a report of 0%
@@ -275,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func handleBattery(name: String, level: Int) {
         lastBattery = level
+        statusItem?.model.battery = level
         // The BAS read lands shortly after connect; fill it into the live HUD.
         hud.updateBatteryIfVisible(name: name, battery: level)
 
@@ -391,6 +408,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let panel = DebugPanelController(app: self)
             debugPanel = panel
             panel.show()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Open the window on the preview fixture, back on whichever pane was last
+    /// showing, so a relaunch from tools/ui-dev.sh lands where the edit is.
+    private func runUIDev() {
+        let defaults = UserDefaults(suiteName: "com.shaedil.m0110hud.debug")
+        let key = "uiDev.pane"
+        keyboard.loadPreviewFixture()
+        installMainMenu()
+        NSApp.setActivationPolicy(.regular)
+        let window = MainWindowController(
+            controller: keyboard,
+            initialPane: defaults?.string(forKey: key).flatMap(Pane.init(rawValue:)) ?? .keys,
+            onPaneChange: { defaults?.set($0.rawValue, forKey: key) })
+        window.onClose = { NSApp.terminate(nil) }
+        mainWindow = window
+        window.show()
+
+        // The menu too, on sample values, so its design can be worked on here.
+        MainActor.assumeIsolated {
+            let item = StatusItemController(onOpenWindow: { window.show() },
+                                            onShowHUD: { [weak self] in self?.showSampleHUD() })
+            item.model.name = config.deviceName
+            item.model.linked = true
+            item.model.battery = 72
+            item.model.editor = keyboard.connection
+            statusItem = item
         }
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -38,11 +38,53 @@ drives the real connect, disconnect and battery handlers by hand, and rebuilds
 and relaunches on every save under `Sources/`, putting the last HUD back on
 screen.
 
+## Clipboard
+
+With firmware that has the clipboard service, text copied on this Mac goes
+with the keyboard when it switches Bluetooth profile: onto the other
+computer's clipboard if a helper runs there, typed out by the keyboard if not.
+A keyboard cannot read a clipboard itself, so each computer that is copied
+from needs a helper, and this app is the Mac one. It also takes delivery of
+clips copied elsewhere.
+
+Text goes into the keyboard itself, up to the length it reports (16384 bytes
+by default). An image, or longer text, goes between two computers that both
+run a helper: the keyboard carries a short message, and the helper on the
+second computer fetches the content from the first over the local network,
+sealed with a key that only travels through the keyboard. macOS asks once for
+permission to use the local network. If the two computers cannot reach each
+other, the content comes through the keyboard instead, an image scaled down to
+fit, and that takes a good few seconds. `helper/PROTOCOL.md` describes the
+exchange.
+
+When both text and an image are on the clipboard the text is carried, except
+for an image copied in a browser, where the text is only its address. Items
+marked concealed or transient, which is how password managers flag what they
+copy, are never sent. Settings has the switch, and `--no-clipboard` keeps the
+bridge from starting.
+
+On Windows and Linux the helper is a script; `uv` fetches what it depends on
+(`bleak`, `cryptography`, `pillow`). The keyboard has to be paired with that
+computer already.
+
+```sh
+uv run helper/m0110_clipboard.py --verbose
+```
+
+Linux needs `wl-clipboard` on Wayland, or `xclip` or `xsel` on X11; `xsel`
+carries text only.
+
+```sh
+swift test                  # the Mac side
+uv run --with bleak --with cryptography --with pillow \
+    python3 helper/test_m0110_clipboard.py
+```
+
 ## Options
 
 `--help` lists every flag with its default. The common ones are `--name`,
 `--low`, `--rearm`, `--duration`, `--scale`, `--appearance`, `--transparency`,
-`--headless`, `--studio-probe` and `--verbose`. Every setting also reads from
+`--headless`, `--no-clipboard`, `--studio-probe` and `--verbose`. Every setting also reads from
 `UserDefaults` under `com.shaedil.m0110hud`, with flags taking precedence.
 
 The HUD holds for seven seconds, long enough to still be there when a keyboard
@@ -63,3 +105,8 @@ level, so the in-between values are reachable only through `--transparency`.
 ## License
 
 MIT
+
+The 3D case in `Resources/M0110.usdz` is
+[Apple M0110 Keyboard](https://www.thingiverse.com/thing:4061711) by
+StephenLulz, licensed CC BY. The keycaps, switches and converter boards were
+modelled for this app; the source is `assets/M0110.blend`.

@@ -27,7 +27,7 @@ enum Snapshot {
         }
 
         let root = RootView(controller: controller,
-                            initialPane: Pane(rawValue: pane ?? "Keys") ?? .keys)
+                            initialPane: Pane(rawValue: pane ?? "Keyboard") ?? .keys)
             .environment(\.classicSnapshot, true)
             .environment(\.colorScheme, scheme ?? (NSApp.effectiveAppearance
                 .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light))

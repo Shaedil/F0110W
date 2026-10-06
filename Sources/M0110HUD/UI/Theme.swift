@@ -165,6 +165,10 @@ enum Theme {
     static let sectionTitle = Font.system(size: 13, weight: .semibold)
     static let body = Font.system(size: 12)
     static let small = Font.system(size: 11)
+    /// Sidebar rows: a step above body, as macOS sidebars run larger than content.
+    static let sidebarRow = Font.system(size: 14)
+    /// The Keyboard pane's toolbar, sized to sit with the sidebar rows.
+    static let toolbar = Font.system(size: 13)
 
     /// Geneva, the bitmap face that shipped with the Mac this keyboard came
     /// with. Used where the period matters: keycap legends and small readouts.
@@ -205,32 +209,127 @@ enum Theme {
 
 /// The stacked hairlines System 1 drew across its title bars.
 struct RacingStripes: View {
+    /// The ink, by default the page's dim text; the main window prints them
+    /// in the current tab's sidebar colour.
+    var colour: Color = Theme.textDim.opacity(0.7)
+
     var body: some View {
-        VStack(spacing: 2) {
-            ForEach(0..<5, id: \.self) { _ in
-                Rectangle().fill(Theme.textDim.opacity(0.45)).frame(height: 1)
+        Canvas { context, size in
+            for (x, y) in Self.dots(width: Int(size.width), height: Int(size.height)) {
+                context.fill(Path(CGRect(x: x, y: y, width: 1, height: 1)), with: .color(colour))
             }
         }
         .frame(height: 13)
     }
+
+    /// Two-point stripes fading out to the right, Atkinson-dithered to one
+    /// bit the way MacPaint printed a grey: each pixel passes six eighths of
+    /// its error on to the six neighbours ahead of it, and the rest is lost,
+    /// which keeps the light end crisp and the dark end clean.
+    private static func dots(width: Int, height: Int) -> [(Int, Int)] {
+        guard width > 0, height > 0 else { return [] }
+        var level = [Double](repeating: 0, count: width * height)
+        for y in 0..<height where y % 3 != 2 {
+            for x in 0..<width {
+                level[y * width + x] = 0.9 * pow(1 - Double(x) / Double(width), 1.4)
+            }
+        }
+        var dots: [(Int, Int)] = []
+        for y in 0..<height {
+            for x in 0..<width {
+                let old = level[y * width + x]
+                let on = old >= 0.5
+                if on { dots.append((x, y)) }
+                let share = (old - (on ? 1 : 0)) / 8
+                for (dx, dy) in [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)] {
+                    let nx = x + dx, ny = y + dy
+                    // Only within the stripes, so the gaps stay clear.
+                    guard nx >= 0, nx < width, ny < height, ny % 3 != 2 else { continue }
+                    level[ny * width + nx] += share
+                }
+            }
+        }
+        return dots
+    }
 }
 
-/// Near-black graded diagonally into beige, top-left to bottom-right. Weighted
-/// so most of the canvas stays dark and the beige arrives in the lower-right,
-/// where little content sits.
+/// A page title printed the way the stripes beside it are: one bit per
+/// point, Atkinson-dithered from solid at the top of the letters to half
+/// tone at their feet.
+struct DitheredTitle: View {
+    let text: String
+
+    var body: some View {
+        if let image = Self.render(text) {
+            Image(decorative: image, scale: 1)
+                .interpolation(.none)
+                .accessibilityLabel(text)
+        } else {
+            Text(text).font(Theme.pageTitle).foregroundStyle(Theme.text)
+        }
+    }
+
+    @MainActor private static var cache: [String: CGImage] = [:]
+
+    @MainActor private static func render(_ text: String) -> CGImage? {
+        if let image = cache[text] { return image }
+        // The letters at one pixel per point, as a coverage mask.
+        let renderer = ImageRenderer(content: Text(text).font(Theme.pageTitle)
+                                                       .foregroundStyle(.white))
+        renderer.scale = 1
+        guard let mask = renderer.cgImage else { return nil }
+        let width = mask.width, height = mask.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &pixels, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.draw(mask, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var level = [Double](repeating: 0, count: width * height)
+        for y in 0..<height {
+            let shade = 1 - 0.5 * Double(y) / Double(max(height - 1, 1))
+            for x in 0..<width {
+                level[y * width + x] = Double(pixels[(y * width + x) * 4 + 3]) / 255 * shade
+            }
+        }
+        let ink = NSColor(Theme.text).usingColorSpace(.sRGB) ?? .white
+        let r = UInt8(ink.redComponent * 255), g = UInt8(ink.greenComponent * 255),
+            b = UInt8(ink.blueComponent * 255)
+        var out = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = y * width + x
+                let old = level[i]
+                let on = old >= 0.5
+                if on { out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = b; out[i * 4 + 3] = 255 }
+                let share = (old - (on ? 1 : 0)) / 8
+                for (dx, dy) in [(1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)] {
+                    let nx = x + dx, ny = y + dy
+                    guard nx >= 0, nx < width, ny < height else { continue }
+                    level[ny * width + nx] += share
+                }
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(out) as CFData),
+              let image = CGImage(width: width, height: height, bitsPerComponent: 8,
+                                  bitsPerPixel: 32, bytesPerRow: width * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: false,
+                                  intent: .defaultIntent)
+        else { return nil }
+        cache[text] = image
+        return image
+    }
+}
+
+/// The window's ground: flat near-black, so the board and panels are the only
+/// things with colour in them.
 struct ThemeBackground: View {
     var body: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Theme.ink, location: 0.00),
-                .init(color: Theme.inkWarm, location: 0.34),
-                .init(color: Theme.sienna, location: 0.62),
-                .init(color: Theme.beige, location: 0.94),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+        Theme.ink.ignoresSafeArea()
     }
 }
 
@@ -274,22 +373,30 @@ struct Panel<Content: View>: View {
 /// Pill button, subtle until hovered.
 struct PillButtonStyle: ButtonStyle {
     var prominent = false
+    /// Corner radius. The default is past half any button's height, which
+    /// SwiftUI clamps, so it draws a capsule; a small one gives a keycap.
+    var cornerRadius: CGFloat = 100
+    var verticalPadding: CGFloat = 5
+    var font: Font = Theme.small.weight(.medium)
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Theme.small.weight(.medium))
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return configuration.label
+            .font(font)
             .foregroundStyle(prominent ? Theme.onAccent : Theme.text)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
             .padding(.horizontal, 12)
-            .padding(.vertical, 5)
+            .padding(.vertical, verticalPadding)
             .background(
-                Capsule().fill(prominent
-                               ? AnyShapeStyle(Theme.accent)
-                               : AnyShapeStyle(Theme.key))
+                shape.fill(prominent
+                           ? AnyShapeStyle(Theme.accent)
+                           : AnyShapeStyle(Theme.key))
             )
-            .overlay(Capsule().strokeBorder(prominent ? .clear : Theme.keyStroke, lineWidth: 1))
+            // A faint edge: at full strength the outline read harsher than the
+            // fill it surrounds.
+            .overlay(shape.strokeBorder(prominent ? .clear : Theme.keyStroke.opacity(0.4), lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : (isEnabled ? 1 : 0.4))
     }
 }
@@ -298,18 +405,19 @@ struct PillButtonStyle: ButtonStyle {
 struct SegmentPills<T: Hashable>: View {
     let options: [(value: T, label: String)]
     @Binding var selection: T
+    var font: Font = Theme.small.weight(.medium)
+    var padding = EdgeInsets(top: 5, leading: 11, bottom: 5, trailing: 11)
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 let active = option.value == selection
                 Text(option.label)
-                    .font(Theme.small.weight(.medium))
+                    .font(font)
                     .foregroundStyle(active ? Theme.onAccent : Theme.textDim)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 5)
+                    .padding(padding)
                     .background(
                         Capsule().fill(active ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.clear))
                     )
@@ -319,7 +427,7 @@ struct SegmentPills<T: Hashable>: View {
         }
         .padding(3)
         .background(Capsule().fill(Theme.key))
-        .overlay(Capsule().strokeBorder(Theme.keyStroke, lineWidth: 1))
+        .overlay(Capsule().strokeBorder(Theme.keyStroke.opacity(0.4), lineWidth: 1))
     }
 }
 
@@ -334,11 +442,20 @@ extension EnvironmentValues {
 }
 
 struct ClassicScroll<Content: View>: View {
+    /// False lays the content out as it is, with no scroller and no rubber
+    /// band, for a page made to fit the window.
+    var scrolls = true
     @Environment(\.classicSnapshot) private var snapshot
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        if snapshot { content() } else { ScrollView { content() } }
+        if snapshot || !scrolls {
+            // No minimum: content taller than the window is cut off at the
+            // bottom rather than growing the window to fit.
+            content().frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped()
+        } else {
+            ScrollView { content() }
+        }
     }
 }
 

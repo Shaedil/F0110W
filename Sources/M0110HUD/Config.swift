@@ -34,6 +34,8 @@ struct Config {
     var snapshotPath: String?
     /// Render the spinning 3D board offscreen to this path, then exit.
     var boardSnapshotPath: String?
+    /// Render the window's 3D stage at every focus to this path, then exit.
+    var stageSnapshotPath: String?
     var snapshotPane: String?
     var verbose = false
     /// Multiplies every HUD dimension; 1.0 is the tuned default.
@@ -52,9 +54,15 @@ struct Config {
     var transparency: Double? = nil
     /// Show one sample HUD, hold it for the full duration, then quit.
     var testHUD = false
+    /// Run the clipboard bridge at all. The Settings switch turns carrying on
+    /// and off while the app runs; this keeps the bridge from starting.
+    var clipboard = true
     /// Open the debug panel: drive the HUD's state machine by hand, with no
     /// Bluetooth and no clipboard. What tools/hud-dev.sh launches.
     var debug = false
+    /// Open the main window on fixture data, with no Bluetooth, no Studio link
+    /// and no HUD. What tools/ui-dev.sh launches.
+    var uiDev = false
 
     static func resolve(_ args: [String]) -> Config {
         var c = Config()
@@ -89,7 +97,9 @@ struct Config {
             case "--inset-y":         if let v = it.next(), let n = Double(v) { c.insetY = n }
             case "--material":        if let v = it.next() { c.material = v }
             case "--test":            c.testHUD = true
+            case "--no-clipboard":    c.clipboard = false
             case "--debug":           c.debug = true
+            case "--ui-dev":          c.uiDev = true
             case "--transparency":
                 if let v = it.next() {
                     if v == "auto" {
@@ -115,6 +125,7 @@ struct Config {
             case "--window":          c.openWindow = true
             case "--snapshot":        if let v = it.next() { c.snapshotPath = v }
             case "--board-snapshot":  if let v = it.next() { c.boardSnapshotPath = v }
+            case "--stage-snapshot":  if let v = it.next() { c.stageSnapshotPath = v }
             case "--snapshot-pane":   if let v = it.next() { c.snapshotPane = v }
             case "-v", "--verbose":   c.verbose = true
             case "-h", "--help":      Config.printUsage(); exit(0)
@@ -151,8 +162,11 @@ struct Config {
                             default "auto" follows System Settings (Accessibility
                             > Display > Reduce transparency)
           --test            show one sample HUD for the full duration, then quit
+          --no-clipboard    don't carry the clipboard to and from the keyboard
           --debug           open a panel that walks the HUD through every state by
                             hand; no Bluetooth needed (see tools/hud-dev.sh)
+          --ui-dev          open the window on sample keymap data; no keyboard
+                            needed (see tools/ui-dev.sh)
           --material <m>    vibrancy material (popover, hudWindow, menu, sidebar,
                             headerView, windowBackground, contentBackground,
                             underWindowBackground, fullScreenUI, toolTip, titlebar)
@@ -162,6 +176,8 @@ struct Config {
           --snapshot-pane <n> which pane to render (Keys, Settings, ...)
           --board-snapshot <path>  render the HUD's spinning 3D board to a PNG
                             strip, one frame per sixth of a turn, and exit
+          --stage-snapshot <path>  render the window's 3D board at each pane's
+                            focus to a PNG grid, and exit
           --studio-probe    check the ZMK Studio RPC link (USB, then Bluetooth) and exit
           --preview         show a sample HUD and quit; no Bluetooth needed
           -v, --verbose     log state transitions to stdout

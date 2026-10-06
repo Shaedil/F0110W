@@ -43,12 +43,11 @@ final class KeyboardController: ObservableObject {
     @Published var selectedKey: Int?
     @Published var pendingEdits = 0
     @Published var behaviors: [Int32: BehaviorInfo] = [:]
-    @Published var variant: KeyboardVariant = {
-        let raw = UserDefaults.standard.string(forKey: "variant") ?? KeyboardVariant.m0110.rawValue
-        return KeyboardVariant(rawValue: raw) ?? .m0110
-    }() {
+    /// The board on the desk. Not a choice: it is whatever the converter
+    /// detects, and the M0110 until it says otherwise. The firmware does not
+    /// yet ask the keyboard for its model, so for now that is always.
+    @Published var variant: KeyboardVariant = .m0110 {
         didSet {
-            UserDefaults.standard.set(variant.rawValue, forKey: "variant")
             if let selected = selectedKey, !isPresent(selected) { selectedKey = nil }
         }
     }
@@ -440,10 +439,6 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// Physical key count: every drawn cap except the unlabelled second half of
-    /// a split key, so the M0110's shared-scancode Shift and Command pairs each
-    /// count twice while the ISO Return counts once.
-    var presentKeyCount: Int { displayKeys.filter(\.labeled).count }
 
     /// Rows are always five deep, in hundredths of a key unit.
     var displayHeight: Int32 { 500 }

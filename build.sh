@@ -33,8 +33,8 @@ cp Resources/Info.plist "${BUNDLE}/Contents/Info.plist"
 
 mkdir -p "${BUNDLE}/Contents/Resources"
 cp Resources/M0110.icns "${BUNDLE}/Contents/Resources/M0110.icns"
-# Any image resources the app ships alongside the icon.
-for image in Resources/*.jpg; do
+# Image and 3D model resources the app ships alongside the icon.
+for image in Resources/*.jpg Resources/*.usdz; do
     [[ -e "$image" ]] || continue
     cp "$image" "${BUNDLE}/Contents/Resources/$(basename "$image")"
 done

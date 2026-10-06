@@ -63,3 +63,85 @@ enum BoardSnapshot {
         }
     }
 }
+
+/// Renders the window's 3D stage at every focus as a grid, for the same
+/// reason as `BoardSnapshot`: the camera only lands on each part after a pane
+/// switch, which is awkward to screen-capture at the right moment.
+@MainActor
+enum BoardStageSnapshot {
+    private static let focuses: [BoardFocus] = [.editor, .overview, .gestures,
+                                                .battery, .radio]
+    private static let frameSize = CGSize(width: 420, height: 460)
+    private static let columns = 3
+
+    static func render(to path: String) -> Int32 {
+        let renderer = SCNRenderer(device: nil, options: nil)
+        renderer.autoenablesDefaultLighting = false
+        let rows = (focuses.count + columns - 1) / columns
+        let sheet = NSImage(size: CGSize(width: frameSize.width * CGFloat(columns),
+                                         height: frameSize.height * CGFloat(rows)))
+        sheet.lockFocus()
+        NSColor(srgbRed: 0.12, green: 0.115, blue: 0.11, alpha: 1).setFill()
+        NSRect(origin: .zero, size: sheet.size).fill()
+        for (i, focus) in focuses.enumerated() {
+            // A fresh stage each time, so every frame shows a focus landed on
+            // from rest rather than mid-flight from the last one.
+            guard let stage = BoardStage() else {
+                FileHandle.standardError.write("stage snapshot: M0110.usdz not found\n".data(using: .utf8)!)
+                return 1
+            }
+            stage.paintBlank()
+            if focus == .editor { paintSample(stage) }
+            stage.setBattery(72, low: 20, rearm: 30)
+            stage.setFocus(focus, animated: false)
+            // Actions do not run in an offscreen render, so the gauge's fill is
+            // set directly: a new reading repaints it without animating.
+            stage.setBattery(73, low: 20, rearm: 30)
+            renderer.scene = stage.scene
+            renderer.pointOfView = stage.cameraNode
+            // The editor is drawn in the Keyboard pane's wide box, so it is
+            // checked at that shape: 990 by 420.
+            let size = focus == .editor ? CGSize(width: frameSize.width, height: frameSize.width * 420 / 990)
+                                        : frameSize
+            let frame = renderer.snapshot(atTime: 0, with: size,
+                                          antialiasingMode: .multisampling4X)
+            let column = i % columns, row = rows - 1 - i / columns
+            frame.draw(in: NSRect(x: CGFloat(column) * frameSize.width,
+                                  y: CGFloat(row) * frameSize.height + (frameSize.height - size.height),
+                                  width: size.width, height: size.height))
+            focus.caption.draw(at: NSPoint(x: CGFloat(column) * frameSize.width + 12,
+                                           y: CGFloat(row) * frameSize.height + 12),
+                               withAttributes: [.foregroundColor: NSColor.white,
+                                                .font: NSFont.systemFont(ofSize: 13, weight: .semibold)])
+        }
+        sheet.unlockFocus()
+
+        guard let tiff = sheet.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return 1 }
+        do {
+            try png.write(to: URL(fileURLWithPath: path))
+            print("wrote \(path)  (\(focuses.count) focuses)")
+            return 0
+        } catch {
+            FileHandle.standardError.write("stage snapshot write failed: \(error)\n".data(using: .utf8)!)
+            return 1
+        }
+    }
+
+    /// The sample keymap's legends on the editor frame, with one key selected.
+    private static func paintSample(_ stage: BoardStage) {
+        let controller = KeyboardController()
+        controller.loadPreviewFixture()
+        controller.selectedKey = 25
+        for tag in stage.capTags {
+            guard let size = stage.capFaces[tag] else { continue }
+            let position = Int(tag.split(separator: "_").first ?? "") ?? M0110Layout.unmapped
+            stage.paint(tag, face: CapFace(legend: controller.legend(forKeyAt: position),
+                                           isSelected: controller.selectedKey == position,
+                                           isEditable: controller.acceptsKeycode(at: position),
+                                           isSpacebar: position == M0110Layout.spacebarPosition,
+                                           size: size).image())
+        }
+    }
+}

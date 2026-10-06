@@ -27,7 +27,7 @@ rebuild() {
     if out="$(swift build 2>&1)"; then
         echo "$out" | grep -E "warning:" || true
         stop
-        "$BIN" --debug "$@" &
+        "$BIN" "${DEV_FLAG:---debug}" "$@" &
         pid=$!
         echo "==> running (pid $pid)"
     else

@@ -25,6 +25,10 @@ struct KeysPane: View {
     /// room for the preferred width, and a board wider than its container gets
     /// silently clipped rather than shrinking.
     @State private var paneWidth: CGFloat = preferredBoardWidth
+    /// Show the modelled board rather than the drawing. Only the M0110 is
+    /// modelled, so the M0110A always gets the drawing.
+    @AppStorage("keyboard3D") private var prefers3D = true
+    private var shows3D: Bool { prefers3D && controller.variant == .m0110 }
 
     private var boardWidth: CGFloat {
         // The Panel insets the board by 14 on each side.
@@ -44,18 +48,24 @@ struct KeysPane: View {
                 emptyState
             } else {
                 Panel(padding: 14,
-                      verticalPadding: 42,
-                      surface: Theme.boardSurround,
-                      stroke: Theme.boardSurroundStroke) { board }
+                      // The 3D view leaves its own margin round the case.
+                      verticalPadding: shows3D ? 24 : 42,
+                      // The 3D board sits on the same dark stage as the
+                      // other panes' board, so moving between them reads as
+                      // one scene.
+                      surface: shows3D ? Theme.panel : Theme.boardSurround,
+                      stroke: shows3D ? Theme.panelStroke : Theme.boardSurroundStroke) {
+                    // Full width, so the panel's edges line up with the
+                    // picker's below it; the board centres inside.
+                    Group { if shows3D { board3D } else { board } }
+                        .frame(maxWidth: .infinity)
+                }
+                    // The board stops at its preferred width; centred in
+                    // whatever the pane has beyond that, full screen included.
+                    .frame(maxWidth: .infinity)
                 if let position = controller.selectedKey {
                     KeycodePicker(controller: controller, keyPosition: position)
                 }
-            }
-            if let status = controller.status {
-                Text(status)
-                    .font(Theme.small)
-                    .foregroundStyle(Theme.textDim)
-                    .textSelection(.enabled)
             }
         }
         .background {
@@ -70,30 +80,44 @@ struct KeysPane: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            SegmentPills(options: KeyboardVariant.allCases.map { ($0, $0.rawValue) },
-                         selection: $controller.variant)
-
             if controller.keymap.layers.count > 1 {
                 SegmentPills(
                     options: Array(controller.keymap.layers.enumerated()).map {
                         ($0.offset, $0.element.name.isEmpty ? "Layer \($0.offset)" : $0.element.name)
                     },
-                    selection: $controller.activeLayerIndex)
+                    selection: $controller.activeLayerIndex,
+                    font: Theme.toolbar.weight(.medium),
+                    padding: EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
             }
 
-            Spacer()
+            // In the toolbar rather than under the picker: the page does not
+            // scroll, and a line appearing below it on every edit pushed the
+            // whole layout down.
+            if let status = controller.status {
+                Text(status)
+                    .font(Theme.small)
+                    .foregroundStyle(Theme.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .textSelection(.enabled)
+                    .help(status)
+            }
+
+            Spacer(minLength: 0)
+
+            if controller.variant == .m0110 {
+                SegmentPills(options: [(false, "2D"), (true, "3D")],
+                             selection: $prefers3D,
+                             font: Theme.toolbar.weight(.medium),
+                             padding: EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            }
+
+            ConnectionBadge(controller: controller)
 
             if controller.lockState == .locked, controller.connection.isConnected {
-                Label("Locked", systemImage: "lock.fill")
-                    .font(Theme.small)
-                    .foregroundStyle(Theme.warn)
                 Button("Unlock check") { controller.refreshLockState() }
                     .buttonStyle(PillButtonStyle())
             }
-
-            Text("\(controller.presentKeyCount) keys")
-                .font(Theme.readout)
-                .foregroundStyle(Theme.textDim)
 
             if controller.pendingEdits > 0 {
                 Button("Discard") { controller.discard() }
@@ -123,7 +147,10 @@ struct KeysPane: View {
                     .font(Theme.body)
                     .foregroundStyle(Theme.textDim)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Reload") { controller.refresh() }
+                // With no link there is nothing to reload, so it reconnects.
+                Button("Reload") {
+                    if controller.connection.isConnected { controller.refresh() } else { controller.connect() }
+                }
                     .buttonStyle(PillButtonStyle(prominent: true))
                     .padding(.top, 2)
             }
@@ -133,6 +160,17 @@ struct KeysPane: View {
 
     private var locked: Bool {
         controller.connection.isConnected && controller.lockState == .locked
+    }
+
+    /// The modelled board, in the same box the drawing fills, so switching
+    /// between them leaves the window and the picker where they were.
+    private var board3D: some View {
+        let bezel = controller.boardBezel
+        let span = CGFloat(controller.displayWidth) + bezel.side * 2
+        let box = BoardCase.size(unitsWide: controller.displayWidth,
+                                 bezel: bezel, scale: boardWidth / span)
+        return KeyboardStageView(controller: controller)
+            .frame(width: box.width, height: box.height)
     }
 
     /// The drawn case, with the live matrix seated in its wells.
@@ -201,27 +239,29 @@ private struct KeycodePicker: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     Text("Key \(keyPosition)")
-                        .font(Theme.sectionTitle)
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Theme.text)
                     Text(controller.behaviorName(at: keyPosition))
-                        .font(Theme.small)
+                        .font(.system(size: 13))
                         .foregroundStyle(Theme.textDim)
                     if takesKeycode, let current {
                         Text("· \(HIDKeycodes.name(for: current))")
-                            .font(Theme.small)
+                            .font(.system(size: 13))
                             .foregroundStyle(Theme.textDim)
                     }
                     Spacer()
                     Button("Done") { controller.selectedKey = nil }
-                        .buttonStyle(PillButtonStyle())
+                        .buttonStyle(PillButtonStyle(font: .system(size: 13, weight: .medium)))
                 }
 
                 if takesKeycode {
                     SegmentPills(options: HIDKeycodes.groups.map { ($0.0, $0.0) },
-                                 selection: $group)
+                                 selection: $group,
+                                 font: .system(size: 13, weight: .medium),
+                                 padding: EdgeInsets(top: 6, leading: 13, bottom: 6, trailing: 13))
 
                     let usages = HIDKeycodes.groups.first { $0.0 == group }?.1 ?? []
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 74), spacing: 6)], spacing: 6) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 82), spacing: 8)], spacing: 8) {
                         ForEach(usages, id: \.self) { usage in
                             Button {
                                 controller.rebind(keyPosition: keyPosition, to: usage)
@@ -230,7 +270,9 @@ private struct KeycodePicker: View {
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(PillButtonStyle())
+                            // Keycaps, not pills: these stand for keys.
+                            .buttonStyle(PillButtonStyle(cornerRadius: 9, verticalPadding: 9,
+                                                         font: .system(size: 14, weight: .medium)))
                             .help(HIDKeycodes.name(for: HIDKeycodes.encode(usage: usage)))
                             .disabled(!controller.canEdit)
                         }
@@ -253,5 +295,112 @@ private struct KeycodePicker: View {
         guard let layer = controller.activeLayer,
               layer.bindings.indices.contains(keyPosition) else { return nil }
         return layer.bindings[keyPosition].param1
+    }
+}
+
+/// Which keyboard the pane is talking to and how: a status light, the name,
+/// the route and whether Studio is unlocked. The reason a connect failed, and
+/// the button to try again, are the empty state's; this stays one short line.
+struct ConnectionBadge: View {
+    @ObservedObject var controller: KeyboardController
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle().fill(indicator).frame(width: 8, height: 8)
+            Text(name)
+                .font(Theme.toolbar.weight(.semibold))
+                .foregroundStyle(Theme.text)
+            if let usb = route {
+                Group {
+                    if usb {
+                        Image(systemName: "cable.connector")
+                            .font(.system(size: 14, weight: .medium))
+                    } else {
+                        BluetoothGlyph()
+                            .stroke(style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                            .frame(width: 8, height: 14)
+                    }
+                }
+                .foregroundStyle(Theme.textDim)
+                .accessibilityLabel(usb ? "USB" : "Bluetooth")
+            }
+            if route != nil {
+                let unlocked = controller.lockState == .unlocked
+                Image(systemName: unlocked ? "lock.open.fill" : "lock.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(unlocked ? Theme.textDim : Theme.warn)
+                    .accessibilityLabel(unlocked ? "Unlocked" : "Locked")
+            } else {
+                Text(detail)
+                    .font(Theme.toolbar)
+                    .foregroundStyle(Theme.textDim)
+            }
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 7)
+        .background(Theme.panel, in: Capsule())
+        .overlay(Capsule().strokeBorder(Theme.panelStroke, lineWidth: 1))
+        .help(help)
+    }
+
+    private var name: String {
+        if case .connected(_, let device) = controller.connection { return device }
+        return "M0110"
+    }
+
+    private var indicator: Color {
+        switch controller.connection {
+        case .connected: return controller.lockState == .unlocked ? Theme.good : Theme.warn
+        case .connecting: return Theme.warn
+        case .failed: return Theme.bad
+        case .disconnected: return Theme.textDim
+        }
+    }
+
+    /// True over USB, false over Bluetooth, nil with no link. Serial ports
+    /// are device paths; the Bluetooth transport labels itself otherwise.
+    private var route: Bool? {
+        guard case .connected(let port, _) = controller.connection else { return nil }
+        return port.hasPrefix("/dev/")
+    }
+
+    /// Said in words only while there is no link; once there is, the route
+    /// and the lock are icons.
+    private var detail: String {
+        switch controller.connection {
+        case .disconnected, .failed: return "Not connected"
+        case .connecting: return "Connecting\u{2026}"
+        case .connected: return ""
+        }
+    }
+
+    /// The full story on hover: the port, or why nothing answered.
+    private var help: String {
+        switch controller.connection {
+        case .connected(let port, _):
+            return "\(port), Studio \(controller.lockState == .unlocked ? "unlocked" : "locked")"
+        case .failed(let why): return why
+        case .connecting: return "Looking for the keyboard"
+        case .disconnected: return "Not connected"
+        }
+    }
+}
+
+/// The Bluetooth rune. SF Symbols has no public one, so it is drawn: a spine
+/// with two arrowheads off its right side, crossed by the two diagonals.
+struct BluetoothGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * rect.width, y: rect.minY + y * rect.height)
+        }
+        var path = Path()
+        path.move(to: p(0, 0.27))
+        path.addLine(to: p(1, 0.73))
+        path.addLine(to: p(0.5, 1))
+        path.addLine(to: p(0.5, 0))
+        path.addLine(to: p(1, 0.27))
+        path.addLine(to: p(0, 0.73))
+        return path
     }
 }

@@ -19,6 +19,10 @@ if let path = config.boardSnapshotPath {
         BoardSnapshot.render(to: path, appearance: config.appearance)
     })
 }
+if let path = config.stageSnapshotPath {
+    _ = NSApplication.shared
+    exit(MainActor.assumeIsolated { BoardStageSnapshot.render(to: path) })
+}
 
 
 if let path = config.snapshotPath {
