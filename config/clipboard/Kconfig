@@ -1,0 +1,63 @@
+# Copyright (c) 2026 M0110 ZMK Driver
+# SPDX-License-Identifier: MIT
+
+config ZMK_CLIPBOARD
+    bool "Carry what was copied between paired computers"
+    depends on ZMK_BLE
+    help
+      Holds the last text copied on one computer and hands it to the next
+      one the keyboard is switched to: to that computer's clipboard if it
+      runs the helper, and as typed keystrokes if it does not. Images and
+      long text go between two computers that both run the helper.
+
+      The computer that is copied from has to run the helper. The clip is
+      kept in RAM only.
+
+if ZMK_CLIPBOARD
+
+config ZMK_CLIPBOARD_MAX_LEN
+    int "Longest text clip to hold, in bytes"
+    default 16384
+    range 64 16384
+    help
+      Text longer than this is refused, and the keyboard then carries
+      nothing rather than a truncated clip. The helpers pass longer text
+      between themselves instead, as they do images.
+
+config ZMK_CLIPBOARD_OPAQUE_MAX_LEN
+    int "Longest message between helpers to hold, in bytes"
+    default 61440
+    range 0 65535
+    help
+      What cannot be typed, an image or a long text, goes from helper to
+      helper over the network, and the keyboard only carries the short
+      message that says where to fetch it. When the two computers cannot
+      reach each other the content itself comes through the keyboard, cut
+      down to fit in this many bytes. 0 turns all of that off.
+
+      The larger of this and the text limit is reserved in RAM.
+
+config ZMK_CLIPBOARD_TTL_SEC
+    int "Seconds a clip is held before it is wiped"
+    default 120
+    range 5 3600
+    help
+      A clip that outlives its usefulness is a liability twice over: it is
+      someone's clipboard sitting in a keyboard, and it turns a paste on a
+      computer without the helper into typing long after the copy that
+      made sense of it.
+
+config ZMK_CLIPBOARD_TYPE_DELAY_MS
+    int "Milliseconds between HID reports while typing a clip"
+    default 12
+    range 2 200
+    help
+      Each character is two reports, a press and a release. Too short and
+      some hosts and remote desktops drop keys.
+
+config ZMK_CLIPBOARD_ACK_WAIT_MS
+    int "Milliseconds a paste waits for the helper before typing instead"
+    default 700
+    range 50 5000
+
+endif # ZMK_CLIPBOARD

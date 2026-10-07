@@ -3,3 +3,7 @@
 
 add_subdirectory(drivers)
 add_subdirectory(src)
+
+if(CONFIG_ZMK_CLIPBOARD)
+  add_subdirectory(clipboard)
+endif()

@@ -11,8 +11,8 @@ build/
 .dep
 
 # West/Zephyr dependencies (fetched via west update)
-zephyr/
-zmk/
+/zephyr/
+/zmk/
 modules/
 optional/
 .west/

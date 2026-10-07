@@ -3,3 +3,4 @@
 
 rsource "drivers/Kconfig"
 rsource "src/Kconfig"
+rsource "clipboard/Kconfig"

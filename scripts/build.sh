@@ -82,7 +82,9 @@ do_build() {
     export GNUARMEMB_TOOLCHAIN_PATH=/opt/homebrew
     export ZEPHYR_BASE="$REPO_ROOT/zephyr"
 
-    west build -s zmk/app -b nice_nano -- \
+    # ZMK's variant of the board; plain nice_nano is the stock board, without
+    # flash storage, so it forgets every pairing at reset.
+    west build -p auto -s zmk/app -b nice_nano//zmk -- \
         -DSHIELD=m0110 \
         -DZMK_CONFIG="$REPO_ROOT/config" \
         -DZephyr_DIR="$REPO_ROOT/zephyr/share/zephyr-package/cmake"
