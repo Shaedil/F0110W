@@ -33,13 +33,50 @@
 
         /* bq25185 boost EN: D1 (P0.06) driven high to power the M0110's
          * +5V rail on battery.  Without this the matrix is unpowered off-USB,
-         * so BLE connects but no keys register.  Driver holds it enabled and
-         * only power-saves after idle-timeout-ms (default 5 min). */
+         * so BLE connects but no keys register. */
         en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+
+        /* Power-save off.  Its only way back out is a key caught by one
+         * INSTANT every few seconds.  After two idle days on battery, BLE
+         * stayed connected but none of the typing reached ZMK.  It also
+         * saved nothing, because the EN pad has no copper on this PCB and
+         * the boost never actually turns off. */
+        idle-timeout-ms = <0>;
 
         /* Matrix dimensions for M0110A (14 rows x 8 cols = 112 positions) */
         rows = <14>;
         columns = <8>;
+    };
+};
+
+/*
+ * Battery gauge.  The board's stock &vbatt maps VDDH to percent with a straight
+ * line and reads the charger's output, not the cell, while USB is plugged in.
+ * See config/drivers/sensor/battery_estimator.c.  Both drivers use SAADC
+ * channel 0, so the stock one must be disabled.
+ */
+&vbatt {
+    status = "disabled";
+};
+
+/ {
+    chosen {
+        zmk,battery = &m0110_battery;
+    };
+
+    m0110_battery: m0110_battery {
+        compatible = "zmk,battery-vddh-ocv";
+
+        /* Typical LiPo resting voltage at 0%, 10%, ... 100% (Adafruit and
+         * Ampow LiPo voltage charts).  Recalibrate from a logged discharge
+         * if the readings drift from what the 10 Ah cell really does. */
+        ocv-capacity-table-0 = <3270000 3690000 3730000 3770000 3800000 3840000
+                                3870000 3950000 4020000 4110000 4200000>;
+
+        /* 10 Ah cell.  One USB cable feeds both chargers: the bq25185 board
+         * at its default 1 A and the nice!nano's own at about 100 mA. */
+        charge-full-design-microamp-hours = <10000000>;
+        constant-charge-current-max-microamp = <1100000>;
     };
 };
 

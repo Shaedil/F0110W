@@ -1050,11 +1050,13 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
         if (scancode != M0110_NULL && scancode != M0110_ERROR) {
             data->last_key_time = k_uptime_get();
             process_scancode(dev, scancode);
-        } else if (scancode == M0110_NULL && config->en_gpio.port != NULL) {
+        } else if (scancode == M0110_NULL && config->en_gpio.port != NULL &&
+                   config->idle_timeout_ms != 0) {
             /* Genuine no-event NULL: check whether we've been idle long
              * enough to power down (errors don't count toward idle).
              * Never power down while USB supplies the rail; see
-             * m0110_on_usb_power(). */
+             * m0110_on_usb_power().  An idle timeout of 0 disables
+             * power-save entirely. */
             int64_t idle_ms = k_uptime_get() - data->last_key_time;
             if (!m0110_on_usb_power() &&
                 idle_ms > (int64_t)config->idle_timeout_ms) {

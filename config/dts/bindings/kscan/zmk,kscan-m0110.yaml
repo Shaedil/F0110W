@@ -58,7 +58,8 @@ properties:
     default: 300000
     description: |
       Milliseconds of inactivity before the driver disables the 5V boost
-      converter (requires en-gpios).  Default is 5 minutes.
+      converter (requires en-gpios).  Default is 5 minutes.  Set to 0 to
+      disable power-save: the boost stays on and the driver keeps polling.
 
   peek-interval-ms:
     type: int

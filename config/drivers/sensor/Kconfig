@@ -1,0 +1,13 @@
+# Copyright (c) 2026 M0110 ZMK Driver
+# SPDX-License-Identifier: MIT
+
+DT_COMPAT_ZMK_BATTERY_VDDH_OCV := zmk,battery-vddh-ocv
+
+config ZMK_BATTERY_VDDH_OCV
+	bool
+	default $(dt_compat_enabled,$(DT_COMPAT_ZMK_BATTERY_VDDH_OCV))
+	select ADC
+	depends on SENSOR
+	help
+	  nice!nano v2 VDDH battery sensor that corrects for the charger's
+	  output offset and uses an OCV table for state of charge.

@@ -1,0 +1,50 @@
+# Copyright (c) 2026 M0110 ZMK Driver
+# SPDX-License-Identifier: MIT
+
+description: |
+  nice!nano v2 battery sensor.  Reads VDDH like zmk,battery-nrf-vddh, but
+  subtracts the bq24072 charger's OUT offset while USB is plugged in and maps
+  the cell voltage to a state of charge through an OCV table.
+
+  Example configuration:
+
+    battery: battery {
+        compatible = "zmk,battery-vddh-ocv";
+        ocv-capacity-table-0 = <3270000 3690000 3730000 3770000 3800000 3840000
+                                3870000 3950000 4020000 4110000 4200000>;
+        charge-full-design-microamp-hours = <10000000>;
+        constant-charge-current-max-microamp = <1100000>;
+    };
+
+compatible: "zmk,battery-vddh-ocv"
+
+include:
+  - name: battery.yaml
+    property-allowlist:
+      - ocv-capacity-table-0
+      - charge-full-design-microamp-hours
+      - constant-charge-current-max-microamp
+
+properties:
+  ocv-capacity-table-0:
+    required: true
+
+  charge-full-design-microamp-hours:
+    required: true
+
+  constant-charge-current-max-microamp:
+    required: true
+    description: |
+      Most charge current all chargers on the cell can deliver together.  The
+      reported state of charge never rises faster than this current fills the
+      design capacity.
+
+  charger-out-offset-microvolt:
+    type: int
+    default: 225000
+    description: |
+      How far VDDH sits above the resting cell voltage while USB is plugged
+      in, used until the driver has measured it across a plug or unplug.  The
+      bq24072's datasheet gives 150 to 270 mV, typically 225 mV; any other
+      charger running from the same cable adds its charge current times the
+      cell and wiring resistance.

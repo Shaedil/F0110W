@@ -1,0 +1,12 @@
+# Copyright (c) 2026 M0110 ZMK Driver
+# SPDX-License-Identifier: MIT
+
+config ZMK_BATTERY_REPORT_WHILE_IDLE
+	bool "Keep the BLE battery level current while idle"
+	default y
+	depends on ZMK_BATTERY_REPORTING_FETCH_MODE_STATE_OF_CHARGE && BT_BAS
+	help
+	  ZMK stops sampling the battery while the keyboard is idle, so hosts
+	  keep reading the level from the last time anyone typed.  This keeps
+	  refreshing the BLE Battery Service on ZMK's report interval until
+	  the next key.
