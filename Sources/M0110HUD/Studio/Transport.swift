@@ -68,6 +68,9 @@ protocol StudioTransport: AnyObject {
     func send(_ payload: [UInt8]) throws
     /// Block until a complete frame arrives or `timeout` elapses.
     func receiveFrame(timeout: TimeInterval) throws -> [UInt8]
+    /// A frame that has already arrived, or nil, without waiting for one.
+    /// Lets unsolicited notifications be read while no request is in flight.
+    func receiveFrameIfAvailable() throws -> [UInt8]?
 }
 
 /// Blocking serial transport over a CDC ACM port.
@@ -78,6 +81,11 @@ final class SerialTransport: StudioTransport {
     private var fd: Int32 = -1
     private let path: String
     private var decoder = StudioFraming.Decoder()
+    /// Frames decoded but not yet handed out. One read can carry several: the
+    /// firmware sends a notification immediately before the reply to the
+    /// request that raised it, `set_layer_binding` included, so returning on
+    /// the first frame and dropping the rest of the read lost the reply.
+    private var pending: [[UInt8]] = []
 
     var label: String { path }
     let responseTimeout: TimeInterval = 3
@@ -117,6 +125,7 @@ final class SerialTransport: StudioTransport {
         _ = fcntl(fd, F_SETFL, 0)
         tcflush(fd, TCIOFLUSH)
         decoder = StudioFraming.Decoder()
+        pending.removeAll()
     }
 
     func close() {
@@ -140,19 +149,30 @@ final class SerialTransport: StudioTransport {
     /// Read until a complete frame arrives or `timeout` elapses.
     func receiveFrame(timeout: TimeInterval) throws -> [UInt8] {
         let deadline = Date().addingTimeInterval(timeout)
-        var scratch = [UInt8](repeating: 0, count: 512)
-        while Date() < deadline {
-            let n = scratch.withUnsafeMutableBufferPointer {
-                Darwin.read(fd, $0.baseAddress, $0.count)
-            }
-            if n < 0 {
-                if errno == EAGAIN || errno == EINTR { continue }
-                throw StudioError.portUnavailable("\(path): read failed")
-            }
-            for i in 0..<n {
-                if let frame = decoder.feed(scratch[i]) { return frame }
-            }
+        while pending.isEmpty, Date() < deadline {
+            try readOnce()
         }
-        throw StudioError.timeout("a response frame on \(path)")
+        guard !pending.isEmpty else { throw StudioError.timeout("a response frame on \(path)") }
+        return pending.removeFirst()
+    }
+
+    func receiveFrameIfAvailable() throws -> [UInt8]? {
+        if pending.isEmpty { try readOnce() }
+        return pending.isEmpty ? nil : pending.removeFirst()
+    }
+
+    /// One read, waiting at most VTIME, with every frame it completes queued.
+    private func readOnce() throws {
+        var scratch = [UInt8](repeating: 0, count: 512)
+        let n = scratch.withUnsafeMutableBufferPointer {
+            Darwin.read(fd, $0.baseAddress, $0.count)
+        }
+        if n < 0 {
+            if errno == EAGAIN || errno == EINTR { return }
+            throw StudioError.portUnavailable("\(path): read failed")
+        }
+        for i in 0..<n {
+            if let frame = decoder.feed(scratch[i]) { pending.append(frame) }
+        }
     }
 }

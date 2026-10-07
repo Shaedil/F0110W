@@ -72,10 +72,12 @@ final class KeyboardController: ObservableObject {
     private var reconnect: DispatchWorkItem?
     private var retryDelay: TimeInterval = firstRetryDelay
 
-    /// How often to ask, while locked, whether the keyboard has been unlocked.
-    /// The unlock happens on the keyboard, not in this app, so there is nothing
-    /// else to notice it: Studio does send a notification, but this client
-    /// discards unsolicited frames rather than running a reader thread.
+    /// How often to check the lock. While locked the app asks, in case the
+    /// firmware's notification of an unlock is missed. While unlocked it only
+    /// reads what the firmware has sent: the keyboard re-locks after ten idle
+    /// minutes, any request would restart that clock, and without listening
+    /// the app went on showing an unlocked editor whose every write the
+    /// keyboard refused.
     private static let lockPollInterval: TimeInterval = 1.5
 
     deinit { lockPoll?.cancel() }
@@ -120,6 +122,8 @@ final class KeyboardController: ObservableObject {
         }
         retryDelay = Self.firstRetryDelay
         client = found.client
+        // Runs on `queue`: the client is only ever used there.
+        found.client.onLockStateChanged = { [weak self] lock in self?.lockAnnounced(lock) }
         publish {
             self.connection = .connected(port: found.client.label, device: found.info.name)
         }
@@ -275,7 +279,23 @@ final class KeyboardController: ObservableObject {
     private func noteLock(_ lock: LockState) {
         lockOnWire = lock
         publish { self.lockState = lock }
-        if lock == .locked { startLockPolling() } else { stopLockPolling() }
+        startLockPolling()
+    }
+
+    /// The firmware said the lock changed. Must run on `queue`.
+    ///
+    /// Can arrive in the middle of another call's reply, so a reload it needs
+    /// is queued behind that call rather than started inside it.
+    private func lockAnnounced(_ lock: LockState) {
+        guard lock != lockOnWire else { return }
+        noteLock(lock)
+        if lock == .unlocked {
+            queue.async { [weak self] in self?.reloadEverything() }
+        } else {
+            publish {
+                self.status = "Studio locked again. Press the key bound to &studio_unlock to keep editing."
+            }
+        }
     }
 
     /// Must run on `queue`.
@@ -299,6 +319,10 @@ final class KeyboardController: ObservableObject {
     private func pollLock() {
         guard let client else { stopLockPolling(); return }
         do {
+            guard lockOnWire == .locked else {
+                try client.readNotifications()
+                return
+            }
             let lock = try client.lockState()
             guard lock != lockOnWire else { return }
             noteLock(lock)
@@ -357,6 +381,9 @@ final class KeyboardController: ObservableObject {
         guard binding != previous else { return }
 
         let layerID = layer.id
+        // The layer the edit was made on, not whichever is showing when the
+        // reply lands.
+        let layerIndex = activeLayerIndex
         queue.async { [weak self] in
             guard let self, let client = self.client else { return }
             do {
@@ -364,13 +391,32 @@ final class KeyboardController: ObservableObject {
                                      keyPosition: Int32(keyPosition),
                                      binding: binding)
                 self.publish {
-                    self.keymap.layers[self.activeLayerIndex].bindings[keyPosition] = binding
+                    if self.keymap.layers.indices.contains(layerIndex),
+                       self.keymap.layers[layerIndex].bindings.indices.contains(keyPosition) {
+                        self.keymap.layers[layerIndex].bindings[keyPosition] = binding
+                    }
                     self.pendingEdits += 1
                     self.status = "Set key \(keyPosition) to \(HIDKeycodes.name(for: binding.param1))"
                 }
             } catch {
-                self.publish { self.status = "\(error)" }
+                self.editFailed(error)
             }
+        }
+    }
+
+    /// Report a write the keyboard did not take. Must run on `queue`.
+    ///
+    /// A lock error means Studio re-locked without the app hearing of it, so
+    /// the lock is recorded: the editor stops offering writes and the poll
+    /// picks up the unlock.
+    private func editFailed(_ error: Error) {
+        if let studio = error as? StudioError, case .locked = studio {
+            noteLock(.locked)
+            publish {
+                self.status = "Studio locked again. Press the key bound to &studio_unlock, then try again."
+            }
+        } else {
+            publish { self.status = "\(error)" }
         }
     }
 
@@ -385,7 +431,7 @@ final class KeyboardController: ObservableObject {
                     self.status = "Saved to the keyboard's flash"
                 }
             } catch {
-                self.publish { self.status = "\(error)" }
+                self.editFailed(error)
             }
         }
     }
@@ -399,7 +445,7 @@ final class KeyboardController: ObservableObject {
                 self.publish { self.pendingEdits = 0; self.status = "Discarded unsaved changes" }
                 self.reloadEverything()
             } catch {
-                self.publish { self.status = "\(error)" }
+                self.editFailed(error)
             }
         }
     }

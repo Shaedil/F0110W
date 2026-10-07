@@ -98,7 +98,9 @@ level, so the in-between values are reachable only through `--transparency`.
 - The percentage is a voltage proxy from ZMK's Battery Service reading, not a
   state of charge, and there is no charging indicator.
 - Keymap editing rewrites a binding's keycode only, from HID page 0x07, and
-  Studio has to be unlocked at the keyboard first.
+  Studio has to be unlocked at the keyboard first. The firmware locks it again
+  after ten minutes without a request; the editor follows, and the same key
+  unlocks it.
 - Studio answers on whichever endpoint the keyboard is currently output to,
   USB or Bluetooth, never both at once.
 

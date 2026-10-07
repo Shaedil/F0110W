@@ -14,6 +14,11 @@ final class StudioClient {
     /// How this client is connected, for logs and for the UI.
     var label: String { transport.label }
 
+    /// Called, on whichever thread is using the client, when the firmware
+    /// announces a lock change. It does so for `&studio_unlock`, for the idle
+    /// timeout and for a dropped link, none of which this app asks about.
+    var onLockStateChanged: ((LockState) -> Void)?
+
     /// Response payload for one subsystem, still protobuf-encoded.
     private enum Subsystem: Int {
         case meta = 2, core = 3, behaviors = 4, keymap = 5
@@ -48,7 +53,7 @@ final class StudioClient {
         let deadline = Date().addingTimeInterval(timeout * 5)
         while Date() < deadline {
             let frame = try transport.receiveFrame(timeout: timeout)
-            guard let response = try Self.parseResponse(frame) else { continue }  // notification
+            guard let response = try parseResponse(frame) else { continue }  // notification
             guard response.id == id else { continue }
             // The firmware answers on the meta subsystem when it refuses a call,
             // most often because Studio is locked.
@@ -80,10 +85,22 @@ final class StudioClient {
         return .rpc("the firmware refused the request")
     }
 
-    /// Returns nil for notifications, which carry no request id. `subsystem` is
-    /// the field number the reply arrived on, so meta errors can be told apart
-    /// from a real subsystem payload.
-    private static func parseResponse(_ frame: [UInt8]) throws -> (id: UInt32, subsystem: Int, payload: [UInt8])? {
+    /// Handle any notifications that have already arrived, without sending a
+    /// request. Every request resets the firmware's idle-lock timer, so asking
+    /// for the lock state on a schedule would keep Studio unlocked for as long
+    /// as the app runs; reading what the firmware volunteers does not.
+    func readNotifications() throws {
+        // Only the transport failing is an error. A frame that will not parse
+        // is skipped, as is a late reply to a request that already timed out.
+        while let frame = try transport.receiveFrameIfAvailable() {
+            _ = try? parseResponse(frame)
+        }
+    }
+
+    /// Returns nil for notifications, which carry no request id, after acting
+    /// on them. `subsystem` is the field number the reply arrived on, so meta
+    /// errors can be told apart from a real subsystem payload.
+    private func parseResponse(_ frame: [UInt8]) throws -> (id: UInt32, subsystem: Int, payload: [UInt8])? {
         var r = ProtobufReader(frame)
         while !r.isAtEnd {
             let (field, type) = try r.nextField()
@@ -107,13 +124,23 @@ final class StudioClient {
                 }
                 return (id, subsystem, payload)
             case (2, .lengthDelimited):
-                _ = try r.bytesField()   // notification; ignored
+                if let lock = try Self.lockNotification(r.bytesField()) {
+                    onLockStateChanged?(lock)
+                }
                 return nil
             default:
                 try r.skip(type)
             }
         }
         return nil
+    }
+
+    /// zmk.studio.Notification{core = 2 zmk.core.Notification{lock_state_changed = 1}}.
+    /// Nil for every other notification.
+    private static func lockNotification(_ payload: [UInt8]) throws -> LockState? {
+        guard case .bytes(let core)? = try? field(2, in: payload),
+              case .number(let raw)? = try? field(1, in: core) else { return nil }
+        return LockState(rawValue: UInt32(truncatingIfNeeded: raw)) ?? .locked
     }
 
     /// Unwrap a subsystem response to the payload of one expected field number.

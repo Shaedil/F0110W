@@ -193,6 +193,13 @@ final class BLETransport: NSObject, StudioTransport {
         return frames.removeFirst()
     }
 
+    func receiveFrameIfAvailable() throws -> [UInt8]? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let failure { throw failure }
+        return frames.isEmpty ? nil : frames.removeFirst()
+    }
+
     // MARK: - Finding the keyboard
 
     /// The keyboard is already paired and connected to macOS for HID, so it is
