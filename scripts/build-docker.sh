@@ -37,7 +37,7 @@ docker run --rm -v "$REPO_ROOT":/work -w /work "$IMAGE" bash -ec "
         -DZephyr_DIR=/work/zephyr/share/zephyr-package/cmake
 "
 
-# A build that cannot store pairings must never reach the keyboard.
+# Stop if the build cannot store pairings, so it does not get flashed.
 for symbol in CONFIG_SETTINGS_NVS CONFIG_FLASH CONFIG_ZMK_BATTERY; do
     if ! grep -q "^$symbol=y" "$REPO_ROOT/build/zephyr/.config"; then
         echo "error: $symbol is not set; this build is not for $BOARD. Do not flash it." >&2

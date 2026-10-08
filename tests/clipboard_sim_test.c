@@ -201,7 +201,7 @@ bool zmk_ble_profile_is_connected(uint8_t index) { return conns[index].connected
 
 int bt_gatt_notify(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *data,
                    uint16_t len) {
-    /* The two things the lock must never be held across. */
+    /* Like a HID report, a notification is never sent with the lock held. */
     assert(lock_depth == 0);
     assert(attr == &attr_zmk_clipboard_svc[4]);
 
@@ -421,7 +421,7 @@ static void key(uint32_t usage, bool down) { matrix_key(usage, down, true); }
 #define LAYER_KEY 0xF0
 static void layer_key(bool down) { matrix_key(LAYER_KEY, down, false); }
 
-/* Holds `mod`, taps `usage`, lets go: how a shortcut is actually pressed. */
+/* Holds `mod`, taps `usage`, lets go, the way a person presses a shortcut. */
 static void chord(uint32_t mod, uint32_t usage) {
     key(mod, true);
     advance(30);
@@ -1139,7 +1139,8 @@ static void test_typing_takes_a_report_per_character(void) {
     before = host_reports;
     key(HID_USAGE_KEY_KEYBOARD_V, true);
     advance(3000);
-    /* The mask going on, one report a character, and everything let go. */
+    /* A report per character, plus one putting the mask on and one letting
+     * everything go. */
     CHECK(host_reports - before == strlen(text) + 2);
     key(HID_USAGE_KEY_KEYBOARD_V, false);
     advance(20);
@@ -1592,10 +1593,10 @@ static void test_hold_does_not_keep_a_paste_back_for_ever(void) {
     advance(CLIP_HOLD_REPEAT_MS);
     CHECK(now - pressed > FETCH_WAIT_MAX_MS);
 
-    /* The paste is dropped, not let through to put down what the clipboard
-     * held before; the keys behind it come out. The helper kept its word as
-     * far as it could, and is not written off for it: the next paste waits
-     * on it like the first. */
+    /* The paste is dropped, since letting it through would put down what the
+     * clipboard held before. The keys behind it come out. The helper kept
+     * repeating its HOLD the whole time, so it is still counted as a helper
+     * and the next paste waits on it like the first. */
     expect_host("fetch that never finished", "x");
     CHECK(helpers & BIT(1));
     chord(KEY_LGUI, HID_USAGE_KEY_KEYBOARD_V);
@@ -1609,7 +1610,8 @@ static void test_long_fetch_drops_pastes(void) {
     reset();
     uint32_t crc = ticket_delivered_to_profile_1();
 
-    /* The slow way round: nothing worth holding the keyboard up for. */
+    /* A HOLD without SOON: the fetch will take too long to hold the keyboard
+     * up for. */
     helper_hold(1, 0);
     advance(50);
     chord(KEY_LGUI, HID_USAGE_KEY_KEYBOARD_V);
@@ -1665,7 +1667,7 @@ static void test_hold_lapses_and_can_be_ended(void) {
     advance(20);
     CHECK(!fetch.active && (helpers & BIT(1)) && !(helpers_opaque & BIT(1)));
 
-    /* Gone with its helper, too. */
+    /* The hold also ends when its helper disconnects. */
     helper_hello(1);
     advance(300);
     helper_hold(1, 0);
@@ -1838,8 +1840,8 @@ static void test_each_kind_has_its_own_limit(void) {
         big[i] = (uint8_t)(i * 7 + 1);
     }
 
-    /* Room for a long message between helpers is not room for text: typing
-     * that much is not something anyone wants. */
+    /* Messages between helpers may be longer than text is allowed to be, as
+     * nobody wants that much typed. */
     reset();
     helper_hello(0);
     advance(10);
@@ -1954,7 +1956,7 @@ static void test_expiry_lets_a_delivery_finish(void) {
     CHECK(helper_received(1, got, sizeof(got), &crc));
     CHECK(crc == clip_crc32(big, sizeof(big)));
 
-    /* Handed over, it has no further reason to stay. */
+    /* Once it has been handed over, it expires. */
     advance(1100);
     CHECK(!clip.valid);
     check_idle("expiry during delivery");
@@ -1977,8 +1979,8 @@ static void test_many_keys_behind_a_waiting_paste_stay_in_order(void) {
     advance(20);
 
     /* More typing behind the paste than there is room to queue. The paste is
-     * what gives: every key comes out, once, in order, as itself and not as
-     * a shortcut, and none is left down. */
+     * dropped, and every key comes out once, in order, as itself rather than
+     * as a shortcut, with none left down. */
     chord(KEY_LGUI, HID_USAGE_KEY_KEYBOARD_V);
     for (int i = 0; i < 40; i++) {
         uint32_t usage = 0x04 + (uint32_t)(i % 26);
@@ -2191,11 +2193,12 @@ static void test_expiry_waits_for_a_fetch(void) {
     advance(100);
     expect_host("paste during a fetch past the clip's time", "");
 
-    /* Not for ever: once the helper stops saying so, the clip goes. */
+    /* It is not kept for ever: once the helper stops saying it is fetching,
+     * the clip goes. */
     advance(CLIP_HOLD_LAPSE_MS + 1100);
     CHECK(!clip.valid);
 
-    /* Nor for a helper that never stops. */
+    /* Nor is it kept for a helper that never stops. */
     reset();
     helper_hello(0);
     advance(10);
@@ -2224,7 +2227,7 @@ static void test_expiry_does_not_wait_on_a_stuck_delivery(void) {
     helper_hello(1);
     advance(10);
 
-    /* The link to the helper stops taking anything, for good. */
+    /* The link to the helper stops taking anything and never recovers. */
     select_endpoint(ZMK_TRANSPORT_BLE, 1);
     advance(5);
     tx_credits_per_tick = 0;
@@ -2359,8 +2362,8 @@ static void test_paste_waits_out_a_slow_delivery(void) {
 
 int main(void) {
 #ifdef CLIP_TEST_SMALL_OPAQUE
-    /* Built with the opaque limit below the text limit, where it is the
-     * limit and not the size of the buffer that has to stop a clip. */
+    /* Built with the opaque limit below the text limit. The buffer then has
+     * room past the opaque limit, so only the limit check can stop a clip. */
     static uint8_t bytes[CONFIG_ZMK_CLIPBOARD_MAX_LEN];
 
     memset(bytes, 'm', sizeof(bytes));

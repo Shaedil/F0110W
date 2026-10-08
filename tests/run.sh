@@ -33,7 +33,7 @@ pure=("$root/config/clipboard/clip_proto.c" "$root/config/clipboard/clip_text.c"
 "$out/clipboard_sim_test"
 
 # The same with the limit on messages between helpers below the limit on text,
-# where it cannot hide behind the size of the buffer.
+# so the buffer has room past it and only the limit check can refuse a message.
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
     -DCLIP_TEST_SMALL_OPAQUE -DCONFIG_ZMK_CLIPBOARD_OPAQUE_MAX_LEN=64 \
     -Wno-unused-function -Wno-unused-const-variable \

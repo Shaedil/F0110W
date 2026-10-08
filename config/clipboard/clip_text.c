@@ -83,10 +83,10 @@ static const char latin1_fold[64 + 1] = "AAAAAA\0CEEEEIIIIDNOOOOO\0OUUUUY\0\0"
 
 /* The ASCII spelling of a code point that has no key of its own, or NULL.
  *
- * Two families. Typographic punctuation, which word processors and web pages
- * substitute for the plain kind, loses nothing a reader would miss. Accented
- * Latin letters lose their accent, which is wrong but legible; dropping the
- * letter, the alternative, is neither. */
+ * Typographic punctuation, which word processors and web pages substitute for
+ * the plain kind, becomes its ASCII form and loses nothing a reader would
+ * miss. Accented Latin letters lose their accent, which is wrong but still
+ * legible; dropping the letter instead would not be. */
 static const char *transliterate(uint32_t cp, char single[2]) {
     switch (cp) {
     case 0x2018: /* left single quote */
@@ -189,7 +189,7 @@ int clip_text_next(const uint8_t *text, size_t len, size_t *pos,
 
     uint32_t cp = decode(text, len, pos);
 
-    /* CRLF is one line break, not two: the LF that follows types the Enter. */
+    /* CRLF types a single Enter: the CR is skipped and the LF types it. */
     if (cp == '\r') {
         if (*pos < len && text[*pos] == '\n') {
             return 0;

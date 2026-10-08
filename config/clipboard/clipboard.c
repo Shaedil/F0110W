@@ -7,13 +7,13 @@
  * A keyboard cannot read a computer's clipboard, so the computer that is
  * copied from runs a helper, which writes each new clip to the GATT service
  * below. The keyboard holds the clip in RAM and remembers which Bluetooth
- * profile it came from. After a switch to a different computer it gets the
- * clip across one of two ways:
+ * profile it came from. After a switch to a different computer, how the clip
+ * gets across depends on whether that computer runs a helper too:
  *
- *   - That computer runs a helper too. The clip is notified to it as soon as
- *     the switch lands, the helper puts it on the clipboard and acknowledges,
- *     and paste is left alone: it is a native paste of the right text.
- *   - It does not. Paste (V with Cmd or Ctrl) is swallowed and the clip is
+ *   - If it does, the clip is notified to it as soon as the switch lands, the
+ *     helper puts it on the clipboard and acknowledges, and paste is left
+ *     alone: it is a native paste of the right text.
+ *   - If it does not, paste (V with Cmd or Ctrl) is swallowed and the clip is
  *     typed out as keystrokes instead.
  *
  * So the receiving side needs nothing installed, and gets better fidelity if
@@ -37,12 +37,12 @@
  * report or a notification. Either can wait on the link, and the Bluetooth
  * thread that would get the link moving must not be stuck behind this mutex.
  *
- * ## What is kept, and for how long
+ * ## Retention
  *
- * One clip, in RAM, never in settings. It is zeroed when it expires, when a
- * newer copy is seen anywhere, and at reset. The service needs an encrypted
- * link, and ZMK only encrypts to bonded hosts, so a computer that was never
- * paired can neither read nor write it.
+ * The keyboard keeps one clip, in RAM and never in settings. It is zeroed
+ * when it expires, when a newer copy is seen anywhere, and at reset. The
+ * service needs an encrypted link, and ZMK only encrypts to bonded hosts, so
+ * a computer that was never paired can neither read nor write it.
  */
 
 #include <string.h>
@@ -476,16 +476,16 @@ static void rx_hold(uint8_t profile, const uint8_t *frame, uint16_t len) {
         return;
     }
 
-    /* Only for an opaque clip from another computer. There is nothing to
-     * fetch for text, nor for a copy made on the helper's own computer, and a
-     * paste is never held up for either. */
+    /* HOLD applies only to an opaque clip from another computer. There is
+     * nothing to fetch for text, nor for a copy made on the helper's own
+     * computer, and a paste is never held up for either. */
     if (!(clip.valid || clip.rx.active) || !clip.opaque || clip.origin == profile ||
         !(helpers_opaque & BIT(profile))) {
         return;
     }
 
-    /* If it had been given up on for being slow to answer, here it is, and
-     * with the clip in hand, or it would not be fetching. */
+    /* A helper that was given up on for being slow to answer is back, and it
+     * has the clip in hand, or it would not be fetching. */
     if (!(helpers & BIT(profile))) {
         helpers |= BIT(profile);
         if (clip.valid) {
@@ -817,9 +817,9 @@ static bool job_peek_key(struct clip_key *key) {
 }
 
 /* Whether `key` can go down in the report that lets go of the key the job is
- * holding, which makes a character one report rather than two. Not when it is
- * the same key, since the host would never see it go down again. And not when
- * a modifier comes up with it: hosts differ on which of the two they act on
+ * holding, which makes a character one report rather than two. It cannot if it
+ * is the same key, since the host would never see it go down again, or if a
+ * modifier comes up with it: hosts differ on which of the two they act on
  * first, and Shift can land on the next character. */
 static bool job_can_roll(const struct clip_key *key, uint8_t mods) {
     return key->usage != job.usage && !(job.usage_mods & ~mods);
@@ -948,8 +948,8 @@ static void deliver(struct k_work *work) {
         }
         k_mutex_unlock(&lock);
 
-        /* The helper is demonstrably being fed, so a paste that is waiting on
-         * it gets a fresh allowance rather than timing out mid-transfer. */
+        /* Frames are reaching the helper, so a paste that is waiting on it
+         * gets a fresh allowance rather than timing out mid-transfer. */
         if (pending_paste.active && !pending_paste.timed_out) {
             k_work_reschedule(&paste_timeout_work, K_MSEC(CONFIG_ZMK_CLIPBOARD_ACK_WAIT_MS));
         }
@@ -1031,8 +1031,8 @@ static bool send_relay(void) {
     }
 
     if (err < 0) {
-        /* Nowhere for it to go. Saying so is a courtesy that spares the
-         * sender its timeout, so it is not retried if the link is busy. */
+        /* There is nowhere for it to go. Telling the sender only spares it
+         * its timeout, so the refusal is not retried if the link is busy. */
         uint8_t refusal[CLIP_RESULT_LEN];
 
         notify_profile(from, refusal, clip_encode_result(refusal, CLIP_RESULT_UNREACHABLE, 0));
@@ -1166,8 +1166,8 @@ static void evaluate(struct k_work *work) {
         } else if (here) {
             resolve = RESOLVE_DROP;
         } else if (has_it || !clip.valid || !is_foreign(selected)) {
-            /* Either the host now holds the clip, or there is nothing to
-             * carry. Both ways the right thing is the paste the user asked for. */
+            /* Either the host now holds the clip or there is nothing to
+             * carry, so the paste the user asked for goes through. */
             resolve = RESOLVE_PASTE;
         } else if (!to_helper) {
             resolve = clip.typable ? RESOLVE_TYPE : RESOLVE_PASTE;
@@ -1246,9 +1246,8 @@ static void expire(struct k_work *work) {
                (remaining > -EXPIRY_GRACE_MS &&
                 ((delivery_still_wanted() && delivery.phase != DELIVER_AWAIT_ACK) ||
                  (fetch.active && k_uptime_get() < fetch.until)))) {
-        /* Cutting a clip off halfway through typing it, through handing it
-         * to a helper, or while a helper is fetching what it refers to,
-         * helps nobody. */
+        /* A clip is not cut off halfway through being typed or handed to a
+         * helper, or while a helper is fetching what it refers to. */
         k_work_reschedule(&expire_work, K_SECONDS(1));
     } else {
         LOG_DBG("clip expired");
@@ -1441,9 +1440,9 @@ static int on_keycode(const struct zmk_keycode_state_changed *ev) {
         return ZMK_EV_EVENT_HANDLED;
     }
 
-    /* The key that stopped a typing job did its work by stopping it. A
-     * modifier is let through all the same, since what is typed next while it
-     * is held depends on the host having seen it. */
+    /* The key press that stopped a typing job is swallowed: stopping the job
+     * was its whole effect. A modifier is let through all the same, since what
+     * is typed next while it is held depends on the host having seen it. */
     if (stopper.armed && ev->state && ev->timestamp == stopper.timestamp) {
         stopper.armed = false;
         if (!mod && swallow(ev->keycode)) {

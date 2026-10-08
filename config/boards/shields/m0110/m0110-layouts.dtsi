@@ -1,5 +1,5 @@
 /*
- * Apple M0110A Physical Layout and Matrix Transform for ZMK Studio
+ * Apple M0110A physical layout and matrix transform for ZMK Studio
  *
  * 79 keys mapped from the M0110A scancode matrix (14 rows x 8 cols)
  * to physical key positions.

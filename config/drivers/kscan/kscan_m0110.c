@@ -82,7 +82,7 @@ static inline bool m0110_on_usb_power(void)
 
 /*
  * M0110A arrow key codes (appear after a KEYPAD prefix byte).
- * On the M0110A, arrow keys share silicon with keypad keys and are
+ * On the M0110A, arrow keys are encoded as keypad keys and are
  * sent as two-byte sequences: KEYPAD prefix + arrow code.
  */
 #define M0110_ARROW_UP      0x1B
@@ -145,7 +145,7 @@ static inline bool m0110_on_usb_power(void)
  *   Bits 6-1: key identifier (scancode << 1)
  *   Bit 0:    always 1
  *
- * Bit 0 is a hard invariant rather than a mirror of bit 7: every key code the
+ * Bit 0 is set on every byte, whatever the value of bit 7: every key code the
  * keyboard can send is odd (A=0x01, S=0x03, Space=0x63, Shift=0x71,
  * Backtick=0x65, ...), as is every protocol response (NULL=0x7B,
  * KEYPAD=0x79, SHIFT=0x71, TEST_ACK=0x7D, TEST_NAK=0x77).  A break byte is its
@@ -187,12 +187,12 @@ static inline bool m0110_on_usb_power(void)
  * Error-recovery pauses.
  *
  * A failed exchange can leave the keyboard mid-byte or wedged, so we back off
- * before driving the lines again.  These pauses are input blackouts (the M0110
- * only buffers a couple of transitions), so they are sized to the job rather
- * than left generous: one whole byte is ~2.6 ms on the wire (8 bits at
- * ~330 us).  The old blanket 500 ms meant every glitch swallowed half a second
- * of typing, which on BLE (where glitches are far more frequent) was a large
- * part of the perceived unreliability.
+ * before driving the lines again.  No input is read during these pauses (the
+ * M0110 only buffers a couple of transitions), so each is kept to what its
+ * case needs: one whole byte is ~2.6 ms on the wire (8 bits at ~330 us).  The
+ * old blanket 500 ms pause lost half a second of typing on every glitch, and
+ * on BLE, where glitches are far more frequent, that was a large part of the
+ * perceived unreliability.
  */
 #define MIDBYTE_ABORT_MS    10    /* Aborted mid-byte: let the keyboard finish it */
 #define ERROR_RECOVER_MS    100   /* Clock never moved: keyboard may be unpowered */
@@ -205,8 +205,8 @@ static inline bool m0110_on_usb_power(void)
  * A lost break strands the key down and the *host* auto-repeats it forever.
  * Host auto-repeat is also the only way this keyboard repeats at all, so the
  * timeout must outlast every deliberate hold (holding backspace or an arrow to
- * scroll, a few seconds at most) while still bounding a stranded key to
- * something survivable.
+ * scroll, a few seconds at most) while still capping how long a stranded key
+ * repeats.
  */
 #define DEFAULT_STUCK_KEY_TIMEOUT_MS 10000
 
@@ -484,13 +484,13 @@ static uint8_t m0110_recv(const struct device *dev)
          * Latch the bit atomically, and only after re-confirming the clock is
          * still low.
          *
-         * The window between "we saw clock go low" and "we sampled data" is a
-         * couple of instructions wide, but it is the one place where an
-         * interrupt does real damage: if the CPU disappears into an ISR here
-         * for longer than the ~160 us clock-low period, the keyboard has moved
-         * on to the next bit by the time data_read() executes and we latch the
-         * wrong value.  The corruption is again silent: the byte still decodes
-         * to a plausible scancode, so nothing downstream notices, and a flipped
+         * The window between seeing clock go low and sampling data is a couple
+         * of instructions wide, and it is the one place in the loop where an
+         * interrupt corrupts data: if an ISR runs here for longer than the
+         * ~160 us clock-low period, the keyboard has moved on to the next bit
+         * by the time data_read() executes and the wrong value is latched.  As
+         * with the rising-edge race above, the byte still decodes to a
+         * plausible scancode, so nothing downstream notices, and a flipped
          * bit 7 turns a release into a press that ZMK then holds forever while
          * the host auto-repeats it.
          *
@@ -499,17 +499,17 @@ static uint8_t m0110_recv(const struct device *dev)
          * flash writes ZMK does when bonding/profile settings change, are the
          * long preemptions that overrun the window.
          *
-         * Masking interrupts for the *whole* byte (~2.6 ms) would be the wrong
-         * cure: the Bluetooth link layer needs its radio interrupts serviced on
-         * time or the connection drops, and on nRF the controller's radio ISR
-         * may be a zero-latency interrupt that irq_lock() cannot mask anyway.
-         * A ~2 us lock around the latch closes the same race with no such cost.
+         * Interrupts are not masked for the *whole* byte (~2.6 ms): the
+         * Bluetooth link layer needs its radio interrupts serviced on time or
+         * the connection drops, and on nRF the controller's radio ISR may be a
+         * zero-latency interrupt that irq_lock() cannot mask anyway.  A ~2 us
+         * lock around the latch closes the same race without holding off the
+         * radio.
          *
-         * Re-reading the clock inside the lock also converts the residual
-         * failure from silent to detectable: if we were preempted out of the
-         * window we abort the byte instead of returning a corrupted one, and
-         * the caller's release_all_keys() unwinds any key we might have
-         * stranded.
+         * Re-reading the clock inside the lock also makes the remaining failure
+         * case detectable: if the thread was preempted past the window, the
+         * byte is aborted instead of returned corrupted, and the caller's
+         * release_all_keys() releases any key the lost byte may have left held.
          */
         unsigned int lock = irq_lock();
         bool still_low = !clock_read(dev);
@@ -601,8 +601,8 @@ static uint8_t m0110_inquiry_recv(const struct device *dev)
      * armed a few microseconds after the command is sent, and if it is ever
      * missed (an early response, or an edge that never latched), a forever-wait
      * would leave the keyboard dead until the board is reset.  INQUIRY is
-     * specified to answer within 250 ms, so anything past INQUIRY_WAIT_MS is a
-     * failure to recover from rather than wait out.
+     * specified to answer within 250 ms, so a wait past INQUIRY_WAIT_MS is
+     * treated as a failure and the driver resyncs.
      */
     if (k_sem_take(&data->data_ready, K_MSEC(INQUIRY_WAIT_MS)) != 0) {
         gpio_pin_interrupt_configure_dt(&config->clock_gpio, GPIO_INT_DISABLE);
@@ -810,17 +810,17 @@ static void release_all_keys(const struct device *dev)
 /*
  * Force-release any key that has been held implausibly long.
  *
- * release_all_keys() only fires when the driver *notices* a protocol error.
+ * release_all_keys() only fires when the driver detects a protocol error.
  * Corruption that passes every check (a mis-sampled bit 7 that still frames
- * correctly and still names a real key) turns a release into a press with
- * nothing to detect, and ZMK holds that key until the matching break arrives.
- * It never will, so the host auto-repeats the character indefinitely.
+ * correctly and still names a real key) turns a release into a press that
+ * nothing detects.  ZMK then holds that key waiting for a break byte that
+ * never arrives, and the host auto-repeats the character indefinitely.
  *
- * The bound has to coexist with host auto-repeat, which is the only repeat this
- * keyboard has: holding backspace or an arrow to scroll is a legitimate
- * multi-second hold and must not be cut short.  stuck-key-timeout-ms therefore
- * defaults well above any deliberate hold; it turns "spams forever until I
- * unplug it" into a bounded burst.  Set it to 0 in devicetree to disable.
+ * Host auto-repeat is the only repeat this keyboard has, and holding backspace
+ * or an arrow to scroll is a legitimate multi-second hold that must not be cut
+ * short.  stuck-key-timeout-ms therefore defaults well above any deliberate
+ * hold, so a stranded key repeats for a bounded burst instead of until the
+ * keyboard is unplugged.  Set it to 0 in devicetree to disable.
  *
  * Called once per keyboard-thread iteration.  INQUIRY answers within ~250 ms
  * even when nothing is pressed, so the check runs at least that often.
@@ -886,7 +886,7 @@ static void process_scancode(const struct device *dev, uint8_t scancode)
      *
      * The toggle is guarded by a time debounce (CAPS_DEBOUNCE_MS), which drops
      * impossibly-fast repeats from line noise or reconnect echoes (the old
-     * "random caps on BLE"), and by a physical-parity check, which drops
+     * "random caps on BLE"), and by a switch-state check, which drops
      * same-direction duplicates and lets the tracker resync after a dropped
      * make/break byte.
      */
@@ -916,8 +916,8 @@ static void process_scancode(const struct device *dev, uint8_t scancode)
             k_msleep(CAPS_TAP_DWELL_MS);
             data->callback(dev, row, col, false);  /* release */
         } else {
-            /* Same physical parity as last time: reconnect echo, or a resync
-             * after a dropped make/break byte.  No toggle. */
+            /* Same switch state as last time (a reconnect echo, or a resync
+             * after a dropped make/break byte), so no toggle. */
             LOG_DBG("Caps Lock %s: duplicate parity ignored",
                     pressed ? "lock" : "unlock");
         }
@@ -954,15 +954,14 @@ static void process_scancode(const struct device *dev, uint8_t scancode)
     }
 }
 
-/* GPIO ISR: clock falling edge means the keyboard is starting a response */
 /*
- * Power-cycle the keyboard: the firmware version of unplugging the battery.
+ * Power-cycle the keyboard, which has the same effect as unplugging the
+ * battery.
  *
- * A browned-out or wedged M0110 stops answering altogether, and nothing the
- * host sends brings it back; only a fresh power-on does.  Both lines are held
- * low while the rail is off so the pull-ups cannot keep its MCU half-powered
- * through its I/O pins, then released before power returns so it boots with
- * the bus idle.
+ * A browned-out or wedged M0110 stops answering every command and recovers
+ * only from a fresh power-on.  Both lines are held low while the rail is off
+ * so the pull-ups cannot keep its MCU half-powered through its I/O pins, then
+ * released before power returns so it boots with the bus idle.
  */
 static void m0110_power_cycle(const struct device *dev)
 {
@@ -988,6 +987,7 @@ static void m0110_power_cycle(const struct device *dev)
     data->last_reply_time = k_uptime_get();
 }
 
+/* GPIO ISR: clock falling edge means the keyboard is starting a response */
 static void m0110_clock_isr(const struct device *port,
                             struct gpio_callback *cb,
                             uint32_t pins)

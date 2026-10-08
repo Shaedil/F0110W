@@ -51,7 +51,7 @@ do_west_update() {
     west update
 }
 
-# This repo lives at a path containing a space ("/Volumes/Project Backups/...").
+# This repo is at a path containing a space ("/Volumes/Project Backups/...").
 # Zephyr splits path lists on whitespace in several places and emits some paths
 # into the compiler/linker command line unquoted, so an unpatched tree cannot
 # build from here.  scripts/zephyr-space-path.patch fixes those sites.
@@ -91,7 +91,7 @@ do_build() {
 
     log_success "Build complete!"
 
-    # Copy firmware to repo root for easy access
+    # Copy the firmware to the repo root
     if [ -f "$REPO_ROOT/build/zephyr/zmk.uf2" ]; then
         cp "$REPO_ROOT/build/zephyr/zmk.uf2" "$REPO_ROOT/zmk_working.uf2"
         log_success "Firmware copied to: $REPO_ROOT/zmk_working.uf2"

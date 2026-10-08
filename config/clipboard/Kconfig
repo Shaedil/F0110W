@@ -42,10 +42,9 @@ config ZMK_CLIPBOARD_TTL_SEC
     default 120
     range 5 3600
     help
-      A clip that outlives its usefulness is a liability twice over: it is
-      someone's clipboard sitting in a keyboard, and it turns a paste on a
-      computer without the helper into typing long after the copy that
-      made sense of it.
+      A clip held longer than it is needed leaves someone's clipboard
+      sitting in the keyboard, and turns a paste on a computer without the
+      helper into typing long after the copy that made sense of it.
 
 config ZMK_CLIPBOARD_TYPE_DELAY_MS
     int "Milliseconds between HID reports while typing a clip"

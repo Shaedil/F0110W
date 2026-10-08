@@ -3,8 +3,8 @@
  *
  * SPDX-License-Identifier: MIT
  *
- * Why not ZMK's stock estimate
- * ----------------------------
+ * ZMK's stock estimate
+ * --------------------
  * The nice!nano v2 has no battery divider: ZMK reads VDDH, and VDDH is the
  * bq24072 charger's OUT rail, not the cell.  While the nice!nano's USB port has
  * VBUS, the bq24072 holds OUT at VBAT + 225 mV (datasheet: 150 to 270 mV), or
@@ -19,8 +19,8 @@
  * terminal voltage by I*R through the cell, JST and wiring.  VDDH therefore
  * sits above the resting cell voltage by the bq24072's offset plus that I*R.
  *
- * What this does instead
- * ----------------------
+ * This estimator
+ * --------------
  *  - Subtracts that combined offset while VBUS is present.  It varies from part
  *    to part and with wiring, so it is measured whenever two samples straddle a
  *    USB plug or unplug: the cell's charge cannot move far in that time, so the

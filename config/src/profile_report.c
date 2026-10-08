@@ -6,8 +6,8 @@
  *
  * ZMK stays connected to every paired computer at once and only routes key
  * reports to the active profile, so switching profile leaves every link up.
- * From a computer's side of the radio nothing happens: it stays connected,
- * and simply stops getting keys. This service is how it finds out.
+ * From a computer's side of the radio nothing happens: it stays connected and
+ * stops getting keys, and without this service it cannot tell why.
  *
  * One characteristic, readable and notifiable, holds two bytes:
  *

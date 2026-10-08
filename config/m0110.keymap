@@ -1,5 +1,5 @@
 /*
- * Apple M0110/M0110A Keyboard Keymap for ZMK
+ * Apple M0110/M0110A keyboard keymap for ZMK
  *
  * This keymap uses a matrix transform that maps 79 physical keys
  * to their positions in the M0110A scancode matrix (14x8).

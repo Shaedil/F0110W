@@ -1,5 +1,5 @@
 /*
- * M0110/M0110A Keyboard Converter Shield for nice!nano v2
+ * M0110/M0110A keyboard converter shield for nice!nano v2
  *
  * Pin connections:
  *   nice!nano D2 (P0.17) -> M0110 Data (directly to keyboard)
