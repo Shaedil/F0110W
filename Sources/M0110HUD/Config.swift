@@ -18,6 +18,10 @@ struct Config {
     /// over before the user had looked up, and seven still was.
     var hudDuration = 7.0
     var showDisconnect = true
+    /// Seconds the keyboard must stay gone before a disconnect is announced.
+    /// The link drops and re-forms in under two seconds several times a day,
+    /// and calling each of those a disconnect and a connect would be noise.
+    var disconnectGrace = 3.0
     /// Suppress the HUD for a keyboard that was already connected at launch.
     var suppressInitial = false
     /// Show a sample HUD immediately and exit-on-nothing; for tweaking the look.
@@ -74,6 +78,7 @@ struct Config {
         if d.object(forKey: "batteryMilestone") != nil { c.batteryMilestone = d.integer(forKey: "batteryMilestone") }
         if d.object(forKey: "hudDuration") != nil { c.hudDuration = d.double(forKey: "hudDuration") }
         if d.object(forKey: "showDisconnect") != nil { c.showDisconnect = d.bool(forKey: "showDisconnect") }
+        if d.object(forKey: "disconnectGrace") != nil { c.disconnectGrace = d.double(forKey: "disconnectGrace") }
         if d.object(forKey: "suppressInitial") != nil { c.suppressInitial = d.bool(forKey: "suppressInitial") }
         if d.object(forKey: "scale") != nil { c.scale = d.double(forKey: "scale") }
         if d.object(forKey: "insetX") != nil { c.insetX = d.double(forKey: "insetX") }
@@ -91,6 +96,7 @@ struct Config {
             case "--milestone":       if let v = it.next(), let n = Int(v) { c.batteryMilestone = n }
             case "--duration":        if let v = it.next(), let n = Double(v) { c.hudDuration = n }
             case "--no-disconnect":   c.showDisconnect = false
+            case "--disconnect-grace": if let v = it.next(), let n = Double(v), n >= 0 { c.disconnectGrace = n }
             case "--no-initial":      c.suppressInitial = true
             case "--scale":           if let v = it.next(), let n = Double(v) { c.scale = n }
             case "--inset-x":         if let v = it.next(), let n = Double(v) { c.insetX = n }
@@ -153,6 +159,9 @@ struct Config {
                             0 disables, leaving only the low-battery alert)
           --duration <sec>  how long the HUD stays visible (default: 7)
           --no-disconnect   don't show a HUD when the keyboard disconnects
+          --disconnect-grace <sec>  how long the keyboard must stay gone before
+                            a disconnect is announced; shorter drops are
+                            ignored (default: 3; 0 announces every drop)
           --no-initial      stay quiet if the keyboard is already connected at launch
           --scale <factor>  resize the whole HUD (default 1.0; try 0.85 or 1.2)
           --inset-x <pt>    inset of the right edge from the screen edge (default 110)

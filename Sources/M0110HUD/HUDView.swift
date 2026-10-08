@@ -201,9 +201,10 @@ final class HUDView: NSView {
         glyph.setTreatment(style.treatment, battery: battery)
     }
 
-    func animateBoard(_ style: HUDStyle, battery: Int?, reduced: Bool) {
+    /// `hold` is how long the HUD will stay up, which a crumble times its end to.
+    func animateBoard(_ style: HUDStyle, battery: Int?, reduced: Bool, hold: TimeInterval? = nil) {
         glyph.setTreatment(style.treatment, battery: battery)
-        glyph.play(style.motion, reduced: reduced)
+        glyph.play(style.motion, reduced: reduced, hold: hold)
     }
 
     /// Frames of the laid-out parts, for verifying geometry against a reference.

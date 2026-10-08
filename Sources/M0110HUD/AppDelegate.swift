@@ -213,6 +213,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.onBattery = { [weak self] name, level in
             self?.handleBattery(name: name, level: level)
         }
+        m.onProfile = { [weak self] name, active, own in
+            self?.handleProfileSwitch(name: name, active: active, own: own)
+        }
         monitor = m
 
         if config.clipboard {

@@ -44,12 +44,19 @@ final class SpinningBoardView: NSView {
     /// other way.
     private static let rockAngle: CGFloat = 22 * .pi / 180
 
-    /// The dust timeline, which the HUD's hold is cut to. The board is seen
-    /// whole for a beat, then crumbles; the HUD starts fading out so that its
-    /// fade and the last of the dust finish together.
+    /// The dust timeline. The board is seen whole for at least a beat, then
+    /// crumbles; the HUD starts fading out so that its fade and the last of
+    /// the dust finish together. A longer hold lengthens the beat, never the
+    /// crumble. `dustEnds` is the shortest hold that fits it all.
     static let dustBeat: TimeInterval = 0.6
     static let dustDuration: TimeInterval = 2.4
     static var dustEnds: TimeInterval { dustBeat + dustDuration }
+
+    /// How long the board stays whole before crumbling, for a HUD held `hold`.
+    static func dustBeat(hold: TimeInterval?) -> TimeInterval {
+        guard let hold else { return dustBeat }
+        return max(dustBeat, hold - dustDuration)
+    }
 
     /// Texture resolution. The art is around 2.6:1, so this is generous for a
     /// glyph-sized view and cheap enough to redraw when the theme changes.
@@ -145,10 +152,12 @@ final class SpinningBoardView: NSView {
     ///
     /// `reduced` is Reduce Motion: nothing turns and nothing flies, but the
     /// meaning survives as opacity, so the board still arrives on connect and
-    /// leaves on disconnect.
-    func play(_ motion: BoardMotion, reduced: Bool = false) {
+    /// leaves on disconnect. `hold` is how long the HUD stays up, which a
+    /// crumble times its end to; nil keeps the shortest timeline.
+    func play(_ motion: BoardMotion, reduced: Bool = false, hold: TimeInterval? = nil) {
         let node = board.boardNode
         let angle = currentAngle
+        let dustBeat = Self.dustBeat(hold: hold)
         node.removeAction(forKey: Self.spinKey)
         dissolve.reset()
         node.opacity = 1
@@ -164,7 +173,7 @@ final class SpinningBoardView: NSView {
                 node.runAction(.sequence([.wait(duration: 0.1), .fadeIn(duration: 0.3)]),
                                forKey: Self.spinKey)
             case .dust:
-                node.runAction(.sequence([.wait(duration: Self.dustBeat),
+                node.runAction(.sequence([.wait(duration: dustBeat),
                                           .fadeOut(duration: Self.dustDuration)]),
                                forKey: Self.spinKey)
             case .rock, .wake, .settle, .still:
@@ -201,7 +210,7 @@ final class SpinningBoardView: NSView {
         case .dust:
             // Ease back to rest while it crumbles; the board is seen whole
             // for a beat before it goes.
-            let crumble = SCNAction.sequence([.wait(duration: Self.dustBeat),
+            let crumble = SCNAction.sequence([.wait(duration: dustBeat),
                                               dissolve.crumble(duration: Self.dustDuration)])
             let parts = [Self.settle(from: angle), crumble].compactMap { $0 }
             node.runAction(.group(parts), forKey: Self.spinKey)

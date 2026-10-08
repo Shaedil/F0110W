@@ -38,6 +38,18 @@ drives the real connect, disconnect and battery handlers by hand, and rebuilds
 and relaunches on every save under `Sources/`, putting the last HUD back on
 screen.
 
+## When a HUD shows
+
+- **Connected**: the keyboard appears, once its battery is read.
+- **Disconnected**: the keyboard has been gone for 3 seconds
+  (`--disconnect-grace`). Shorter drops happen several times a day and the
+  link re-forms on its own, so they show nothing either way.
+- **Moved to … / Moved back**: the keyboard switched Bluetooth profile away
+  from this Mac, or back to it. ZMK keeps every profile's link up, so this
+  needs firmware with the profile report (`config/src/profile_report.c`);
+  older firmware never shows these. Profiles are named in Settings.
+- **Battery**: each 10% step down, the low-battery alert, and an empty battery.
+
 ## Clipboard
 
 With firmware that has the clipboard service, text copied on this Mac goes

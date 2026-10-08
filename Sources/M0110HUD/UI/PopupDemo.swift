@@ -64,7 +64,8 @@ struct PopupDemoView: View {
                 if !snapshot {
                     HUDPreview(kind: sample.kind, battery: sample.battery, detail: sample.detail,
                                name: deviceName.isEmpty ? "M0110" : deviceName,
-                               scale: scale, playing: visible && active)
+                               scale: scale, playing: visible && active,
+                               hold: max(duration, 0.5))
                         .id(scale)
                         .fixedSize()
                         .shadow(color: .black.opacity(0.28), radius: 12 * scale, y: 4 * scale)
@@ -163,6 +164,8 @@ private struct HUDPreview: NSViewRepresentable {
     let name: String
     let scale: Double
     let playing: Bool
+    /// How long the sample stays up, which a crumble times its end to.
+    let hold: TimeInterval
 
     final class Host: NSView {
         let hud: HUDView
@@ -214,7 +217,8 @@ private struct HUDPreview: NSViewRepresentable {
             let style = HUDStyle.defaults[kind]!
             host.hud.setSpinning(true)
             host.hud.animateBoard(style, battery: battery,
-                                  reduced: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+                                  reduced: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                                  hold: hold)
         } else if !playing && host.playing {
             host.hud.setSpinning(false)
         }

@@ -297,9 +297,9 @@ final class HUDController {
             }
         }
 
-        view.setSpinning(true)
-        view.animateBoard(style, battery: battery, reduced: reduced)
         holdFor = Self.hold(for: style, configured: duration)
+        view.setSpinning(true)
+        view.animateBoard(style, battery: battery, reduced: reduced, hold: holdFor)
         scheduleDismiss()
         onShow?(kind, name, battery)
     }
@@ -342,14 +342,18 @@ final class HUDController {
     /// How long the HUD on screen holds, set per show.
     private var holdFor: TimeInterval = 0
 
-    /// The configured hold, except for a board that crumbles away: an empty
-    /// capsule left standing after the dust reads as stuck. That hold ends
-    /// the moment the last of the board is gone, so the HUD fades out while
-    /// the loose grains are still drifting off. Starting the fade any earlier
-    /// cut into the crumble itself.
+    /// The configured hold, never shorter than a crumble takes. A board that
+    /// crumbles away does so at the end of the hold rather than the start, so
+    /// the hold still ends the moment the last of it is gone: an empty capsule
+    /// left standing after the dust reads as stuck, and starting the fade any
+    /// earlier cut into the crumble itself.
+    ///
+    /// This used to cut the hold to the crumble instead, which put a
+    /// disconnect on screen for three seconds against seven for a connect, and
+    /// it was routinely gone before anyone looked up.
     static func hold(for style: HUDStyle, configured: TimeInterval) -> TimeInterval {
         guard style.motion == .dust else { return configured }
-        return min(configured, SpinningBoardView.dustEnds)
+        return max(configured, SpinningBoardView.dustEnds)
     }
 
     private func scheduleDismiss() {
