@@ -181,6 +181,7 @@ static inline bool m0110_on_usb_power(void)
 #define DATA_HOLD_US        100   /* Hold time after last bit before releasing */
 #define REQUEST_WAIT_MS     250   /* Max wait for keyboard to acknowledge command */
 #define INIT_DELAY_MS       1000  /* Keyboard boot time after power-on */
+#define POWER_CYCLE_OFF_MS  500   /* Rail-off time for a recovery power-cycle */
 
 /*
  * Error-recovery pauses.
@@ -226,7 +227,8 @@ struct kscan_m0110_config {
     uint32_t idle_timeout_ms;        /* Inactivity before entering power-save mode */
     uint32_t peek_interval_ms;       /* How often to wake keyboard during power-save */
     uint32_t stuck_key_timeout_ms;   /* Force-release a key held this long (0 = never) */
-    uint8_t rows;                    /* Virtual matrix row count (14 for M0110A) */
+    uint32_t recover_timeout_ms;     /* Power-cycle after this long with no reply (0 = never) */
+    uint8_t rows;                   /* Virtual matrix row count (14 for M0110A) */
     uint8_t columns;                 /* Virtual matrix column count (8 for M0110A) */
 };
 
@@ -254,6 +256,7 @@ struct kscan_m0110_data {
     bool caps_lock_down;             /* Physical locking switch state for dedup */
     bool power_save;                 /* True when 5V boost is off, keyboard unpowered */
     int64_t last_key_time;           /* Uptime (ms) of last key event, for idle timeout */
+    int64_t last_reply_time;         /* Uptime (ms) of last valid reply, for recovery */
     int64_t caps_last_ms;            /* Uptime (ms) of last accepted caps toggle (debounce) */
     /*
      * Bitmap of positions currently reported to ZMK as held (bit N of
@@ -952,6 +955,39 @@ static void process_scancode(const struct device *dev, uint8_t scancode)
 }
 
 /* GPIO ISR: clock falling edge means the keyboard is starting a response */
+/*
+ * Power-cycle the keyboard: the firmware version of unplugging the battery.
+ *
+ * A browned-out or wedged M0110 stops answering altogether, and nothing the
+ * host sends brings it back; only a fresh power-on does.  Both lines are held
+ * low while the rail is off so the pull-ups cannot keep its MCU half-powered
+ * through its I/O pins, then released before power returns so it boots with
+ * the bus idle.
+ */
+static void m0110_power_cycle(const struct device *dev)
+{
+    struct kscan_m0110_data *data = dev->data;
+    const struct kscan_m0110_config *config = dev->config;
+
+    LOG_WRN("M0110 gave no reply for %u ms: power-cycling it",
+            config->recover_timeout_ms);
+
+    release_all_keys(dev);
+    clear_buffers(data);
+
+    boost_set(dev, false);
+    clock_lo(dev);
+    data_lo(dev);
+    k_msleep(POWER_CYCLE_OFF_MS);
+
+    idle(dev);
+    boost_set(dev, true);
+    k_msleep(INIT_DELAY_MS); /* wait for M0110 MCU to boot */
+
+    k_sem_reset(&data->data_ready);
+    data->last_reply_time = k_uptime_get();
+}
+
 static void m0110_clock_isr(const struct device *port,
                             struct gpio_callback *cb,
                             uint32_t pins)
@@ -1007,6 +1043,7 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
                 k_msleep(INIT_DELAY_MS); /* wait for M0110 MCU to boot */
                 data->power_save = false;
                 data->last_key_time = k_uptime_get();
+                data->last_reply_time = data->last_key_time;
                 k_sem_reset(&data->data_ready);
                 LOG_INF("M0110 on USB power: leaving power-save");
                 continue;
@@ -1021,6 +1058,7 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
                 /* Key detected: exit power save */
                 data->power_save = false;
                 data->last_key_time = k_uptime_get();
+                data->last_reply_time = data->last_key_time;
                 k_sem_reset(&data->data_ready);
                 data->rawbuf = raw; /* process on next recv_key call */
                 LOG_INF("M0110 wake: key activity detected");
@@ -1046,6 +1084,16 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
 
         /* Bound how long any key can stay held without its break byte. */
         release_stuck_keys(dev);
+
+        /* Any valid reply, NULL included, means the keyboard is alive. */
+        if (scancode != M0110_ERROR) {
+            data->last_reply_time = k_uptime_get();
+        } else if (config->en_gpio.port != NULL && config->recover_timeout_ms != 0 &&
+                   k_uptime_get() - data->last_reply_time >
+                       (int64_t)config->recover_timeout_ms) {
+            m0110_power_cycle(dev);
+            continue;
+        }
 
         if (scancode != M0110_NULL && scancode != M0110_ERROR) {
             data->last_key_time = k_uptime_get();
@@ -1087,6 +1135,7 @@ static int kscan_m0110_enable_callback(const struct device *dev)
     data->enabled = true;
     data->power_save = false;
     data->last_key_time = k_uptime_get();
+    data->last_reply_time = data->last_key_time;
     boost_set(dev, true);
 
     return 0;
@@ -1123,6 +1172,7 @@ static int kscan_m0110_init(const struct device *dev)
     data->caps_lock_down = false;
     data->power_save = false;
     data->last_key_time = 0;
+    data->last_reply_time = 0;
     data->caps_last_ms = 0;
 
     for (uint8_t i = 0; i < M0110_MAX_ROWS; i++) {
@@ -1222,6 +1272,7 @@ static const struct kscan_driver_api kscan_m0110_api = {
         .peek_interval_ms = DT_INST_PROP(n, peek_interval_ms),                \
         .stuck_key_timeout_ms = DT_INST_PROP_OR(n, stuck_key_timeout_ms,       \
                                     DEFAULT_STUCK_KEY_TIMEOUT_MS),             \
+        .recover_timeout_ms = DT_INST_PROP(n, recover_timeout_ms),             \
         .rows = DT_INST_PROP(n, rows),                                         \
         .columns = DT_INST_PROP(n, columns),                                   \
     };                                                                         \

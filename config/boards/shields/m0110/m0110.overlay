@@ -4,7 +4,7 @@
  * Pin connections:
  *   nice!nano D2 (P0.17) -> M0110 Data (directly to keyboard)
  *   nice!nano D3 (P0.20) -> M0110 Clock (directly to keyboard)
- *   nice!nano D1 (P0.06) -> bq25185 boost EN pad (optional, for power mgmt)
+ *   nice!nano P0.31 ("031") -> bq25185 board boost EN pad
  *   bq25185 5V out        -> M0110 +5V
  *   nice!nano GND          -> M0110 GND
  *
@@ -31,16 +31,16 @@
         data-gpios = <&gpio0 17 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
         clock-gpios = <&gpio0 20 (GPIO_ACTIVE_HIGH | GPIO_PULL_UP)>;
 
-        /* bq25185 boost EN: D1 (P0.06) driven high to power the M0110's
-         * +5V rail on battery.  Without this the matrix is unpowered off-USB,
-         * so BLE connects but no keys register. */
-        en-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+        /* bq25185 board boost EN on P0.31.  The board pulls EN up (100k to
+         * its VSYS), so the M0110 is powered unless this pin drives it low.
+         * The driver holds it high and only drops it to power-cycle an
+         * M0110 that has stopped answering (recover-timeout-ms). */
+        en-gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
 
         /* Power-save off.  Its only way back out is a key caught by one
-         * INSTANT every few seconds.  After two idle days on battery, BLE
-         * stayed connected but none of the typing reached ZMK.  It also
-         * saved nothing, because the EN pad has no copper on this PCB and
-         * the boost never actually turns off. */
+         * INSTANT every few seconds, and with the M0110 unpowered a key
+         * pressed in between is never seen at all.  After two idle days on
+         * battery, BLE stayed connected but none of the typing reached ZMK. */
         idle-timeout-ms = <0>;
 
         /* Matrix dimensions for M0110A (14 rows x 8 cols = 112 positions) */

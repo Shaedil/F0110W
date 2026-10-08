@@ -10,3 +10,16 @@ config ZMK_BATTERY_REPORT_WHILE_IDLE
 	  keep reading the level from the last time anyone typed.  This keeps
 	  refreshing the BLE Battery Service on ZMK's report interval until
 	  the next key.
+
+DT_CHOSEN_M0110_STUDIO_RPC_UART := zmk,studio-rpc-uart
+
+config ZMK_STUDIO_TRANSPORT_UART_NONBLOCKING
+	bool "Studio serial transport whose TX callback cannot stall the USB work queue"
+	default y
+	depends on ZMK_STUDIO_RPC && !ZMK_STUDIO_TRANSPORT_UART && UART_INTERRUPT_DRIVEN
+	depends on $(dt_chosen_enabled,$(DT_CHOSEN_M0110_STUDIO_RPC_UART))
+	help
+	  Replaces ZMK's own serial transport, which must be turned off with
+	  CONFIG_ZMK_STUDIO_TRANSPORT_UART=n.  ZMK's version spins on the USB
+	  work queue whenever a reply outgrows the CDC ring buffer, and the
+	  keyboard locks up until it loses power.

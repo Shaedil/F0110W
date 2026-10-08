@@ -70,6 +70,16 @@ properties:
       needs ~1 s to boot each time, so very short intervals reduce savings.
       Default is 5 seconds.
 
+  recover-timeout-ms:
+    type: int
+    default: 5000
+    description: |
+      Power-cycle the keyboard (requires en-gpios) after it has given no valid
+      reply for this many milliseconds.  A browned-out or wedged M0110 stops
+      answering altogether and only a fresh power-on brings it back, which
+      otherwise means unplugging the battery.  A healthy keyboard answers every
+      INQUIRY within 250 ms, even when idle.  Set to 0 to disable.
+
   stuck-key-timeout-ms:
     type: int
     default: 10000
