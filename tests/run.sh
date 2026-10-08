@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Host-side tests for the battery estimator and the clipboard module. No Zephyr
-# workspace needed.
+# Host-side tests for the battery estimator, the clipboard module and the
+# profile report. No Zephyr workspace needed.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,3 +41,10 @@ pure=("$root/config/clipboard/clip_proto.c" "$root/config/clipboard/clip_text.c"
     -o "$out/clipboard_sim_small" \
     "$here/clipboard_sim_test.c" "${pure[@]}"
 "$out/clipboard_sim_small"
+
+# profile_report.c, against the same fakes.
+"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
+    -I "$here/fake" \
+    -o "$out/profile_report_test" \
+    "$here/profile_report_test.c"
+"$out/profile_report_test"

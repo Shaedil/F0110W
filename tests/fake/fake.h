@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: MIT
  *
  * A stand-in for the parts of Zephyr and ZMK that config/clipboard/clipboard.c
- * uses, so the real file can be compiled and driven on a host.
+ * and config/src/profile_report.c use, so the real files can be compiled and
+ * driven on a host.
  *
- * Every Zephyr and ZMK header clipboard.c includes resolves to a stub next to
- * this file that includes it. Declarations only; clipboard_sim_test.c holds
- * the behaviour: a work queue on a virtual clock, a model of ZMK's HID state,
- * and fake Bluetooth connections.
+ * Every Zephyr and ZMK header those files include resolves to a stub next to
+ * this file that includes it. Declarations only; clipboard_sim_test.c and
+ * profile_report_test.c hold the behaviour: a work queue on a virtual clock, a
+ * model of ZMK's HID state, and fake Bluetooth connections.
  */
 
 #pragma once
@@ -43,6 +44,7 @@
 #define BUILD_ASSERT(cond, msg) _Static_assert(cond, msg)
 
 #define LOG_MODULE_REGISTER(...) _Static_assert(1, "")
+#define LOG_MODULE_DECLARE(...) _Static_assert(1, "")
 /* Swallows the message but still counts its arguments as used, as the real
  * macros do. */
 static inline void fake_log(const char *format, ...) { (void)format; }
@@ -101,6 +103,8 @@ typedef struct {
 struct bt_conn;
 
 struct bt_gatt_attr {
+    ssize_t (*read)(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+                    uint16_t len, uint16_t offset);
     ssize_t (*write)(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
                      uint16_t len, uint16_t offset, uint8_t flags);
     void (*ccc_changed)(const struct bt_gatt_attr *attr, uint16_t value);
@@ -119,6 +123,7 @@ struct bt_conn_cb {
 #define BT_UUID_128_ENCODE(...) 0
 #define BT_UUID_DECLARE_128(...) NULL
 
+#define BT_GATT_CHRC_READ 0x02
 #define BT_GATT_CHRC_WRITE 0x08
 #define BT_GATT_CHRC_WRITE_WITHOUT_RESP 0x04
 #define BT_GATT_CHRC_NOTIFY 0x10
@@ -138,7 +143,7 @@ struct bt_conn_cb {
 #define BT_GATT_PRIMARY_SERVICE(uuid)                                                              \
     { 0 }
 #define BT_GATT_CHARACTERISTIC(uuid, props, perm, _read, _write, value)                            \
-    {0}, { .write = _write }
+    {0}, { .read = _read, .write = _write }
 #define BT_GATT_CCC(changed, perm)                                                                 \
     { .ccc_changed = changed }
 #define BT_GATT_SERVICE_DEFINE(name, ...)                                                          \
@@ -148,7 +153,12 @@ struct bt_conn_cb {
 
 #define BT_CONN_CB_DEFINE(name) static struct bt_conn_cb name __attribute__((unused))
 
+#define BT_CONN_TYPE_LE 0x01
+#define BT_CONN_ROLE_CENTRAL 0
+#define BT_CONN_ROLE_PERIPHERAL 1
+
 struct bt_conn_info {
+    uint8_t role;
     struct {
         uint16_t interval; /* units of 1.25 ms */
     } le;
@@ -161,6 +171,10 @@ const bt_addr_le_t *bt_conn_get_dst(const struct bt_conn *conn);
 uint16_t bt_gatt_get_mtu(struct bt_conn *conn);
 int bt_gatt_notify(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *data,
                    uint16_t len);
+ssize_t bt_gatt_attr_read(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+                          uint16_t buf_len, uint16_t offset, const void *value,
+                          uint16_t value_len);
+void bt_conn_foreach(int type, void (*func)(struct bt_conn *conn, void *data), void *data);
 
 /* ---- dt-bindings/zmk ---- */
 
@@ -186,6 +200,7 @@ int bt_gatt_notify(struct bt_conn *conn, const struct bt_gatt_attr *attr, const 
 #define ZMK_BLE_PROFILE_COUNT 5
 
 int zmk_ble_profile_index(const bt_addr_le_t *addr);
+int zmk_ble_active_profile_index(void);
 bt_addr_le_t *zmk_ble_profile_address(uint8_t index);
 bool zmk_ble_profile_is_connected(uint8_t index);
 struct bt_conn *zmk_ble_active_profile_conn(void);
@@ -272,6 +287,16 @@ struct zmk_endpoint_changed_event {
     struct zmk_endpoint_changed data;
 };
 
+struct zmk_ble_active_profile_changed {
+    uint8_t index;
+};
+
+struct zmk_ble_active_profile_changed_event {
+    zmk_event_t header;
+    struct zmk_ble_active_profile_changed data;
+};
+
+extern const struct zmk_event_type zmk_event_zmk_ble_active_profile_changed;
 extern const struct zmk_event_type zmk_event_zmk_keycode_state_changed;
 extern const struct zmk_event_type zmk_event_zmk_endpoint_changed;
 extern const struct zmk_event_type zmk_event_zmk_position_state_changed;
@@ -294,6 +319,13 @@ static inline const struct zmk_keycode_state_changed *
 as_zmk_keycode_state_changed(const zmk_event_t *eh) {
     return eh->event == &zmk_event_zmk_keycode_state_changed
                ? &((const struct zmk_keycode_state_changed_event *)eh)->data
+               : NULL;
+}
+
+static inline const struct zmk_ble_active_profile_changed *
+as_zmk_ble_active_profile_changed(const zmk_event_t *eh) {
+    return eh->event == &zmk_event_zmk_ble_active_profile_changed
+               ? &((const struct zmk_ble_active_profile_changed_event *)eh)->data
                : NULL;
 }
 

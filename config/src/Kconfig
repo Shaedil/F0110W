@@ -23,3 +23,14 @@ config ZMK_STUDIO_TRANSPORT_UART_NONBLOCKING
 	  CONFIG_ZMK_STUDIO_TRANSPORT_UART=n.  ZMK's version spins on the USB
 	  work queue whenever a reply outgrows the CDC ring buffer, and the
 	  keyboard locks up until it loses power.
+
+config ZMK_PROFILE_REPORT
+	bool "Tell connected computers which Bluetooth profile is active"
+	default y
+	depends on ZMK_BLE
+	help
+	  Switching profile leaves every Bluetooth link up, so a computer the
+	  keyboard has moved away from cannot tell: it stays connected and
+	  gets no keys.  This adds a GATT service that notifies each connected
+	  computer of the active profile and of its own, so a helper such as
+	  the M0110 HUD can say where the keyboard went.

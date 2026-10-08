@@ -87,6 +87,17 @@ without any of it.
 ./tests/run.sh              # host tests, no Zephyr needed
 ```
 
+## Profile report
+
+ZMK stays connected to every paired computer and only sends keys to the active
+profile, so a computer the keyboard has been switched away from still shows it
+as connected and simply gets no keys. A small GATT service tells each
+connected computer which profile is active and which one is its own, and
+notifies it on every switch. The M0110HUD app uses it to say "Moved to …" and
+"Moved back". It needs an encrypted link, like the clipboard.
+`config/src/profile_report.c` has the format, and
+`CONFIG_ZMK_PROFILE_REPORT=n` leaves it out.
+
 ## License
 
 MIT
