@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Host-side tests for the battery estimator, the clipboard module and the
-# profile report. No Zephyr workspace needed.
+# Host-side tests for the M0110 wire decoder, the battery estimator, the
+# clipboard module and the profile report. No Zephyr workspace needed.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,6 +10,12 @@ out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 
 : "${CC:=cc}"
+
+"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
+    -o "$out/m0110_decode_test" \
+    "$here/m0110_decode_test.c" \
+    "$root/config/drivers/kscan/m0110_decode.c"
+"$out/m0110_decode_test"
 
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
     -o "$out/battery_estimator_test" \

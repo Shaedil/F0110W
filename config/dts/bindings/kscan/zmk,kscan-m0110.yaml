@@ -37,14 +37,6 @@ properties:
     required: true
     description: GPIO connected to the M0110 clock line (directly to keyboard)
 
-  poll-period-ms:
-    type: int
-    default: 5
-    description: |
-      Deprecated; ignored by the interrupt-driven driver.
-      The driver now uses INQUIRY with a clock-line interrupt instead of
-      polling, so the CPU sleeps between key events.
-
   en-gpios:
     type: phandle-array
     description: |

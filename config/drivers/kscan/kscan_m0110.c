@@ -1,31 +1,22 @@
 /*
  * Copyright (c) 2024 M0110 ZMK Driver
- * Based on TMK m0110.c by Jun Wako <wakojun@gmail.com>
  *
  * SPDX-License-Identifier: MIT
  *
  * Apple M0110/M0110A keyboard converter for ZMK (Zephyr RTOS).
  *
- * Protocol overview
- * -----------------
- * The M0110 uses a 2-wire synchronous serial protocol (clock + data).
- * The keyboard drives the clock line; the data line is bidirectional.
+ * This file is the transport half of the driver: it works the two-wire bus,
+ * turns key events into ZMK kscan positions, and owns the power and error
+ * handling around both.  Understanding a stream of bytes as key events belongs
+ * to m0110_decode.c, which has no I/O in it and is tested on the host by
+ * tests/m0110_decode_test.c.  docs/m0110-protocol.md is the specification
+ * both are written against.
  *
- * Wire byte format (keyboard -> host):
- *   Bit 7:    break flag  (1 = release, 0 = press)
- *   Bits 6-1: key code, left-shifted by one
- *   Bit 0:    always 1  (used as a frame check; see FRAME_OK)
- *
- * The host sends commands (INQUIRY, INSTANT, etc.) and the keyboard
- * responds with raw key bytes or special status codes.
- *
- * Multi-byte sequences:
- *   - Keypad / arrow keys are prefixed with 0x79 (KEYPAD prefix).
- *   - Shift + keypad combos are prefixed with 0x71 (SHIFT prefix).
- *
- * This driver converts raw wire bytes to 7-bit scancodes (via RAW2SCAN),
- * then maps each scancode to a virtual 14x8 matrix for ZMK's kscan API:
- *   row = scancode >> 3,  col = scancode & 7
+ * ZMK wants a matrix and this keyboard has none, only 7-bit scancodes over a
+ * wire.  The driver invents one: eight columns wide, so a scancode's row is
+ * its top bits and its column is its low three.  That width puts the keypad
+ * and calc blocks on whole-row boundaries; see M0110_BLOCK_PAD in
+ * m0110_decode.h.
  */
 
 #define DT_DRV_COMPAT zmk_kscan_m0110
@@ -37,6 +28,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/irq.h>
+
+#include "m0110_decode.h"
 
 #if IS_ENABLED(CONFIG_ZMK_USB)
 #include <zmk/usb.h>
@@ -61,69 +54,23 @@ static inline bool m0110_on_usb_power(void)
 #endif
 }
 
-/*
- * M0110 host-to-keyboard commands.
- * The host sends these to request data or actions from the keyboard.
- */
-#define M0110_INQUIRY       0x10  /* Report next key event, or NULL after ~250ms */
-#define M0110_INSTANT       0x14  /* Report key state immediately (no wait) */
-#define M0110_MODEL         0x16  /* Report keyboard model number */
-#define M0110_TEST          0x36  /* Run keyboard self-test */
-
-/*
- * M0110 keyboard-to-host response codes.
- * These are special raw bytes with protocol meaning, not regular key scancodes.
- */
-#define M0110_NULL          0x7B  /* No key event pending (INQUIRY timeout) */
-#define M0110_KEYPAD        0x79  /* Prefix: next byte is a keypad/arrow key */
-#define M0110_TEST_ACK      0x7D  /* Self-test passed */
-#define M0110_TEST_NAK      0x77  /* Self-test failed */
-#define M0110_SHIFT         0x71  /* Prefix: shift key involved in this event */
-
-/*
- * M0110A arrow key codes (appear after a KEYPAD prefix byte).
- * On the M0110A, arrow keys are encoded as keypad keys and are
- * sent as two-byte sequences: KEYPAD prefix + arrow code.
- */
-#define M0110_ARROW_UP      0x1B
-#define M0110_ARROW_DOWN    0x11
-#define M0110_ARROW_LEFT    0x0D
-#define M0110_ARROW_RIGHT   0x05
-
-/* Sentinel value returned by m0110_recv() on communication failure */
-#define M0110_ERROR         0xFF
-
-/*
- * Virtual scancode offsets.
- *
- * The M0110 has no physical key matrix; it sends 7-bit scancodes over
- * serial.  This driver creates a virtual 14x8 matrix by splitting each
- * scancode: row = code >> 3, col = code & 0x07.
- *
- * Keypad and arrow keys arrive as multi-byte sequences (prefixed by
- * M0110_KEYPAD).  After conversion, an offset is added to place them
- * in distinct regions of the virtual matrix:
- *
- *   0x00-0x3F  Main keyboard keys  (rows 0-7)
- *   0x40-0x5F  Keypad keys         (rows 8-11,  + KEYPAD_OFFSET)
- *   0x60-0x6F  Arrow/calc keys     (rows 12-13, + CALC_OFFSET)
- */
-#define M0110_KEYPAD_OFFSET 0x40
-#define M0110_CALC_OFFSET   0x60
+/* Width of the virtual matrix; see the top of this file. */
+#define M0110_MATRIX_COLUMNS 8
 
 /*
  * Upper bound on virtual matrix rows (see `rows`/`columns` in devicetree,
- * 14 for the M0110A).  Used to size the held-key bitmap that lets us
+ * 14 for the M0110A).  Used to size the held-key bitmap that lets the driver
  * force-release stuck keys after a protocol error.
  */
 #define M0110_MAX_ROWS      14
 
 /*
- * Caps Lock scancode after RAW2SCAN conversion.
- * The M0110 has a physically locking caps lock switch, so the driver
- * converts each state transition into a press+release tap for the OS.
+ * Key events decoded during one exchange, held until it ends so a protocol
+ * error can release the keys already held before the new events apply.  One
+ * byte yields at most three events, and the keyboard queues only a couple of
+ * transitions, so 16 is never reached in practice.
  */
-#define M0110_CAPS_LOCK     0x39
+#define M0110_EVENT_BUFFER  16
 
 /*
  * Caps Lock tap tuning.
@@ -140,38 +87,25 @@ static inline bool m0110_on_usb_power(void)
 #define CAPS_DEBOUNCE_MS    150
 
 /*
- * Raw wire byte layout from the M0110:
- *   Bit 7:    1 = key release (break), 0 = key press (make)
- *   Bits 6-1: key identifier (scancode << 1)
- *   Bit 0:    always 1
- *
- * Bit 0 is set on every byte, whatever the value of bit 7: every key code the
- * keyboard can send is odd (A=0x01, S=0x03, Space=0x63, Shift=0x71,
- * Backtick=0x65, ...), as is every protocol response (NULL=0x7B,
- * KEYPAD=0x79, SHIFT=0x71, TEST_ACK=0x7D, TEST_NAK=0x77).  A break byte is its
- * make byte | 0x80, so it is odd too.  That makes bit 0 a free one-bit frame
- * check on every byte; see FRAME_OK() and m0110_recv().
+ * Every byte the keyboard sends has bit 0 set: key bytes carry the key code in
+ * bits 6-1 with bit 0 set, and the protocol replies (0x7B, 0x79, 0x71, 0x7D,
+ * 0x77) are odd too.  A byte with bit 0 clear was misread, so bit 0 is a free
+ * one-bit frame check on every byte; see m0110_read_byte().
  */
-#define KEY(raw)        ((raw) & 0x7f)        /* Strip break bit, keep key ID */
-#define IS_BREAK(raw)   (((raw) & 0x80) == 0x80)  /* True if key release */
-#define FRAME_OK(raw)   (((raw) & 0x01) == 0x01)  /* Bit 0 invariant holds */
-
-/*
- * Convert raw wire byte to scancode.
- * Preserves the break bit (7) and right-shifts the key ID by 1 to undo
- * the M0110's left-shift encoding.  Passes through NULL and ERROR sentinels.
- */
-#define RAW2SCAN(raw)   (((raw) == M0110_NULL) ? M0110_NULL : \
-                         (((raw) == M0110_ERROR) ? M0110_ERROR : \
-                          (((raw) & 0x80) | (((raw) & 0x7F) >> 1))))
+static inline bool frame_ok(uint8_t wire)
+{
+    return (wire & 0x01) != 0;
+}
 
 /*
  * Serial protocol timing constants, derived from Apple's M0110 technical spec
  * and validated against real hardware.
  *
- * The keyboard clocks bits at ~5 kHz (~180 us per half-cycle).  The per-bit
- * timeouts below are generous (5-6x nominal) real-microsecond budgets: the
- * sampling loop reads the GPIO directly (~1 us per poll) instead of
+ * The keyboard always drives the clock.  It sends each bit to the host as
+ * ~160 us of clock low then ~180 us of clock high (~340 us a bit), and clocks
+ * bits from the host at ~180 us low and ~220 us high.  The per-bit timeouts
+ * below are 1000 us, about 4.5-6x those phases, as real-microsecond budgets:
+ * the sampling loop reads the GPIO directly (~1 us per poll) instead of
  * reconfiguring the pin each time, so the counters track wall-clock time and
  * must allow for slow specimens, noisy lines and interrupt jitter without
  * timing out mid-byte.
@@ -189,7 +123,7 @@ static inline bool m0110_on_usb_power(void)
  * A failed exchange can leave the keyboard mid-byte or wedged, so we back off
  * before driving the lines again.  No input is read during these pauses (the
  * M0110 only buffers a couple of transitions), so each is kept to what its
- * case needs: one whole byte is ~2.6 ms on the wire (8 bits at ~330 us).  The
+ * case needs: one whole byte is ~2.7 ms on the wire (8 bits at ~340 us).  The
  * old blanket 500 ms pause lost half a second of typing on every glitch, and
  * on BLE, where glitches are far more frequent, that was a large part of the
  * perceived unreliability.
@@ -232,25 +166,18 @@ struct kscan_m0110_config {
     uint8_t columns;                 /* Virtual matrix column count (8 for M0110A) */
 };
 
-/*
- * Mutable runtime state, one instance per device.
- *
- * Key buffering: the M0110 protocol packs multiple logical key events
- * into single multi-byte exchanges (e.g., shift+keypad = 3 wire bytes
- * but produces separate shift and keypad scancodes).  The driver
- * unpacks these into keybuf/keybuf2 and returns them one per call
- * to m0110_recv_key().  rawbuf holds a raw wire byte that couldn't
- * be fully processed yet (e.g., a second shift byte).
- */
+/* Mutable runtime state, one instance per device. */
 struct kscan_m0110_data {
     const struct device *dev;        /* Back-pointer for ISR -> device lookup */
     kscan_callback_t callback;       /* ZMK kscan callback (row, col, pressed) */
     struct k_thread thread;          /* Dedicated keyboard communication thread */
     struct k_sem data_ready;         /* Signaled by clock ISR when keyboard responds */
     struct gpio_callback clock_cb;   /* GPIO interrupt callback for clock line */
-    uint8_t keybuf;                  /* First buffered scancode from multi-byte event */
-    uint8_t keybuf2;                 /* Second buffered scancode (shift+arrow combos) */
-    uint8_t rawbuf;                  /* Unprocessed raw wire byte for next iteration */
+    struct m0110_decoder decoder;    /* Wire bytes in, key events out */
+    struct m0110_key_event events[M0110_EVENT_BUFFER]; /* Decoded this exchange */
+    uint8_t event_count;
+    uint8_t peeked_wire;             /* First byte of a sequence read by a power-save peek */
+    bool has_peeked_wire;
     uint8_t error;                   /* Last protocol error code (0 = no error) */
     bool enabled;                    /* Scanning active (set by enable/disable API) */
     bool caps_lock_down;             /* Physical locking switch state for dedup */
@@ -269,69 +196,58 @@ struct kscan_m0110_data {
      * Uptime (ms) at which each held position was last reported pressed, so
      * release_stuck_keys() can expire one whose "break" byte never arrived.
      */
-    uint32_t pressed_at_ms[M0110_MAX_ROWS][8];
+    uint32_t pressed_at_ms[M0110_MAX_ROWS][M0110_MATRIX_COLUMNS];
 };
 
-/* Forward declarations */
-static int m0110_send(const struct device *dev, uint8_t data);
-static uint8_t m0110_recv(const struct device *dev);
+/*
+ * Bus access.  Both lines are open-drain with pull-ups: a side drives a line
+ * by pulling it low and lets go by floating it.
+ */
+enum m0110_line {
+    M0110_LINE_CLOCK,
+    M0110_LINE_DATA,
+};
 
-/* GPIO helpers */
-static inline void clock_lo(const struct device *dev)
+static const struct gpio_dt_spec *line_spec(const struct device *dev, enum m0110_line line)
 {
     const struct kscan_m0110_config *config = dev->config;
-    gpio_pin_configure_dt(&config->clock_gpio, GPIO_OUTPUT_LOW);
+
+    return (line == M0110_LINE_CLOCK) ? &config->clock_gpio : &config->data_gpio;
 }
 
-static inline void clock_hi(const struct device *dev)
+static inline void line_assert(const struct device *dev, enum m0110_line line)
 {
-    const struct kscan_m0110_config *config = dev->config;
-    gpio_pin_configure_dt(&config->clock_gpio, GPIO_INPUT | GPIO_PULL_UP);
+    gpio_pin_configure_dt(line_spec(dev, line), GPIO_OUTPUT_LOW);
+}
+
+static inline void line_float(const struct device *dev, enum m0110_line line)
+{
+    gpio_pin_configure_dt(line_spec(dev, line), GPIO_INPUT | GPIO_PULL_UP);
 }
 
 /*
- * Read the clock line.  The pin is left configured as an input for the whole
- * receive (and during send the keyboard drives clock too), so this is a plain
- * register read, not a reconfigure.  Reconfiguring the pin on every sample
- * (the old behaviour) was slow enough that the microsecond busy-wait loops no
- * longer tracked real time and bits could be sampled on the wrong clock phase.
+ * Read a line.  The pin is left configured as an input for the whole receive
+ * (and during send the keyboard drives clock too), so this is a plain register
+ * read, not a reconfigure.  Reconfiguring the pin on every sample (an earlier
+ * version) was slow enough that the microsecond busy-wait loops no longer
+ * tracked real time and bits could be sampled on the wrong clock phase.
  */
-static inline bool clock_read(const struct device *dev)
+static inline bool line_level(const struct device *dev, enum m0110_line line)
 {
-    const struct kscan_m0110_config *config = dev->config;
-    return gpio_pin_get_dt(&config->clock_gpio);
+    return gpio_pin_get_dt(line_spec(dev, line));
 }
 
-static inline void data_lo(const struct device *dev)
+static inline void bus_idle(const struct device *dev)
 {
-    const struct kscan_m0110_config *config = dev->config;
-    gpio_pin_configure_dt(&config->data_gpio, GPIO_OUTPUT_LOW);
+    line_float(dev, M0110_LINE_CLOCK);
+    line_float(dev, M0110_LINE_DATA);
 }
 
-static inline void data_hi(const struct device *dev)
+/* The host asks to send by pulling data low and leaving clock to the keyboard. */
+static inline void bus_request_to_send(const struct device *dev)
 {
-    const struct kscan_m0110_config *config = dev->config;
-    gpio_pin_configure_dt(&config->data_gpio, GPIO_INPUT | GPIO_PULL_UP);
-}
-
-/* Read the data line.  Plain register read; the pin is pre-configured as an
- * input for the duration of reception (see m0110_recv). */
-static inline bool data_read(const struct device *dev)
-{
-    const struct kscan_m0110_config *config = dev->config;
-    return gpio_pin_get_dt(&config->data_gpio);
-}
-
-static inline void idle(const struct device *dev)
-{
-    clock_hi(dev);
-    data_hi(dev);
-}
-
-static inline void request(const struct device *dev)
-{
-    clock_hi(dev);
-    data_lo(dev);
+    line_float(dev, M0110_LINE_CLOCK);
+    line_assert(dev, M0110_LINE_DATA);
 }
 
 /* Enable or disable the 5V boost converter via the EN pin (if wired) */
@@ -343,124 +259,120 @@ static inline void boost_set(const struct device *dev, bool enable)
     }
 }
 
-/* Wait for clock to go low, returns remaining microseconds or 0 on timeout */
-static uint16_t wait_clock_lo(const struct device *dev, uint16_t us)
+/* Wait until a line reaches `level`.  Returns 0, or -ETIMEDOUT. */
+static int await_line(const struct device *dev, enum m0110_line line,
+                      bool level, uint32_t timeout_us)
 {
-    while (clock_read(dev) && us) {
-        k_busy_wait(1);
-        us--;
-    }
-    return us;
-}
-
-/* Wait for clock to go high, returns remaining microseconds or 0 on timeout */
-static uint16_t wait_clock_hi(const struct device *dev, uint16_t us)
-{
-    while (!clock_read(dev) && us) {
-        k_busy_wait(1);
-        us--;
-    }
-    return us;
-}
-
-/* Wait for clock low with millisecond timeout */
-static bool wait_clock_lo_ms(const struct device *dev, uint16_t ms)
-{
-    while (ms) {
-        if (wait_clock_lo(dev, 1000)) {
-            return true;
+    while (timeout_us > 0) {
+        if (line_level(dev, line) == level) {
+            return 0;
         }
-        ms--;
+        k_busy_wait(1);
+        timeout_us--;
     }
-    return false;
+
+    return line_level(dev, line) == level ? 0 : -ETIMEDOUT;
 }
 
-/* Send a byte to the keyboard */
-static int m0110_send(const struct device *dev, uint8_t data)
+static int await_clock_low_ms(const struct device *dev, uint32_t timeout_ms)
+{
+    while (timeout_ms > 0) {
+        if (await_line(dev, M0110_LINE_CLOCK, false, 1000) == 0) {
+            return 0;
+        }
+        timeout_ms--;
+    }
+
+    return -ETIMEDOUT;
+}
+
+/*
+ * Clock one byte out to the keyboard, MSB first.  The keyboard drives the
+ * clock; the host sets each bit while clock is low and holds it across the
+ * high phase.  Returns 0, or a negative errno.
+ */
+static int m0110_write_byte(const struct device *dev, uint8_t byte)
 {
     struct kscan_m0110_data *drv_data = dev->data;
 
     drv_data->error = 0;
 
-    /* Request to send */
-    request(dev);
+    bus_request_to_send(dev);
 
-    /* Wait for keyboard to pull clock low (may take a while) */
-    if (!wait_clock_lo_ms(dev, REQUEST_WAIT_MS)) {
+    /* The keyboard may take a while to start clocking. */
+    if (await_clock_low_ms(dev, REQUEST_WAIT_MS) != 0) {
         drv_data->error = 1;
-        LOG_ERR("m0110_send: timeout waiting for clock low");
+        LOG_ERR("m0110 write: keyboard never started clocking");
         k_msleep(ERROR_RECOVER_MS);
-        idle(dev);
+        bus_idle(dev);
         return -ETIMEDOUT;
     }
 
-    /* Send 8 bits, MSB first */
-    for (uint8_t bit = 0x80; bit; bit >>= 1) {
-        if (!wait_clock_lo(dev, CLOCK_LO_WAIT_US)) {
+    for (uint8_t mask = 0x80; mask != 0; mask >>= 1) {
+        if (await_line(dev, M0110_LINE_CLOCK, false, CLOCK_LO_WAIT_US) != 0) {
             drv_data->error = 3;
-            LOG_ERR("m0110_send: timeout during bit send (clock low)");
+            LOG_ERR("m0110 write: clock stalled high mid-byte");
             k_msleep(ERROR_RECOVER_MS);
-            idle(dev);
+            bus_idle(dev);
             return -ETIMEDOUT;
         }
 
-        if (data & bit) {
-            data_hi(dev);
+        if (byte & mask) {
+            line_float(dev, M0110_LINE_DATA);
         } else {
-            data_lo(dev);
+            line_assert(dev, M0110_LINE_DATA);
         }
 
-        if (!wait_clock_hi(dev, CLOCK_HI_WAIT_US)) {
+        if (await_line(dev, M0110_LINE_CLOCK, true, CLOCK_HI_WAIT_US) != 0) {
             drv_data->error = 4;
-            LOG_ERR("m0110_send: timeout during bit send (clock high)");
+            LOG_ERR("m0110 write: clock stalled low mid-byte");
             k_msleep(ERROR_RECOVER_MS);
-            idle(dev);
+            bus_idle(dev);
             return -ETIMEDOUT;
         }
     }
 
-    /* Hold last bit for 80-100us */
+    /* Hold the last bit for 80-100 us before letting go. */
     k_busy_wait(DATA_HOLD_US);
-    idle(dev);
+    bus_idle(dev);
 
     return 0;
 }
 
-/* Receive a byte from the keyboard */
-static uint8_t m0110_recv(const struct device *dev)
+/*
+ * Read one byte the keyboard is clocking out, MSB first.
+ * Returns the byte, or a negative errno if it could not be read intact.
+ */
+static int m0110_read_byte(const struct device *dev)
 {
     struct kscan_m0110_data *drv_data = dev->data;
-    const struct kscan_m0110_config *config = dev->config;
-    uint8_t data = 0;
+    uint8_t byte = 0;
 
     drv_data->error = 0;
 
     /*
      * Both lines are keyboard-driven during reception.  Configure them as
      * inputs once here so the bit loop can sample with plain register reads
-     * (clock_read/data_read) rather than reconfiguring the pin per bit.
+     * rather than reconfiguring the pin per bit.
      */
-    gpio_pin_configure_dt(&config->clock_gpio, GPIO_INPUT | GPIO_PULL_UP);
-    gpio_pin_configure_dt(&config->data_gpio, GPIO_INPUT | GPIO_PULL_UP);
+    line_float(dev, M0110_LINE_CLOCK);
+    line_float(dev, M0110_LINE_DATA);
 
-    /* Wait for keyboard to start sending (clock goes low) */
-    if (!wait_clock_lo_ms(dev, REQUEST_WAIT_MS)) {
+    if (await_clock_low_ms(dev, REQUEST_WAIT_MS) != 0) {
         drv_data->error = 1;
-        LOG_DBG("m0110_recv: timeout waiting for clock low");
+        LOG_DBG("m0110 read: keyboard never started clocking");
         k_msleep(ERROR_RECOVER_MS);
-        idle(dev);
-        return M0110_ERROR;
+        bus_idle(dev);
+        return -ETIMEDOUT;
     }
 
     /*
-     * Receive 8 bits, MSB first.
-     *
      * The data line is only valid while the clock is LOW.  The keyboard sets
      * the bit up after pulling clock low and is free to change it once clock
-     * rises again; m0110_send() above follows the same convention, driving
-     * data during the clock-low window.
+     * rises again; m0110_write_byte() above follows the same convention,
+     * driving data during the clock-low window.
      *
-     * Sampling after the rising edge (the previous behaviour) raced that
+     * Sampling after the rising edge (an earlier version) raced that
      * transition and intermittently latched the *next* bit's value.  A flip in
      * bit 7 turns a "break" byte into a "make", so ZMK never sees the release,
      * the key stays logically held, and the host's auto-repeat spams it.  That
@@ -469,15 +381,15 @@ static uint8_t m0110_recv(const struct device *dev)
      *
      * Sample while the clock is still low, then wait for the rising edge.
      */
-    for (uint8_t i = 0; i < 8; i++) {
-        data <<= 1;
+    for (uint8_t bit_index = 0; bit_index < 8; bit_index++) {
+        byte <<= 1;
 
-        if (!wait_clock_lo(dev, CLOCK_LO_WAIT_US)) {
+        if (await_line(dev, M0110_LINE_CLOCK, false, CLOCK_LO_WAIT_US) != 0) {
             drv_data->error = 2;
-            LOG_ERR("m0110_recv: timeout during bit receive (clock low)");
+            LOG_ERR("m0110 read: clock stalled high mid-byte");
             k_msleep(ERROR_RECOVER_MS);
-            idle(dev);
-            return M0110_ERROR;
+            bus_idle(dev);
+            return -ETIMEDOUT;
         }
 
         /*
@@ -488,18 +400,18 @@ static uint8_t m0110_recv(const struct device *dev)
          * of instructions wide, and it is the one place in the loop where an
          * interrupt corrupts data: if an ISR runs here for longer than the
          * ~160 us clock-low period, the keyboard has moved on to the next bit
-         * by the time data_read() executes and the wrong value is latched.  As
-         * with the rising-edge race above, the byte still decodes to a
-         * plausible scancode, so nothing downstream notices, and a flipped
-         * bit 7 turns a release into a press that ZMK then holds forever while
-         * the host auto-repeats it.
+         * by the time data is read and the wrong value is latched.  As with
+         * the rising-edge race above, the byte still decodes to a plausible
+         * scancode, so nothing downstream notices, and a flipped bit 7 turns a
+         * release into a press that ZMK then holds forever while the host
+         * auto-repeats it.
          *
          * BLE makes this far more likely than USB because the radio raises the
          * interrupt rate: connection events, and especially the CPU-halting
          * flash writes ZMK does when bonding/profile settings change, are the
          * long preemptions that overrun the window.
          *
-         * Interrupts are not masked for the *whole* byte (~2.6 ms): the
+         * Interrupts are not masked for the *whole* byte (~2.7 ms): the
          * Bluetooth link layer needs its radio interrupts serviced on time or
          * the connection drops, and on nRF the controller's radio ISR may be a
          * zero-latency interrupt that irq_lock() cannot mask anyway.  A ~2 us
@@ -512,83 +424,86 @@ static uint8_t m0110_recv(const struct device *dev)
          * release_all_keys() releases any key the lost byte may have left held.
          */
         unsigned int lock = irq_lock();
-        bool still_low = !clock_read(dev);
-        bool bit = still_low && data_read(dev);
+        bool still_low = !line_level(dev, M0110_LINE_CLOCK);
+        bool bit = still_low && line_level(dev, M0110_LINE_DATA);
         irq_unlock(lock);
 
         if (!still_low) {
             drv_data->error = 4;
-            LOG_ERR("m0110_recv: preempted out of bit %d's valid window", 7 - i);
+            LOG_ERR("m0110 read: preempted out of bit %d's valid window",
+                    7 - bit_index);
             k_msleep(MIDBYTE_ABORT_MS);
-            idle(dev);
-            return M0110_ERROR;
+            bus_idle(dev);
+            return -EIO;
         }
 
         if (bit) {
-            data |= 1;
+            byte |= 1;
         }
 
-        if (!wait_clock_hi(dev, CLOCK_HI_WAIT_US)) {
+        if (await_line(dev, M0110_LINE_CLOCK, true, CLOCK_HI_WAIT_US) != 0) {
             drv_data->error = 3;
-            LOG_ERR("m0110_recv: timeout during bit receive (clock high)");
+            LOG_ERR("m0110 read: clock stalled low mid-byte");
             k_msleep(ERROR_RECOVER_MS);
-            idle(dev);
-            return M0110_ERROR;
+            bus_idle(dev);
+            return -ETIMEDOUT;
         }
     }
 
-    idle(dev);
+    bus_idle(dev);
 
     /*
-     * Frame check: bit 0 of every M0110 response is 1.  A byte that fails this
-     * was misread (a slipped or mis-sampled bit) and must be discarded rather
-     * than decoded into a scancode.  It costs nothing and catches corruption
-     * the per-bit timeouts miss.
+     * A byte that fails the frame check was misread (a slipped or mis-sampled
+     * bit) and must be discarded rather than decoded into a scancode.  It
+     * costs nothing and catches corruption the per-bit timeouts miss.  The
+     * byte completed and the lines are idle, so no back-off is needed.
      */
-    if (!FRAME_OK(data)) {
+    if (!frame_ok(byte)) {
         drv_data->error = 5;
-        LOG_ERR("m0110_recv: frame error, byte 0x%02x has bit 0 clear", data);
-        /* The byte completed and the lines are idle, so no back-off needed. */
-        return M0110_ERROR;
+        LOG_ERR("m0110 read: byte 0x%02x has bit 0 clear, so it was misread", byte);
+        return -EBADMSG;
     }
 
-    return data;
+    return byte;
 }
 
-/* Send INSTANT command and get response (used for follow-up bytes) */
-static uint8_t m0110_instant(const struct device *dev)
+/* Send INSTANT and read the answer: the next transition if one is queued. */
+static int m0110_read_pending(const struct device *dev)
 {
-    if (m0110_send(dev, M0110_INSTANT) < 0) {
-        return M0110_ERROR;
+    int reply;
+
+    if (m0110_write_byte(dev, M0110_CMD_INSTANT) < 0) {
+        return -EIO;
     }
-    uint8_t data = m0110_recv(dev);
-    if (data != M0110_NULL && data != M0110_ERROR) {
-        LOG_DBG("m0110_instant: 0x%02x", data);
+
+    reply = m0110_read_byte(dev);
+    if (reply >= 0 && reply != M0110_REPLY_NO_EVENT) {
+        LOG_DBG("m0110 instant: 0x%02x", reply);
     }
-    return data;
+
+    return reply;
 }
 
 /*
  * Send INQUIRY and wait for the keyboard to respond via clock interrupt.
  *
- * The INQUIRY command (0x10) tells the keyboard to reply when a key event
- * occurs, or with NULL (0x7B) after 250 ms.  Instead of busy-waiting for the
- * response we arm a falling-edge interrupt on the clock line and block on a
- * semaphore, allowing the CPU to sleep until the keyboard pulls clock low to
- * start clocking out its response.
+ * INQUIRY tells the keyboard to reply when a key event occurs, or with the
+ * no-event byte after 250 ms.  Instead of busy-waiting for the response the
+ * driver arms a falling-edge interrupt on the clock line and blocks on a
+ * semaphore, so the CPU sleeps until the keyboard pulls clock low to start
+ * clocking out its response.
  *
  * The first clock LOW period lasts ~160 us (per Apple's protocol spec), which
  * gives the thread ample time to resume from the semaphore and enter
- * m0110_recv() before the first bit's rising edge.
+ * m0110_read_byte() before the first bit's rising edge.
  */
-static uint8_t m0110_inquiry_recv(const struct device *dev)
+static int m0110_await_transition(const struct device *dev)
 {
     struct kscan_m0110_data *data = dev->data;
     const struct kscan_m0110_config *config = dev->config;
 
-    /* Send INQUIRY command */
-    if (m0110_send(dev, M0110_INQUIRY) < 0) {
-        return M0110_ERROR;
+    if (m0110_write_byte(dev, M0110_CMD_INQUIRY) < 0) {
+        return -EIO;
     }
 
     /* Arm clock interrupt: keyboard pulls clock low when it has data */
@@ -596,7 +511,7 @@ static uint8_t m0110_inquiry_recv(const struct device *dev)
                                     GPIO_INT_EDGE_TO_INACTIVE);
 
     /*
-     * Block until the keyboard responds (key event, or its own ~250 ms NULL
+     * Block until the keyboard responds (key event, or its own ~250 ms no-event
      * timeout).  The wait is bounded rather than K_FOREVER: the falling edge is
      * armed a few microseconds after the command is sent, and if it is ever
      * missed (an early response, or an edge that never latched), a forever-wait
@@ -607,166 +522,107 @@ static uint8_t m0110_inquiry_recv(const struct device *dev)
     if (k_sem_take(&data->data_ready, K_MSEC(INQUIRY_WAIT_MS)) != 0) {
         gpio_pin_interrupt_configure_dt(&config->clock_gpio, GPIO_INT_DISABLE);
         data->error = 6;
-        LOG_WRN("m0110_inquiry: no response within %d ms; resyncing",
+        LOG_WRN("m0110 inquiry: no response within %d ms; resyncing",
                 INQUIRY_WAIT_MS);
-        idle(dev);
-        return M0110_ERROR;
+        bus_idle(dev);
+        return -ETIMEDOUT;
     }
 
     /* Woken by disable_callback, not by keyboard */
     if (!data->enabled) {
-        return M0110_NULL;
+        return M0110_REPLY_NO_EVENT;
     }
 
     /* Clock is already low: read the 8-bit response */
-    uint8_t response = m0110_recv(dev);
+    int response = m0110_read_byte(dev);
 
-    if (response != M0110_NULL && response != M0110_ERROR) {
-        LOG_DBG("m0110_inquiry: 0x%02x", response);
+    if (response >= 0 && response != M0110_REPLY_NO_EVENT) {
+        LOG_DBG("m0110 inquiry: 0x%02x", response);
     }
 
     return response;
 }
 
-/* Clear all key buffers; call on any protocol error to prevent stuck keys */
-static void clear_buffers(struct kscan_m0110_data *data)
+/*
+ * Move what the decoder has produced into the exchange's event buffer.  Called
+ * after every byte: a run of shift bytes keeps a sequence open, and the
+ * decoder's own queue is only deep enough for one byte's worth of events.
+ */
+static void take_decoded_events(struct kscan_m0110_data *drv_data)
 {
-    data->keybuf  = 0x00;
-    data->keybuf2 = 0x00;
-    data->rawbuf  = 0x00;
+    struct m0110_key_event event;
+
+    while (m0110_decoder_next(&drv_data->decoder, &event)) {
+        if (drv_data->event_count < ARRAY_SIZE(drv_data->events)) {
+            drv_data->events[drv_data->event_count++] = event;
+        } else {
+            LOG_WRN("m0110: event buffer full, dropping code 0x%02x", event.code);
+        }
+    }
 }
 
+enum m0110_exchange {
+    M0110_EXCHANGE_EVENTS,  /* the decoder may hold key events */
+    M0110_EXCHANGE_IDLE,    /* the keyboard answered that nothing happened */
+    M0110_EXCHANGE_FAILED,  /* the keyboard did not answer intelligibly */
+};
+
 /*
- * Receive a key event with proper handling of M0110A special cases.
+ * Read one key transition, however many bytes it takes, into the decoder.
  *
- * The first byte of each key event is obtained via INQUIRY (interrupt-driven,
- * CPU sleeps while waiting).  Follow-up bytes in multi-byte sequences (shift +
- * keypad combos) use INSTANT for immediate response.
+ * The first byte comes from INQUIRY (interrupt-driven, CPU sleeps while
+ * waiting), or from a byte a power-save peek already read.  Follow-up bytes
+ * of a multi-byte sequence (keypad prefix, shift + keypad) use INSTANT for an
+ * immediate answer.  When a follow-up never comes, the decoder is told so and
+ * keeps what it can from the partial sequence.
  */
-static uint8_t m0110_recv_key(const struct device *dev)
+static enum m0110_exchange m0110_collect_sequence(const struct device *dev)
 {
     struct kscan_m0110_data *drv_data = dev->data;
-    uint8_t raw, raw2, raw3;
+    int reply;
 
-    /*
-     * Clear any stale error from a previous exchange.  The thread loop's
-     * release-all-on-error safety net keys off drv_data->error, and the
-     * buffered-key returns below perform no I/O that would refresh it.
-     */
     drv_data->error = 0;
 
-    /* Return buffered keys first */
-    if (drv_data->keybuf) {
-        raw = drv_data->keybuf;
-        drv_data->keybuf = 0x00;
-        return raw;
-    }
-    if (drv_data->keybuf2) {
-        raw = drv_data->keybuf2;
-        drv_data->keybuf2 = 0x00;
-        return raw;
-    }
-
-    /* Get raw byte from keyboard or buffer */
-    if (drv_data->rawbuf) {
-        raw = drv_data->rawbuf;
-        drv_data->rawbuf = 0x00;
+    if (drv_data->has_peeked_wire) {
+        reply = drv_data->peeked_wire;
+        drv_data->has_peeked_wire = false;
     } else {
-        raw = m0110_inquiry_recv(dev);
+        reply = m0110_await_transition(dev);
+
+        if (reply < 0) {
+            m0110_decoder_interrupted(&drv_data->decoder);
+            take_decoded_events(drv_data);
+            return M0110_EXCHANGE_FAILED;
+        }
+
+        if (reply == M0110_REPLY_NO_EVENT) {
+            return M0110_EXCHANGE_IDLE;
+        }
     }
 
-    switch (KEY(raw)) {
-        case M0110_KEYPAD:
-            /* Keypad prefix - get the actual key */
-            raw2 = m0110_instant(dev);
-            if (raw2 == M0110_ERROR || raw2 == M0110_NULL) {
-                clear_buffers(drv_data);
-                return M0110_NULL;
-            }
-            switch (KEY(raw2)) {
-                case M0110_ARROW_UP:
-                case M0110_ARROW_DOWN:
-                case M0110_ARROW_LEFT:
-                case M0110_ARROW_RIGHT:
-                    if (IS_BREAK(raw2)) {
-                        /* Arrow key release - also generates Calc key release */
-                        drv_data->keybuf = (RAW2SCAN(raw2) | M0110_CALC_OFFSET);
-                        return (RAW2SCAN(raw2) | M0110_KEYPAD_OFFSET);
-                    }
-                    break;
-            }
-            /* Regular keypad key */
-            return (RAW2SCAN(raw2) | M0110_KEYPAD_OFFSET);
+    for (;;) {
+        enum m0110_decode_result result =
+            m0110_decoder_feed(&drv_data->decoder, (uint8_t)reply);
 
-        case M0110_SHIFT:
-            /* Shift key or shift+keypad combo */
-            raw2 = m0110_instant(dev);
-            if (raw2 == M0110_ERROR) {
-                clear_buffers(drv_data);
-                return RAW2SCAN(raw); /* best-effort: return shift alone */
-            }
-            if (raw2 == M0110_NULL) {
-                /* No follow-up key: shift stands alone */
-                return RAW2SCAN(raw);
-            }
-            switch (KEY(raw2)) {
-                case M0110_SHIFT:
-                    /* Double shift - buffer second and return first */
-                    drv_data->rawbuf = raw2;
-                    return RAW2SCAN(raw);
+        take_decoded_events(drv_data);
 
-                case M0110_KEYPAD:
-                    /* Shift + keypad combo */
-                    raw3 = m0110_instant(dev);
-                    if (raw3 == M0110_ERROR || raw3 == M0110_NULL) {
-                        clear_buffers(drv_data);
-                        return RAW2SCAN(raw);
-                    }
-                    switch (KEY(raw3)) {
-                        case M0110_ARROW_UP:
-                        case M0110_ARROW_DOWN:
-                        case M0110_ARROW_LEFT:
-                        case M0110_ARROW_RIGHT:
-                            if (IS_BREAK(raw)) {
-                                if (IS_BREAK(raw3)) {
-                                    /* Shift up, arrow up */
-                                    drv_data->keybuf2 = RAW2SCAN(raw);
-                                    drv_data->keybuf = (RAW2SCAN(raw3) | M0110_CALC_OFFSET);
-                                    return (RAW2SCAN(raw3) | M0110_KEYPAD_OFFSET);
-                                } else {
-                                    /* Shift up only */
-                                    return RAW2SCAN(raw);
-                                }
-                            } else {
-                                if (IS_BREAK(raw3)) {
-                                    /* Arrow/calc up */
-                                    drv_data->keybuf = (RAW2SCAN(raw3) | M0110_CALC_OFFSET);
-                                    return (RAW2SCAN(raw3) | M0110_KEYPAD_OFFSET);
-                                } else {
-                                    /* Calc down */
-                                    return (RAW2SCAN(raw3) | M0110_CALC_OFFSET);
-                                }
-                            }
+        if (result != M0110_DECODE_WANT_BYTE) {
+            return M0110_EXCHANGE_EVENTS;
+        }
 
-                        default:
-                            /* Shift + regular keypad */
-                            drv_data->keybuf = (RAW2SCAN(raw3) | M0110_KEYPAD_OFFSET);
-                            return RAW2SCAN(raw);
-                    }
+        reply = m0110_read_pending(dev);
 
-                default:
-                    /*
-                     * Shift + normal key. Put raw2 back in rawbuf so it is
-                     * processed naturally next iteration, preventing it from
-                     * getting stuck in keybuf if the connection drops.
-                     */
-                    drv_data->rawbuf = raw2;
-                    return RAW2SCAN(raw);
-            }
+        if (reply < 0) {
+            m0110_decoder_interrupted(&drv_data->decoder);
+            take_decoded_events(drv_data);
+            return M0110_EXCHANGE_FAILED;
+        }
 
-        default:
-            /* Normal key */
-            return RAW2SCAN(raw);
+        if (reply == M0110_REPLY_NO_EVENT) {
+            m0110_decoder_interrupted(&drv_data->decoder);
+            take_decoded_events(drv_data);
+            return M0110_EXCHANGE_EVENTS;
+        }
     }
 }
 
@@ -859,18 +715,19 @@ static void release_stuck_keys(const struct device *dev)
     }
 }
 
-/* Process a single scancode and fire the kscan callback */
-static void process_scancode(const struct device *dev, uint8_t scancode)
+/* Report one decoded key event through the kscan callback */
+static void report_key_event(const struct device *dev,
+                             const struct m0110_key_event *event)
 {
     struct kscan_m0110_data *data = dev->data;
     const struct kscan_m0110_config *config = dev->config;
 
-    bool pressed = !(scancode & 0x80);
-    uint8_t code = scancode & 0x7F;
+    bool pressed = !event->released;
+    uint8_t code = event->code;
 
     /* Convert scancode to row/column */
-    uint8_t row = (code >> 3) & 0x0F;
-    uint8_t col = code & 0x07;
+    uint8_t row = code / M0110_MATRIX_COLUMNS;
+    uint8_t col = code % M0110_MATRIX_COLUMNS;
 
     if (row >= config->rows || col >= config->columns) {
         LOG_WRN("Invalid scancode 0x%02x (row=%d, col=%d)", code, row, col);
@@ -890,7 +747,7 @@ static void process_scancode(const struct device *dev, uint8_t scancode)
      * same-direction duplicates and lets the tracker resync after a dropped
      * make/break byte.
      */
-    if (code == M0110_CAPS_LOCK) {
+    if (code == M0110_CODE_CAPS_LOCK) {
         int64_t now = k_uptime_get();
 
         if ((now - data->caps_last_ms) < CAPS_DEBOUNCE_MS) {
@@ -972,14 +829,16 @@ static void m0110_power_cycle(const struct device *dev)
             config->recover_timeout_ms);
 
     release_all_keys(dev);
-    clear_buffers(data);
+    m0110_decoder_reset(&data->decoder);
+    data->event_count = 0;
+    data->has_peeked_wire = false;
 
     boost_set(dev, false);
-    clock_lo(dev);
-    data_lo(dev);
+    line_assert(dev, M0110_LINE_CLOCK);
+    line_assert(dev, M0110_LINE_DATA);
     k_msleep(POWER_CYCLE_OFF_MS);
 
-    idle(dev);
+    bus_idle(dev);
     boost_set(dev, true);
     k_msleep(INIT_DELAY_MS); /* wait for M0110 MCU to boot */
 
@@ -1006,8 +865,9 @@ static void m0110_clock_isr(const struct device *port,
 /*
  * Keyboard thread (replaces the old polling work handler).
  *
- * Normal mode: sends INQUIRY, sleeps until the keyboard responds (or 250ms
- * NULL timeout), reads the response, processes any key events, and loops.
+ * Normal mode: sends INQUIRY, sleeps until the keyboard responds (or its
+ * 250 ms no-event reply), reads the transition, reports any key events, and
+ * loops.
  *
  * Power-save mode (when EN GPIO is wired): after idle_timeout_ms with no key
  * activity, the 5V boost is disabled and the M0110 keyboard powers off.  The
@@ -1052,15 +912,16 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
             boost_set(dev, true);
             k_msleep(INIT_DELAY_MS); /* wait for M0110 MCU to boot */
 
-            uint8_t raw = m0110_instant(dev);
+            int peek = m0110_read_pending(dev);
 
-            if (raw != M0110_NULL && raw != M0110_ERROR) {
+            if (peek >= 0 && peek != M0110_REPLY_NO_EVENT) {
                 /* Key detected: exit power save */
                 data->power_save = false;
                 data->last_key_time = k_uptime_get();
                 data->last_reply_time = data->last_key_time;
                 k_sem_reset(&data->data_ready);
-                data->rawbuf = raw; /* process on next recv_key call */
+                data->peeked_wire = (uint8_t)peek; /* starts the next sequence */
+                data->has_peeked_wire = true;
                 LOG_INF("M0110 wake: key activity detected");
             } else {
                 /* Still idle: power down and sleep */
@@ -1071,7 +932,7 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
         }
 
         /* Normal mode: INQUIRY-based, CPU sleeps between events */
-        uint8_t scancode = m0110_recv_key(dev);
+        enum m0110_exchange outcome = m0110_collect_sequence(dev);
 
         /*
          * A low-level protocol error during this exchange means we may have
@@ -1086,7 +947,7 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
         release_stuck_keys(dev);
 
         /* Any valid reply, NULL included, means the keyboard is alive. */
-        if (scancode != M0110_ERROR) {
+        if (outcome != M0110_EXCHANGE_FAILED) {
             data->last_reply_time = k_uptime_get();
         } else if (config->en_gpio.port != NULL && config->recover_timeout_ms != 0 &&
                    k_uptime_get() - data->last_reply_time >
@@ -1095,12 +956,15 @@ static void m0110_thread_fn(void *p1, void *p2, void *p3)
             continue;
         }
 
-        if (scancode != M0110_NULL && scancode != M0110_ERROR) {
+        for (uint8_t i = 0; i < data->event_count; i++) {
             data->last_key_time = k_uptime_get();
-            process_scancode(dev, scancode);
-        } else if (scancode == M0110_NULL && config->en_gpio.port != NULL &&
-                   config->idle_timeout_ms != 0) {
-            /* Genuine no-event NULL: check whether we've been idle long
+            report_key_event(dev, &data->events[i]);
+        }
+        data->event_count = 0;
+
+        if (outcome == M0110_EXCHANGE_IDLE && config->en_gpio.port != NULL &&
+            config->idle_timeout_ms != 0) {
+            /* Genuine no-event reply: check whether we've been idle long
              * enough to power down (errors don't count toward idle).
              * Never power down while USB supplies the rail; see
              * m0110_on_usb_power().  An idle timeout of 0 disables
@@ -1164,9 +1028,10 @@ static int kscan_m0110_init(const struct device *dev)
     int ret;
 
     data->dev = dev;
-    data->keybuf = 0;
-    data->keybuf2 = 0;
-    data->rawbuf = 0;
+    m0110_decoder_reset(&data->decoder);
+    data->event_count = 0;
+    data->peeked_wire = 0;
+    data->has_peeked_wire = false;
     data->error = 0;
     data->enabled = false;
     data->caps_lock_down = false;
@@ -1177,7 +1042,7 @@ static int kscan_m0110_init(const struct device *dev)
 
     for (uint8_t i = 0; i < M0110_MAX_ROWS; i++) {
         data->pressed[i] = 0;
-        for (uint8_t j = 0; j < 8; j++) {
+        for (uint8_t j = 0; j < M0110_MATRIX_COLUMNS; j++) {
             data->pressed_at_ms[i][j] = 0;
         }
     }
@@ -1232,7 +1097,7 @@ static int kscan_m0110_init(const struct device *dev)
     }
 
     /* Initialize to idle state */
-    idle(dev);
+    bus_idle(dev);
 
     /* Wait for keyboard to initialize */
     k_msleep(INIT_DELAY_MS);

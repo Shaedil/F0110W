@@ -9,13 +9,3 @@ config KSCAN_M0110
 	  Enable driver for Apple M0110, M0110A, and M0120 keyboards.
 	  These vintage Apple keyboards use a synchronous serial protocol
 	  with clock and data lines.
-
-if KSCAN_M0110
-
-config KSCAN_M0110_POLL_PERIOD_MS
-	int "Polling period in milliseconds"
-	default 5
-	help
-	  How often to poll the keyboard for key events.
-
-endif # KSCAN_M0110
