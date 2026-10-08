@@ -361,23 +361,21 @@ final class KeyboardController: ObservableObject {
 
     // MARK: - Editing
 
-    /// Rebind one key. The behavior is preserved and only its parameter changes,
-    /// so a `&kp` stays a key press and only the keycode moves.
-    func rebind(keyPosition: Int, to usage: UInt32) {
+    /// Rebind one key to send `param`, a page-encoded HID usage. A keycode
+    /// behaviour is preserved, so a `&kp` stays a key press and only the
+    /// keycode moves; an empty `&trans`/`&none` slot becomes a `&kp`.
+    func rebind(keyPosition: Int, to param: UInt32) {
         guard let layer = activeLayer else { return }
         guard layer.bindings.indices.contains(keyPosition) else { return }
         guard canEdit else {
             status = "Keyboard is locked. Press the key bound to &studio_unlock"
             return
         }
-        guard acceptsKeycode(at: keyPosition) else {
+        let previous = layer.bindings[keyPosition]
+        guard let binding = previous.sending(param, behaviors: behaviors) else {
             status = "\(behaviorName(at: keyPosition)) does not take a keycode parameter"
             return
         }
-
-        var binding = layer.bindings[keyPosition]
-        let previous = binding
-        binding.param1 = HIDKeycodes.encode(usage: usage)
         guard binding != previous else { return }
 
         let layerID = layer.id
@@ -577,11 +575,21 @@ final class KeyboardController: ObservableObject {
         return CapLegend.forUsage(usage)
     }
 
-    /// Only bindings whose behaviour takes a keycode can be remapped by keycode.
+    /// Bindings whose behaviour takes a keycode can be remapped by keycode, and
+    /// so can empty `&trans`/`&none` slots, which become a `&kp`.
     func acceptsKeycode(at position: Int) -> Bool {
         guard position != M0110Layout.unmapped else { return false }
         guard let layer = activeLayer, layer.bindings.indices.contains(position) else { return false }
-        return behaviors[layer.bindings[position].behaviorID]?.param1 == .hidUsage
+        return layer.bindings[position].sending(0, behaviors: behaviors) != nil
+    }
+
+    /// The keycode a slot sends now, or nil if its behaviour takes none.
+    func keycode(at position: Int) -> UInt32? {
+        guard position != M0110Layout.unmapped else { return nil }
+        guard let layer = activeLayer, layer.bindings.indices.contains(position) else { return nil }
+        let binding = layer.bindings[position]
+        guard behaviors[binding.behaviorID]?.param1 == .hidUsage else { return nil }
+        return binding.param1
     }
 
     func behaviorName(at position: Int) -> String {

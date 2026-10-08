@@ -244,7 +244,7 @@ private struct KeycodePicker: View {
                     Text(controller.behaviorName(at: keyPosition))
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.textDim)
-                    if takesKeycode, let current {
+                    if let current = controller.keycode(at: keyPosition) {
                         Text("· \(HIDKeycodes.name(for: current))")
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.textDim)
@@ -260,20 +260,20 @@ private struct KeycodePicker: View {
                                  font: .system(size: 13, weight: .medium),
                                  padding: EdgeInsets(top: 6, leading: 13, bottom: 6, trailing: 13))
 
-                    let usages = HIDKeycodes.groups.first { $0.0 == group }?.1 ?? []
+                    let params = HIDKeycodes.groups.first { $0.0 == group }?.1 ?? []
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 82), spacing: 8)], spacing: 8) {
-                        ForEach(usages, id: \.self) { usage in
+                        ForEach(params, id: \.self) { param in
                             Button {
-                                controller.rebind(keyPosition: keyPosition, to: usage)
+                                controller.rebind(keyPosition: keyPosition, to: param)
                             } label: {
-                                Text(HIDKeycodes.keyboard[usage] ?? "0x\(String(usage, radix: 16))")
+                                Text(HIDKeycodes.label(for: param))
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity)
                             }
                             // Keycaps, not pills: these stand for keys.
                             .buttonStyle(PillButtonStyle(cornerRadius: 9, verticalPadding: 9,
                                                          font: .system(size: 14, weight: .medium)))
-                            .help(HIDKeycodes.name(for: HIDKeycodes.encode(usage: usage)))
+                            .help(HIDKeycodes.name(for: param))
                             .disabled(!controller.canEdit)
                         }
                     }
@@ -290,12 +290,6 @@ private struct KeycodePicker: View {
     }
 
     private var takesKeycode: Bool { controller.acceptsKeycode(at: keyPosition) }
-
-    private var current: UInt32? {
-        guard let layer = controller.activeLayer,
-              layer.bindings.indices.contains(keyPosition) else { return nil }
-        return layer.bindings[keyPosition].param1
-    }
 }
 
 /// Which keyboard the pane is talking to and how: a status light, the name,

@@ -34,6 +34,13 @@ struct BehaviorInfo {
         }
     }
 
+    /// `&kp`, by the display name ZMK gives it in `key_press.dtsi`.
+    var isKeyPress: Bool { param1 == .hidUsage && displayName.lowercased() == "key press" }
+
+    /// `&trans` and `&none`: the slot does nothing of its own, so replacing
+    /// the behaviour loses nothing.
+    var isEmptySlot: Bool { ["transparent", "none"].contains(displayName.lowercased()) }
+
     static func decode(_ bytes: [UInt8]) throws -> BehaviorInfo {
         var r = ProtobufReader(bytes)
         var info = BehaviorInfo(id: 0, displayName: "", param1: .none)
@@ -84,6 +91,26 @@ struct BehaviorInfo {
 }
 
 extension ParamKind: Equatable {}
+
+extension BehaviorBinding {
+    /// This slot rebound to send `param`, or nil if a keycode cannot go here.
+    ///
+    /// A behaviour that takes a keycode keeps its behaviour and only the
+    /// keycode moves. An empty slot (`&trans`, `&none`) has no keycode to
+    /// move, so it becomes a `&kp`. Anything else (`&bt`, `&studio_unlock`)
+    /// is left alone rather than silently overwritten.
+    func sending(_ param: UInt32, behaviors: [Int32: BehaviorInfo]) -> BehaviorBinding? {
+        guard let info = behaviors[behaviorID] else { return nil }
+        if info.param1 == .hidUsage {
+            var binding = self
+            binding.param1 = param
+            return binding
+        }
+        guard info.isEmptySlot,
+              let keyPress = behaviors.values.first(where: { $0.isKeyPress }) else { return nil }
+        return BehaviorBinding(behaviorID: keyPress.id, param1: param, param2: 0)
+    }
+}
 
 extension StudioClient {
     /// All behavior ids the firmware exposes.
