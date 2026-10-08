@@ -16,6 +16,10 @@ final class BluetoothMonitor: NSObject {
     private static let savedIdentifierKey = "peripheralIdentifier"
     private let pollInterval: TimeInterval = 2
     private let reconnectDelay: TimeInterval = 3
+    /// How long a connect waits for its battery reading before it is announced
+    /// without one. The read normally lands within 200 ms of the keyboard
+    /// being seen.
+    private let batteryWait: TimeInterval = 1.5
 
     private var central: CBCentralManager!
     private var timer: Timer?
@@ -25,6 +29,10 @@ final class BluetoothMonitor: NSObject {
     /// True until the first presence poll completes, so a keyboard that was
     /// already connected at launch can be reported as pre-existing.
     private var awaitingFirstPoll = true
+    /// A connect seen but not yet announced, waiting on the battery read. Holds
+    /// the at-launch flag `onConnect` will carry.
+    private var pendingConnect: Bool?
+    private var batteryTimeout: DispatchWorkItem?
 
     private let config: Config
     private(set) var battery: Int?
@@ -32,9 +40,11 @@ final class BluetoothMonitor: NSObject {
     /// Bluetooth settings. Falls back to the configured match string.
     private(set) var displayName: String
 
-    /// Fires when the keyboard appears, with the device's name and whatever
-    /// battery level we last knew. The flag is true when it was already
-    /// connected at launch rather than having just connected.
+    /// Fires when the keyboard appears, with the device's name and the battery
+    /// level read on this connect. It waits for that read, up to `batteryWait`,
+    /// and passes nil if the read has not landed by then; it never passes a
+    /// level from an earlier connect. The flag is true when the keyboard was
+    /// already connected at launch rather than having just connected.
     var onConnect: ((String, Int?, Bool) -> Void)?
     var onDisconnect: ((String) -> Void)?
     /// Fires on every fresh battery reading.
@@ -94,7 +104,7 @@ final class BluetoothMonitor: NSObject {
             if let reported = p.name, !reported.isEmpty { displayName = reported }
             log("connected: \(p.name ?? config.deviceName) [\(p.identifier)]"
                 + (isInitial ? " (already connected at launch)" : ""))
-            onConnect?(displayName, battery, isInitial)
+            awaitBattery(isInitial: isInitial)
             openLink()
 
         case (true, .none):
@@ -106,6 +116,12 @@ final class BluetoothMonitor: NSObject {
             peripheral = nil
             linkPending = false
             battery = nil
+            if pendingConnect != nil {
+                // Gone before the connect was announced: there is nothing to
+                // take back, so say nothing either way.
+                cancelPendingConnect()
+                return
+            }
             onDisconnect?(displayName)
 
         case (true, .some(let p)):
@@ -116,6 +132,33 @@ final class BluetoothMonitor: NSObject {
         case (false, .none):
             break
         }
+    }
+
+    /// Hold the connect until this connect's battery read lands. Announcing at
+    /// once meant announcing with the level from the last time the keyboard
+    /// was here, which can be days old, and correcting it a moment later.
+    private func awaitBattery(isInitial: Bool) {
+        pendingConnect = isInitial
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.log("no battery reading after \(self.batteryWait)s; announcing without one")
+            self.announceConnect(battery: nil)
+        }
+        batteryTimeout = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + batteryWait, execute: work)
+    }
+
+    /// Fire the held connect, if there is one.
+    private func announceConnect(battery: Int?) {
+        guard let isInitial = pendingConnect else { return }
+        cancelPendingConnect()
+        onConnect?(displayName, battery, isInitial)
+    }
+
+    private func cancelPendingConnect() {
+        pendingConnect = nil
+        batteryTimeout?.cancel()
+        batteryTimeout = nil
     }
 
     /// Open our own GATT connection so we can read and subscribe to BAS.
@@ -223,6 +266,8 @@ extension BluetoothMonitor: CBPeripheralDelegate {
         guard (0...100).contains(level) else { return log("battery out of range: \(raw)") }
         battery = level
         log("battery \(level)%")
+        // The first reading on a connect is what the connect was waiting for.
+        announceConnect(battery: level)
         onBattery?(displayName, level)
     }
 }

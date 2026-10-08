@@ -234,13 +234,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // The events the keyboard reports. The debug panel calls these directly,
     // so what it shows is what the real link would produce.
 
+    /// `battery` is the level read on this connect, or nil if the read has not
+    /// landed yet. The last session's level is deliberately not shown in its
+    /// place: it was wrong whenever the keyboard had charged or drained while
+    /// away. A late read fills the ring in through `handleBattery`.
     func handleConnect(name: String, battery: Int?, isInitial: Bool, now: Date = Date()) {
         let arrival = isArrival(at: now)
         lastConnectAt = now
         statusItem?.model.linked = true
-        if let battery { statusItem?.model.battery = battery }
+        statusItem?.model.battery = battery
         if isInitial && config.suppressInitial { return }
-        hud.show(kind: arrival ? .arrived : .connected, name: name, battery: battery ?? lastBattery)
+        hud.show(kind: arrival ? .arrived : .connected, name: name, battery: battery)
     }
 
     /// The first connect of the day: none before, a new calendar day since the
