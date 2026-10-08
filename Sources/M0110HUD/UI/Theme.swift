@@ -26,13 +26,42 @@ enum Theme {
                                dark: NSColor(white: 0.07, alpha: 0.58))
     static let panelStroke = dynamic(light: NSColor(srgbRed: 0.92, green: 0.88, blue: 0.80, alpha: 0.16),
                                      dark: NSColor(srgbRed: 0.92, green: 0.88, blue: 0.80, alpha: 0.14))
-    /// The floating sidebar's tint, laid over a real blur, so it is much more
-    /// transparent than the docked sidebar it replaced: the blur supplies the
-    /// separation that opacity used to.
-    static let sidebarFloating = dynamic(light: NSColor(white: 0.07, alpha: 0.42),
+    /// The floating sidebar's tint, laid over a real blur, so in dark mode it is
+    /// much more transparent than the docked sidebar it replaced: the blur
+    /// supplies the separation that opacity used to.
+    ///
+    /// In light mode it is white, as the system's own sidebars are. The window's
+    /// ground stays near-black in both appearances, so a light blur over it
+    /// still came out grey; only a nearly opaque white reads as white there.
+    static let sidebarFloating = dynamic(light: NSColor(white: 1, alpha: 0.96),
                                          dark: NSColor(white: 0.05, alpha: 0.38))
     static let sidebarFloatingStroke = dynamic(light: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.22),
                                                dark: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.18))
+
+    /// Ink for what sits on the sidebar. Dark mode keeps the page's own ink,
+    /// since the sidebar is dark glass like the panels. That ink would vanish on
+    /// the white light-mode sidebar, so there it turns to `onAccent`'s warm
+    /// near-black.
+    static let sidebarText = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.92),
+                                     dark: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.94))
+    static let sidebarTextDim = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.62),
+                                        dark: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.52))
+    /// The selected row and the toggle's keycap, as `key` and `keyStroke` are
+    /// on the content.
+    static let sidebarKey = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.08),
+                                    dark: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.09))
+    static let sidebarKeyStroke = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.14),
+                                          dark: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.18))
+
+    /// A pane's icon tint as drawn on the sidebar. The tints are pitched for a
+    /// dark ground and wash out on the white light-mode sidebar, so there they
+    /// are taken down to two thirds of their brightness.
+    static func sidebarIcon(_ tint: Color) -> Color {
+        let base = NSColor(tint).usingColorSpace(.sRGB) ?? .gray
+        let shaded = NSColor(srgbRed: base.redComponent * 0.68, green: base.greenComponent * 0.68,
+                             blue: base.blueComponent * 0.68, alpha: base.alphaComponent)
+        return dynamic(light: shaded, dark: base)
+    }
 
     /// The surround the drawn board sits in: a dark *beige*. The near-black
     /// panel used everywhere else was the last black object left next to an

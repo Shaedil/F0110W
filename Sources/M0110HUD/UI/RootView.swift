@@ -113,7 +113,7 @@ struct RootView: View {
                 // the only way back. It sits beside the window controls, which
                 // are now over the content; in full screen there are none, so
                 // it lines up with the content's edge instead.
-                toggleButton
+                toggleButton(onSidebar: false)
                     .padding(.leading, fullScreen ? Self.contentPadding
                                                   : MainWindowController.controlsTrailingX + 12)
                     .padding(.top, MainWindowController.controlCentreY
@@ -185,7 +185,7 @@ struct RootView: View {
         // Put the toggle at the other end of that same row, inside the sidebar
         // rather than floating on the content beside it.
         .overlay(alignment: .topTrailing) {
-            toggleButton
+            toggleButton(onSidebar: true)
                 .padding(.trailing, 10)
                 .padding(.top, MainWindowController.controlCentreY - Self.sidebarInset
                                - Self.toggleSize.height / 2)
@@ -198,39 +198,43 @@ struct RootView: View {
     /// places. While the sidebar is open it belongs to the sidebar, on the same
     /// row as the window controls and at the far end of it; hidden, it has to
     /// live on the content instead, because its host has gone.
-    private var toggleButton: some View {
+    ///
+    /// Inked for the surface it is mounted on rather than for `sidebarVisible`,
+    /// so the copy sliding out with the sidebar keeps the sidebar's colours.
+    private func toggleButton(onSidebar: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
         return Button {
             sidebarVisible.toggle()
         } label: {
             Image(systemName: "sidebar.leading")
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(sidebarVisible ? Theme.text : Theme.textDim)
+                .foregroundStyle(onSidebar ? Theme.sidebarText : Theme.textDim)
                 .frame(width: Self.toggleSize.width, height: Self.toggleSize.height)
-                .background(shape.fill(Theme.key))
-                .overlay(shape.strokeBorder(Theme.keyStroke, lineWidth: 1))
+                .background(shape.fill(onSidebar ? Theme.sidebarKey : Theme.key))
+                .overlay(shape.strokeBorder(onSidebar ? Theme.sidebarKeyStroke : Theme.keyStroke,
+                                            lineWidth: 1))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+        .help(onSidebar ? "Hide Sidebar" : "Show Sidebar")
         .keyboardShortcut("s", modifiers: [.command, .control])
     }
 
     private func row(_ item: Pane) -> some View {
         let active = pane == item
         return HStack(spacing: 10) {
-            PixelIcon(kind: item.icon, tint: item.tint)
+            PixelIcon(kind: item.icon, tint: Theme.sidebarIcon(item.tint))
                 .frame(width: 18)
             Text(item.rawValue)
                 .font(Theme.sidebarRow.weight(active ? .semibold : .regular))
-                .foregroundStyle(active ? Theme.text : Theme.textDim)
+                .foregroundStyle(active ? Theme.sidebarText : Theme.sidebarTextDim)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(active ? Theme.key : .clear)
+                .fill(active ? Theme.sidebarKey : .clear)
         )
         .contentShape(Rectangle())
         .onTapGesture { pane = item }
