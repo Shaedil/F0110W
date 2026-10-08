@@ -77,6 +77,16 @@
          * at its default 1 A and the nice!nano's own at about 100 mA. */
         charge-full-design-microamp-hours = <10000000>;
         constant-charge-current-max-microamp = <1100000>;
+
+        /* VDDH above the resting cell on USB, used from boot until a plug or
+         * unplug measures it.  The binding's 225 mV is the bq24072 alone; here
+         * the bq25185's ~1 A of charge adds I*R on top.  Boots on USB on
+         * 2026-10-07 at 14:09 and 17:09 read 83-84% against 65% once
+         * unplugged, about 370 mV.  Boots at 22:01 and 22:33, on firmware with
+         * boost EN control, read 96-97% against about 68%, nearer 470 mV, even
+         * when the cable had only been in for minutes.  The cause of the
+         * difference is not known; this value still reads high in that case. */
+        charger-out-offset-microvolt = <370000>;
     };
 };
 
