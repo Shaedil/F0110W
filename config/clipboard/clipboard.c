@@ -224,6 +224,8 @@ static struct {
     uint8_t key_index;
     bool key_down;
     uint8_t usage;
+    /* The implicit modifiers that went down with `usage`. */
+    uint8_t usage_mods;
     uint8_t mods;
     k_timeout_t interval;
 } job;
@@ -742,11 +744,16 @@ static void job_finish(void) {
     release_held();
 }
 
+/* Presses `usage`. A key the job is still holding comes up in the same report. */
 static void job_press(uint8_t usage, uint8_t mods) {
+    if (job.key_down) {
+        zmk_hid_keyboard_release(job.usage);
+    }
     zmk_hid_implicit_modifiers_press(mods);
     zmk_hid_keyboard_press(usage);
     send_keyboard_report();
     job.usage = usage;
+    job.usage_mods = mods;
     job.key_down = true;
 }
 
@@ -788,8 +795,9 @@ static void job_start_paste(uint8_t mods) {
 }
 
 /* The next keystroke of the clip being typed, or false once it is finished or
- * the clip has been replaced or wiped underneath the job. */
-static bool job_next_key(struct clip_key *key) {
+ * the clip has been replaced or wiped underneath the job. It stays next until
+ * `key_index` is moved past it. */
+static bool job_peek_key(struct clip_key *key) {
     bool found = false;
 
     k_mutex_lock(&lock, K_FOREVER);
@@ -799,13 +807,22 @@ static bool job_next_key(struct clip_key *key) {
             job.key_index = 0;
         }
         if (job.key_index < job.key_count) {
-            *key = job.keys[job.key_index++];
+            *key = job.keys[job.key_index];
             found = true;
         }
     }
     k_mutex_unlock(&lock);
 
     return found;
+}
+
+/* Whether `key` can go down in the report that lets go of the key the job is
+ * holding, which makes a character one report rather than two. Not when it is
+ * the same key, since the host would never see it go down again. And not when
+ * a modifier comes up with it: hosts differ on which of the two they act on
+ * first, and Shift can land on the next character. */
+static bool job_can_roll(const struct clip_key *key, uint8_t mods) {
+    return key->usage != job.usage && !(job.usage_mods & ~mods);
 }
 
 static void job_step(struct k_work *work) {
@@ -823,17 +840,23 @@ static void job_step(struct k_work *work) {
         k_work_reschedule(&job_work, job.interval);
         break;
 
-    case JOB_TYPE:
-        if (job.key_down) {
-            job_release();
-        } else if (job_next_key(&key)) {
-            job_press(key.usage, key.shift ? MOD_LSFT : 0);
-        } else {
+    case JOB_TYPE: {
+        if (!job_peek_key(&key)) {
             job_finish();
             break;
         }
+
+        uint8_t mods = key.shift ? MOD_LSFT : 0;
+
+        if (job.key_down && !job_can_roll(&key, mods)) {
+            job_release();
+        } else {
+            job.key_index++;
+            job_press(key.usage, mods);
+        }
         k_work_reschedule(&job_work, job.interval);
         break;
+    }
 
     default:
         break;

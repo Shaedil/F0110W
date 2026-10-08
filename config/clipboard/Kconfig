@@ -52,8 +52,11 @@ config ZMK_CLIPBOARD_TYPE_DELAY_MS
     default 12
     range 2 200
     help
-      Each character is two reports, a press and a release. Too short and
-      some hosts and remote desktops drop keys.
+      Most characters are one report, which lets go of the last key and
+      presses the next. A key typed twice in a row, or a character without
+      Shift after one with it, takes a second report to let go first. Over
+      Bluetooth the gap is stretched to a little over the connection
+      interval. Too short and some hosts and remote desktops drop keys.
 
 config ZMK_CLIPBOARD_ACK_WAIT_MS
     int "Milliseconds a paste waits for the helper before typing instead"

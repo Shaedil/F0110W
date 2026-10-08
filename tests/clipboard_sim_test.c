@@ -230,8 +230,14 @@ static bool keys[256];
 static struct zmk_endpoint_instance selected;
 
 static bool host_keys[256];
+static uint8_t host_mods;
 static char host_out[2048];
 static size_t host_len;
+/* Reports the host has read. */
+static size_t host_reports;
+/* Reports that let go of a modifier and pressed a key at once. A host may act
+ * on the key first, so that Shift then still applies to it. */
+static size_t host_mod_lifts_with_press;
 
 const struct zmk_event_type zmk_event_zmk_keycode_state_changed = {"keycode"};
 const struct zmk_event_type zmk_event_zmk_endpoint_changed = {"endpoint"};
@@ -327,12 +333,17 @@ int zmk_endpoint_send_report(uint16_t usage_page) {
 
     uint8_t mods = (uint8_t)((explicit_mods & ~masked_mods) | implicit_mods);
 
+    host_reports++;
     for (int usage = 0; usage < 256; usage++) {
         if (keys[usage] && !host_keys[usage] && !is_mod(HID_USAGE_KEY, (uint32_t)usage)) {
             host_key_down((uint8_t)usage, mods);
+            if (host_mods & ~mods) {
+                host_mod_lifts_with_press++;
+            }
         }
         host_keys[usage] = keys[usage];
     }
+    host_mods = mods;
     return 0;
 }
 
@@ -611,8 +622,11 @@ static void reset(void) {
     memset(mod_counts, 0, sizeof(mod_counts));
     memset(keys, 0, sizeof(keys));
     memset(host_keys, 0, sizeof(host_keys));
+    host_mods = 0;
     host_len = 0;
     host_out[0] = '\0';
+    host_reports = 0;
+    host_mod_lifts_with_press = 0;
 
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
         addresses[i].id = (uint8_t)(i + 1);
@@ -639,6 +653,11 @@ static void check_idle(const char *scenario) {
                "refs %d)\n",
                scenario, job.kind, stuck, explicit_mods, implicit_mods, masked_mods,
                pending_paste.active, held_count, lock_depth, conn_refs);
+        failures++;
+    }
+    if (host_mod_lifts_with_press) {
+        printf("FAIL %s: %zu report(s) let go of a modifier while pressing a key\n", scenario,
+               host_mod_lifts_with_press);
         failures++;
     }
 }
@@ -1106,6 +1125,42 @@ static void test_typographic_text(void) {
     expect_host("typographic punctuation", "it's \"fine\"...\nnaive");
 }
 
+static void test_typing_takes_a_report_per_character(void) {
+    /* No key twice in a row and no Shift to let go of, so each character
+     * lets go of the last one in the report that presses it. */
+    const char *text = "the quick brown fox";
+    size_t before;
+
+    reset();
+    copy_on_profile_0(text);
+    select_endpoint(ZMK_TRANSPORT_BLE, 1);
+    key(KEY_LGUI, true);
+    advance(20);
+    before = host_reports;
+    key(HID_USAGE_KEY_KEYBOARD_V, true);
+    advance(3000);
+    /* The mask going on, one report a character, and everything let go. */
+    CHECK(host_reports - before == strlen(text) + 2);
+    key(HID_USAGE_KEY_KEYBOARD_V, false);
+    advance(20);
+    key(KEY_LGUI, false);
+    advance(20);
+    expect_host("a report per character", text);
+}
+
+static void test_typing_lets_go_where_it_has_to(void) {
+    /* A key twice in a row has to come up in between, and Shift has to come
+     * up in a report of its own, before the key that follows it goes down. */
+    const char *text = "Hello, Mississippi!! aA Aa \"Q\"...ok\n";
+
+    reset();
+    copy_on_profile_0(text);
+    select_endpoint(ZMK_TRANSPORT_BLE, 1);
+    chord(KEY_LGUI, HID_USAGE_KEY_KEYBOARD_V);
+    advance(5000);
+    expect_host("repeats and Shift", text);
+}
+
 static void test_without_intercept(void) {
     /* What is left if the listener ended up behind ZMK's HID listener: no
      * typing, since the paste has already gone out by then. */
@@ -1347,16 +1402,17 @@ static void test_replies_survive_a_full_link(void) {
 }
 
 static void test_slow_link_paces_the_typing(void) {
-    const char *text = "paced";
+    const char *text = "paced by the link";
 
-    /* A 50 ms connection interval: a report per interval, not per 12 ms. */
+    /* A 50 ms connection interval: a report per interval, not per 12 ms. The
+     * paste goes down 335 ms before the check, room for six reports. */
     reset();
     copy_on_profile_0(text);
     conns[1].interval = 40;
     select_endpoint(ZMK_TRANSPORT_BLE, 1);
     chord(KEY_LGUI, HID_USAGE_KEY_KEYBOARD_V);
     advance(250);
-    CHECK(host_len >= 1 && host_len <= 3);
+    CHECK(host_len >= 3 && host_len <= 7);
     advance(3000);
     expect_host("slow link", text);
 }
@@ -2352,6 +2408,8 @@ int main(void) {
     test_only_profiles_may_write();
     test_other_shortcuts_pass();
     test_typographic_text();
+    test_typing_takes_a_report_per_character();
+    test_typing_lets_go_where_it_has_to();
     test_without_intercept();
     test_keys_behind_a_waiting_paste_keep_their_place();
     test_fast_switch_waits_for_the_new_clip();
