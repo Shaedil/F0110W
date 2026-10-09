@@ -100,6 +100,15 @@ final class ProfileNameSyncTests: XCTestCase {
             [], "a profile the keyboard does not have")
     }
 
+    /// A computer that is not one of the keyboard's profiles cannot name
+    /// anything, so its renames wait rather than being refused.
+    func testNothingSentUntilOwnProfileKnown() {
+        XCTAssertEqual(
+            ProfileNameSync.writes(keyboard: ["", ""], pending: [1: "TV"], own: nil,
+                                   deviceName: "MacBook Air M4"),
+            [])
+    }
+
     func testSendsRenamesMadeHere() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["Old", "Same", ""],
@@ -145,6 +154,19 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(store.pending, [:])
         store.cache(["Studio"])
         XCTAssertEqual(store.local(count: 1), ["Studio"])
+    }
+
+    /// A rename to what the keyboard already has is never sent, so it is
+    /// settled by the read instead of waiting forever.
+    func testStoreSettlesARenameTheKeyboardHas() {
+        let store = ProfileNameStore(defaults: defaults)
+        store.edit(0, " Desk ")
+        store.cache(["Desk", "Other"])
+        XCTAssertEqual(store.pending, [:])
+        XCTAssertEqual(store.local(count: 2), ["Desk", "Other"])
+
+        store.cache(["Renamed elsewhere", "Other"])
+        XCTAssertEqual(store.local(count: 1), ["Renamed elsewhere"])
     }
 
     /// An answer to an earlier rename does not drop a later one.

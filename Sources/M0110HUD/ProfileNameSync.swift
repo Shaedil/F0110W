@@ -65,11 +65,14 @@ enum ProfileNameSync {
 
     /// - keyboard: the names just read from the keyboard.
     /// - pending: renames made here that have not reached the keyboard yet.
-    /// - own: the profile that is this computer, if known.
+    /// - own: the profile that is this computer, if known. The keyboard
+    ///   takes names only from a computer that is one of its profiles, so
+    ///   until that is known nothing is sent and renames wait.
     /// - deviceName: what this computer calls itself, for its own profile
     ///   when that has no name or is called "Profile N".
     static func writes(keyboard: [String], pending: [Int: String], own: Int?,
                        deviceName: String?) -> [Write] {
+        guard let own else { return [] }
         var names = keyboard
         var out: [Write] = []
 
@@ -81,7 +84,7 @@ enum ProfileNameSync {
             names[index] = name
         }
 
-        guard let own, names.indices.contains(own),
+        guard names.indices.contains(own),
               let deviceName = deviceName.map({
                   ProfileNamesWire.clean($0, maxBytes: ProfileNamesWire.autoMaxBytes)
               }),
@@ -211,11 +214,15 @@ final class ProfileNameStore {
     }
 
     /// Takes the keyboard's names as the copy here, except where a rename made
-    /// here is still on its way.
+    /// here is still on its way. A rename the keyboard already has is done
+    /// with, sent or not.
     func cache(_ keyboard: [String]) {
         update { state in
-            for (index, name) in keyboard.enumerated()
-            where state.names.indices.contains(index) && state.pending[index] == nil {
+            for (index, name) in keyboard.enumerated() where state.names.indices.contains(index) {
+                if let wanted = state.pending[index] {
+                    guard ProfileNamesWire.clean(wanted) == name else { continue }
+                    state.pending[index] = nil
+                }
                 state.names[index] = name
             }
         }
