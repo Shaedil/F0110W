@@ -25,7 +25,8 @@ enum HUDKind: String, CaseIterable {
     }
 }
 
-/// Profile names the user has given in Settings, for "Moved to ...".
+/// Profile names, for "Moved to ...": this computer's copy of the ones the
+/// keyboard keeps (see `ProfileNameStore`).
 enum ProfileNames {
     static let count = 5
 
@@ -37,8 +38,11 @@ enum ProfileNames {
            !n.isEmpty {
             return n
         }
-        return "Profile \(index + 1)"
+        return placeholder(index)
     }
+
+    /// What a profile with no name is called.
+    static func placeholder(_ index: Int) -> String { "Profile \(index + 1)" }
 }
 
 /// How the HUD arrives.

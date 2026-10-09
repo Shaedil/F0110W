@@ -107,6 +107,11 @@ struct BluetoothPane: View {
                 .font(Theme.small)
                 .foregroundStyle(Theme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Kept on the keyboard, so every computer paired with it shows the same names. "
+                 + "A computer with the app names its own profile when it has none.")
+                .font(Theme.small)
+                .foregroundStyle(Theme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -153,18 +158,41 @@ func settingsStepper(_ label: String, _ value: Binding<Int>,
     }
 }
 
-/// One profile's name, written straight to the key ProfileNames reads, so
-/// a rename shows on the very next HUD.
+/// One profile's name. A rename is written straight to the key ProfileNames
+/// reads, so it shows on the very next HUD, and goes on to the keyboard,
+/// which shares it with every computer paired to it. Names the keyboard sends
+/// show here as they arrive.
 func profileField(_ index: Int) -> some View {
-    let name = Binding<String>(
-        get: { UserDefaults.standard.string(forKey: ProfileNames.key(index)) ?? "" },
-        set: { UserDefaults.standard.set($0, forKey: ProfileNames.key(index)) })
-    return HStack {
-        Text("Profile \(index + 1)").font(Theme.body).foregroundStyle(Theme.textDim)
-        Spacer()
-        TextField("", text: name, prompt: Text("Profile \(index + 1)"))
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 220)
+    ProfileField(index: index)
+}
+
+private struct ProfileField: View {
+    let index: Int
+    @AppStorage private var stored: String
+
+    init(index: Int) {
+        self.index = index
+        _stored = AppStorage(wrappedValue: "", ProfileNames.key(index))
+    }
+
+    var body: some View {
+        let name = Binding<String>(
+            get: { stored },
+            set: {
+                // Cut to what the keyboard keeps, so what shows is what
+                // every other computer will show.
+                let fitted = $0.utf8.count > ProfileNamesWire.maxBytes
+                    ? ProfileNamesWire.clean($0) : $0
+                ProfileNameStore.shared.edit(index, fitted)
+                NotificationCenter.default.post(name: .profileNameEdited, object: nil)
+            })
+        return HStack {
+            Text(ProfileNames.placeholder(index)).font(Theme.body).foregroundStyle(Theme.textDim)
+            Spacer()
+            TextField("", text: name, prompt: Text(ProfileNames.placeholder(index)))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 220)
+        }
     }
 }
 

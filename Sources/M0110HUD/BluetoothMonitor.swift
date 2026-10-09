@@ -18,6 +18,8 @@ final class BluetoothMonitor: NSObject {
     /// firmware branch. Firmware without it simply never reports a profile.
     static let profileService = CBUUID(string: "05B3A8EB-1160-4B0F-B56D-700006AAEFEB")
     static let profileStateChar = CBUUID(string: "05B3A8EC-1160-4B0F-B56D-700006AAEFEB")
+    /// The profiles' names, kept on the keyboard; see `ProfileNamesWire`.
+    static let profileNamesChar = CBUUID(string: "05B3A8ED-1160-4B0F-B56D-700006AAEFEB")
 
     private static let savedIdentifierKey = "peripheralIdentifier"
     private let pollInterval: TimeInterval = 2
@@ -39,6 +41,19 @@ final class BluetoothMonitor: NSObject {
     /// the at-launch flag `onConnect` will carry.
     private var pendingConnect: Bool?
     private var batteryTimeout: DispatchWorkItem?
+    /// Nil on firmware that does not keep names.
+    private var namesChar: CBCharacteristic?
+    /// The profile report's names counter, last heard; a change means a name
+    /// changed and is read again.
+    private var namesGeneration: UInt8?
+    /// Name writes sent and not yet answered, oldest first. CoreBluetooth
+    /// answers writes to one characteristic in order.
+    private var namesInFlight: [ProfileNameSync.Write] = []
+    /// The profile that is this computer, as reported over the current link.
+    /// A computer names only its own profile, so this is never carried over
+    /// from an earlier link: the computer may have been paired to another
+    /// profile since.
+    private(set) var reportedOwn: Int?
 
     private let config: Config
     private(set) var battery: Int?
@@ -60,6 +75,38 @@ final class BluetoothMonitor: NSObject {
     /// 0-based. Sent on every switch and sometimes when nothing moved, so the
     /// receiver compares with what it last heard.
     var onProfile: ((String, Int, Int?) -> Void)?
+    /// Fires on every read of the profiles' names, one per profile, "" where
+    /// none was given.
+    var onNames: (([String]) -> Void)?
+    /// Fires when the keyboard answers a name write: whether it took it.
+    var onNameWritten: ((ProfileNameSync.Write, Bool) -> Void)?
+
+    /// Whether names can be written now: the link is up and the firmware
+    /// keeps them.
+    var canWriteNames: Bool { namesChar != nil && peripheral?.state == .connected }
+    /// Whether name writes are still waiting on the keyboard's answer.
+    var isWritingNames: Bool { !namesInFlight.isEmpty }
+
+    func write(_ name: ProfileNameSync.Write) {
+        guard let p = peripheral, let ch = namesChar, p.state == .connected else { return }
+        log("naming Profile \(name.index + 1) \"\(name.name)\" (\(name.op == .auto ? "if unnamed" : "set"))")
+        namesInFlight.append(name)
+        p.writeValue(ProfileNamesWire.write(name.op, index: name.index, name: name.name),
+                     for: ch, type: .withResponse)
+    }
+
+    private func readNames() {
+        guard let p = peripheral, let ch = namesChar, p.state == .connected else { return }
+        p.readValue(for: ch)
+    }
+
+    /// Our link is gone, so is everything learnt over it.
+    private func forgetLink() {
+        namesChar = nil
+        namesGeneration = nil
+        namesInFlight.removeAll()
+        reportedOwn = nil
+    }
 
     init(config: Config) {
         self.config = config
@@ -119,6 +166,7 @@ final class BluetoothMonitor: NSObject {
             peripheral = nil
             linkPending = false
             battery = nil
+            forgetLink()
             if pendingConnect != nil {
                 // Gone before the connect was announced: there is nothing to
                 // take back, so say nothing either way.
@@ -194,12 +242,12 @@ final class BluetoothMonitor: NSObject {
 
     private static let services = [batteryService, profileService]
 
-    /// The one characteristic wanted from each service.
-    private static func characteristic(for service: CBUUID) -> CBUUID? {
+    /// The characteristics wanted from each service.
+    private static func characteristics(for service: CBUUID) -> [CBUUID] {
         switch service {
-        case batteryService: return batteryLevelChar
-        case profileService: return profileStateChar
-        default: return nil
+        case batteryService: return [batteryLevelChar]
+        case profileService: return [profileStateChar, profileNamesChar]
+        default: return []
         }
     }
 
@@ -221,6 +269,12 @@ final class BluetoothMonitor: NSObject {
         guard data.count >= 2 else { return nil }
         let bytes = [UInt8](data.prefix(2))
         return (Int(bytes[0]), bytes[1] == 0xFF ? nil : Int(bytes[1]))
+    }
+
+    /// The third byte, which goes up whenever a name changes. Nil from
+    /// firmware that does not keep names.
+    static func parseNamesGeneration(_ data: Data) -> UInt8? {
+        data.count >= 3 ? data[data.startIndex + 2] : nil
     }
 }
 
@@ -260,6 +314,7 @@ extension BluetoothMonitor: CBCentralManagerDelegate {
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
         linkPending = false
+        forgetLink()
         log("GATT link down: \(error?.localizedDescription ?? "clean")")
         guard presence.isPresent else { return }
         // Usually the keyboard going, but our link can also drop on its own,
@@ -288,8 +343,9 @@ extension BluetoothMonitor: CBPeripheralDelegate {
             log("no profile report exposed; the firmware predates it")
         }
         for service in services {
-            guard let ch = Self.characteristic(for: service.uuid) else { continue }
-            peripheral.discoverCharacteristics([ch], for: service)
+            let wanted = Self.characteristics(for: service.uuid)
+            guard !wanted.isEmpty else { continue }
+            peripheral.discoverCharacteristics(wanted, for: service)
         }
     }
 
@@ -297,20 +353,53 @@ extension BluetoothMonitor: CBPeripheralDelegate {
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
         guard error == nil else { return log("characteristic discovery failed: \(error!)") }
-        guard let wanted = Self.characteristic(for: service.uuid),
-              let ch = service.characteristics?.first(where: { $0.uuid == wanted }) else {
+        let found = (service.characteristics ?? []).filter {
+            Self.characteristics(for: service.uuid).contains($0.uuid)
+        }
+        if found.isEmpty {
             return log("no characteristic found in \(service.uuid)")
         }
-        peripheral.readValue(for: ch)
-        if ch.properties.contains(.notify) {
-            peripheral.setNotifyValue(true, for: ch)
+        if service.uuid == Self.profileService,
+           !found.contains(where: { $0.uuid == Self.profileNamesChar }) {
+            log("no profile names exposed; the firmware predates them")
         }
+        for ch in found {
+            if ch.uuid == Self.profileNamesChar { namesChar = ch }
+            peripheral.readValue(for: ch)
+            if ch.properties.contains(.notify) {
+                peripheral.setNotifyValue(true, for: ch)
+            }
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didWriteValueFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        guard characteristic.uuid == Self.profileNamesChar else { return }
+        guard !namesInFlight.isEmpty else { return }
+        let name = namesInFlight.removeFirst()
+        if let error {
+            log("keyboard refused the name for Profile \(name.index + 1): \(error.localizedDescription)")
+        }
+        onNameWritten?(name, error == nil)
+        // The keyboard's answer can differ from what was sent, as when it
+        // numbers a name, so the names are read back rather than assumed.
+        if namesInFlight.isEmpty { readNames() }
     }
 
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateValueFor characteristic: CBCharacteristic,
                     error: Error?) {
         guard error == nil else { return log("read of \(characteristic.uuid) failed: \(error!)") }
+        if characteristic.uuid == Self.profileNamesChar {
+            guard let data = characteristic.value, let names = ProfileNamesWire.parse(data) else {
+                return log("profile names malformed")
+            }
+            log("profile names: " + names.enumerated()
+                .map { "\($0.offset + 1)=\"\($0.element)\"" }.joined(separator: " "))
+            onNames?(names)
+            return
+        }
         if characteristic.uuid == Self.profileStateChar {
             guard let data = characteristic.value, let report = Self.parseProfileState(data) else {
                 return log("profile report malformed")
@@ -320,7 +409,14 @@ extension BluetoothMonitor: CBPeripheralDelegate {
             log("profile report: Profile \(report.active + 1) active; this computer is "
                 + (report.own.map { "Profile \($0 + 1)" } ?? "not bonded to one")
                 + " (raw \(data.prefix(2).map { String(format: "%02x", $0) }.joined(separator: " ")))")
+            reportedOwn = report.own
             onProfile?(displayName, report.active, report.own)
+            if let generation = Self.parseNamesGeneration(data), generation != namesGeneration {
+                // The first report only sets the counter; discovery reads
+                // the names itself.
+                if namesGeneration != nil { readNames() }
+                namesGeneration = generation
+            }
             return
         }
         guard characteristic.uuid == Self.batteryLevelChar,

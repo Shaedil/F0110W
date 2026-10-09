@@ -68,6 +68,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var activeProfile: Int?
     private(set) var ownProfile: Int?
 
+    /// The profiles' names as the keyboard last gave them, this connect. Nil
+    /// until read, and always on firmware that does not keep them.
+    private var keyboardNames: [String]?
+    private let names = ProfileNameStore.shared
+    /// What this Mac offers as its own profile's name, e.g. "MacBook Air M4".
+    private lazy var deviceName = DeviceName.current()
+    private var nameEditWatch: NSObjectProtocol?
+    private var nameEditSync: DispatchWorkItem?
+
     /// Hours apart that make a connect the first of a new day, on top of any
     /// connect on a new calendar day.
     static let arrivalGap: TimeInterval = 4 * 3600
@@ -225,7 +234,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.onProfile = { [weak self] name, active, own in
             self?.handleProfileSwitch(name: name, active: active, own: own)
         }
+        m.onNames = { [weak self] names in
+            self?.handleProfileNames(names)
+        }
+        m.onNameWritten = { [weak self] write, _ in
+            self?.names.answered(write)
+        }
         monitor = m
+        // Typing in Settings renames on every keystroke; send the name once
+        // the typing stops.
+        nameEditWatch = NotificationCenter.default.addObserver(
+            forName: .profileNameEdited, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.nameEditSync?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.syncProfileNames() }
+            self.nameEditSync = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        }
 
         if config.clipboard {
             clipboard = ClipboardBridge(deviceName: config.deviceName) { message in
@@ -270,6 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func handleDisconnect(name: String, now: Date = Date()) {
         lastDisconnectAt = now
         activeProfile = nil
+        keyboardNames = nil
         statusItem?.model.linked = false
         statusItem?.model.profile = nil
         if let level = lastBattery, level <= Self.diedLevel {
@@ -308,6 +335,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hud.show(kind: .movedBack, name: name, battery: lastBattery)
         case .firstReport, .unchanged, .ownUnknown, .elsewhere:
             break
+        }
+        // Which profile is this Mac may only now be known, and with it which
+        // name to fill in.
+        syncProfileNames()
+    }
+
+    /// The keyboard's names, read on connect and again whenever one changes.
+    func handleProfileNames(_ keyboard: [String]) {
+        keyboardNames = keyboard
+        names.carryOverIfNeeded(keyboard: keyboard)
+        syncProfileNames()
+    }
+
+    /// Sends the keyboard the renames made here and, if this Mac's profile
+    /// has no name, this Mac's; then takes the keyboard's names as the copy
+    /// here. Writes wait for any already sent, whose answer reads the names
+    /// again and comes back here.
+    private func syncProfileNames() {
+        guard let keyboard = keyboardNames else { return }
+        names.cache(keyboard)
+        guard let monitor, monitor.canWriteNames, !monitor.isWritingNames else { return }
+        for write in ProfileNameSync.writes(keyboard: keyboard, pending: names.pending,
+                                            own: monitor.reportedOwn, deviceName: deviceName) {
+            monitor.write(write)
         }
     }
 
