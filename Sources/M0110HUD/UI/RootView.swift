@@ -99,6 +99,10 @@ struct RootView: View {
     }
 
     var body: some View {
+        ChronosSky { content }
+    }
+
+    private var content: some View {
         ZStack(alignment: .topLeading) {
             ThemeBackground()
 
@@ -164,10 +168,11 @@ struct RootView: View {
                         VisualEffectBackground(material: .sidebar)
                     }
                     shape.fill(Theme.sidebarFloating)
+                    PrismWash(shape: shape)
                 }
                 .clipShape(shape)
             }
-            .overlay(shape.strokeBorder(Theme.sidebarFloatingStroke, lineWidth: 1))
+            .overlay(PrismRim(shape: shape))
             .shadow(color: .black.opacity(0.42), radius: 18, y: 7)
             .padding(Self.sidebarInset)
     }
@@ -304,7 +309,7 @@ struct RootView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .center, spacing: 14) {
                     DitheredTitle(text: pane.rawValue)
-                    RacingStripes(colour: pane.tint)
+                    RacingStripes()
                         .frame(maxWidth: 220)
                     Spacer(minLength: 0)
                 }

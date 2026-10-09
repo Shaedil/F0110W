@@ -26,6 +26,12 @@ enum Theme {
                                dark: NSColor(white: 0.07, alpha: 0.58))
     static let panelStroke = dynamic(light: NSColor(srgbRed: 0.92, green: 0.88, blue: 0.80, alpha: 0.16),
                                      dark: NSColor(srgbRed: 0.92, green: 0.88, blue: 0.80, alpha: 0.14))
+    /// prismorphism's glass, for the content panels: white at a few percent
+    /// over the ground, so a panel reads a step lighter than what is behind
+    /// it, and lets the ambient glow through. The same in both appearances,
+    /// because the ground is near-black in both.
+    static let glass = Color.white.opacity(0.045)
+    static let glassStroke = Color.white.opacity(0.10)
     /// The floating sidebar's tint, laid over a real blur, so in dark mode it is
     /// much more transparent than the docked sidebar it replaced: the blur
     /// supplies the separation that opacity used to.
@@ -238,15 +244,21 @@ enum Theme {
 
 /// The stacked hairlines System 1 drew across its title bars.
 struct RacingStripes: View {
-    /// The ink, by default the page's dim text; the main window prints them
-    /// in the current tab's sidebar colour.
-    var colour: Color = Theme.textDim.opacity(0.7)
+    /// One ink for every dot. Without one they run through the triad, left to
+    /// right, so the stripes fade out of the prism the way they fade out of
+    /// black.
+    var colour: Color?
+    @Environment(\.prism) private var prism
 
     var body: some View {
         Canvas { context, size in
+            var dots = Path()
             for (x, y) in Self.dots(width: Int(size.width), height: Int(size.height)) {
-                context.fill(Path(CGRect(x: x, y: y, width: 1, height: 1)), with: .color(colour))
+                dots.addRect(CGRect(x: x, y: y, width: 1, height: 1))
             }
+            context.fill(dots, with: colour.map { .color($0) }
+                         ?? .linearGradient(Gradient(colors: prism.marks),
+                                            startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)))
         }
         .frame(height: 13)
     }
@@ -354,16 +366,44 @@ struct DitheredTitle: View {
     }
 }
 
-/// The window's ground: flat near-black, so the board and panels are the only
-/// things with colour in them.
+/// The window's ground: near-black with prismorphism's sun-tracking ambient
+/// in it, `pm-ambient-chronos`. Three soft glows of the triad, the strongest
+/// centred where the sun is, so it climbs the window through the morning and
+/// sets at the far edge, and all of them dim, though not out, at night.
 struct ThemeBackground: View {
+    @Environment(\.prism) private var prism
+
     var body: some View {
-        Theme.ink.ignoresSafeArea()
+        Canvas { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Theme.ink))
+            let t = prism.tints(1), cap = prism.glowScale
+            let (a, b, c) = PrismTokens.ambient
+            let w = size.width, h = size.height
+            let sun = CGPoint(x: prism.sun.x * w, y: prism.sun.y * h)
+            glow(context, at: sun, rx: 0.7 * w, ry: 0.55 * h, t[0].opacity(a * cap))
+            glow(context, at: CGPoint(x: sun.x + 0.18 * w, y: sun.y + 0.12 * h),
+                 rx: 0.6 * w, ry: 0.5 * h, t[1].opacity(b * cap))
+            glow(context, at: CGPoint(x: 0.5 * w, y: 0.6 * h), rx: 0.8 * w, ry: 0.7 * h,
+                 t[2].opacity(c * cap))
+        }
+        .ignoresSafeArea()
+    }
+
+    /// CSS's `radial-gradient(ellipse rx ry at x y, colour 0%, transparent 60%)`.
+    private func glow(_ context: GraphicsContext, at centre: CGPoint, rx: CGFloat, ry: CGFloat,
+                      _ colour: Color) {
+        var context = context
+        context.translateBy(x: centre.x, y: centre.y)
+        context.scaleBy(x: rx, y: ry)
+        context.fill(Path(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2)),
+                     with: .radialGradient(Gradient(colors: [colour, colour.opacity(0)]),
+                                           center: .zero, startRadius: 0, endRadius: 0.6))
     }
 }
 
 
-/// Translucent rounded card.
+/// A glass card with the triad's shine along its top edge, after
+/// prismorphism's `pm-glass pm-prismatic-shine`.
 struct Panel<Content: View>: View {
     var padding: CGFloat = 16
     /// Top and bottom inset, when it should differ from the sides. The board
@@ -371,10 +411,10 @@ struct Panel<Content: View>: View {
     /// and an even inset around a board that is three times wider than tall
     /// leaves the top and bottom looking pinched.
     var verticalPadding: CGFloat?
-    /// Surface colour. Defaults to the app's near-black panel; the board pane
-    /// overrides it so the keyboard is not framed in black.
-    var surface: Color = Theme.panel
-    var stroke: Color = Theme.panelStroke
+    /// Surface colour. Defaults to glass; the board pane overrides it so the
+    /// drawn keyboard sits in a beige surround of its own family.
+    var surface: Color = Theme.glass
+    var stroke: Color = Theme.glassStroke
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -384,9 +424,11 @@ struct Panel<Content: View>: View {
             .background {
                 RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
                     .fill(surface)
+                    .overlay(PrismWash(shape: RoundedRectangle(cornerRadius: Theme.corner,
+                                                               style: .continuous)))
                     .overlay(
-                        // 1-bit grain, barely there, to keep the surface from
-                        // reading as flat modern glass.
+                        // 1-bit grain, barely there: frosted glass, but glass
+                        // from 1984.
                         RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
                             .fill(Theme.stipple)
                             .opacity(0.045)
@@ -396,6 +438,7 @@ struct Panel<Content: View>: View {
                 RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
                     .strokeBorder(stroke, lineWidth: 1)
             )
+            .overlay(alignment: .top) { PrismShine(inset: Theme.corner) }
     }
 }
 
@@ -413,16 +456,14 @@ struct PillButtonStyle: ButtonStyle {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         return configuration.label
             .font(font)
-            .foregroundStyle(prominent ? Theme.onAccent : Theme.text)
+            .foregroundStyle(Theme.text)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
             .padding(.horizontal, 12)
             .padding(.vertical, verticalPadding)
-            .background(
-                shape.fill(prominent
-                           ? AnyShapeStyle(Theme.accent)
-                           : AnyShapeStyle(Theme.key))
-            )
+            .background {
+                if prominent { PrismSelection(shape: shape) } else { shape.fill(Theme.key) }
+            }
             // A faint edge: at full strength the outline read harsher than the
             // fill it surrounds.
             .overlay(shape.strokeBorder(prominent ? .clear : Theme.keyStroke.opacity(0.4), lineWidth: 1))
@@ -443,13 +484,11 @@ struct SegmentPills<T: Hashable>: View {
                 let active = option.value == selection
                 Text(option.label)
                     .font(font)
-                    .foregroundStyle(active ? Theme.onAccent : Theme.textDim)
+                    .foregroundStyle(active ? Theme.text : Theme.textDim)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(padding)
-                    .background(
-                        Capsule().fill(active ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.clear))
-                    )
+                    .background { if active { PrismSelection(shape: Capsule()) } }
                     .contentShape(Capsule())
                     .onTapGesture { selection = option.value }
             }
@@ -500,6 +539,7 @@ struct ThemeSlider: View {
 
     private let track: CGFloat = 4
     private let knob: CGFloat = 13
+    @Environment(\.prism) private var prism
 
     var body: some View {
         GeometryReader { geo in
@@ -511,11 +551,13 @@ struct ThemeSlider: View {
                     .fill(Theme.key)
                     .overlay(Capsule().strokeBorder(Theme.keyStroke, lineWidth: 1))
                     .frame(height: track)
+                // The whole triad across whatever is filled, as prismorphism's
+                // progress bars draw it.
                 Capsule()
-                    .fill(Theme.accent)
+                    .fill(LinearGradient(colors: prism.marks, startPoint: .leading, endPoint: .trailing))
                     .frame(width: knob / 2 + usable * fraction, height: track)
                 Circle()
-                    .fill(Theme.accent)
+                    .fill(Theme.text)
                     .overlay(Circle().strokeBorder(.black.opacity(0.30), lineWidth: 1))
                     .frame(width: knob, height: knob)
                     .offset(x: usable * fraction)
@@ -572,15 +614,19 @@ struct ThemeStepper: View {
 /// Switch drawn in SwiftUI, for the same reasons as `ThemeSlider`.
 struct ThemeSwitch: View {
     @Binding var isOn: Bool
+    @Environment(\.prism) private var prism
 
     var body: some View {
         Capsule()
-            .fill(isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.key))
+            .fill(isOn
+                  ? AnyShapeStyle(LinearGradient(colors: prism.marks.map { $0.opacity(0.85) },
+                                                 startPoint: .leading, endPoint: .trailing))
+                  : AnyShapeStyle(Theme.key))
             .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.keyStroke, lineWidth: 1))
             .frame(width: 32, height: 18)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()
-                    .fill(isOn ? Theme.onAccent : Color.white.opacity(0.85))
+                    .fill(Color.white.opacity(isOn ? 1 : 0.85))
                     .frame(width: 14, height: 14)
                     .padding(2)
                     .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)

@@ -41,6 +41,9 @@ struct Config {
     /// Render the window's 3D stage at every focus to this path, then exit.
     var stageSnapshotPath: String?
     var snapshotPane: String?
+    /// The time of day a snapshot's sky is taken at, "HH:MM" today; the clock
+    /// when unset.
+    var snapshotTime: String?
     var verbose = false
     /// Multiplies every HUD dimension; 1.0 is the tuned default.
     var scale = 1.0
@@ -133,6 +136,7 @@ struct Config {
             case "--board-snapshot":  if let v = it.next() { c.boardSnapshotPath = v }
             case "--stage-snapshot":  if let v = it.next() { c.stageSnapshotPath = v }
             case "--snapshot-pane":   if let v = it.next() { c.snapshotPane = v }
+            case "--snapshot-time":   if let v = it.next() { c.snapshotTime = v }
             case "-v", "--verbose":   c.verbose = true
             case "-h", "--help":      Config.printUsage(); exit(0)
             default:
@@ -183,6 +187,8 @@ struct Config {
                             for the menu bar item
           --snapshot <path> render the UI offscreen to a PNG and exit
           --snapshot-pane <n> which pane to render (Keys, Settings, ...)
+          --snapshot-time <HH:MM>  the time of day whose sky the snapshot's
+                            colours follow (default: now)
           --board-snapshot <path>  render the HUD's spinning 3D board to a PNG
                             strip, one frame per sixth of a turn, and exit
           --stage-snapshot <path>  render the window's 3D board at each pane's

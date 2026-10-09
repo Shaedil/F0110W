@@ -28,7 +28,8 @@ if let path = config.stageSnapshotPath {
 if let path = config.snapshotPath {
     _ = NSApplication.shared
     exit(MainActor.assumeIsolated {
-        Snapshot.render(to: path, pane: config.snapshotPane, appearance: config.appearance)
+        Snapshot.render(to: path, pane: config.snapshotPane, appearance: config.appearance,
+                        time: config.snapshotTime)
     })
 }
 

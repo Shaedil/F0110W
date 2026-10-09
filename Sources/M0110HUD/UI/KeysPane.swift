@@ -53,8 +53,8 @@ struct KeysPane: View {
                       // The 3D board sits on the same dark stage as the
                       // other panes' board, so moving between them reads as
                       // one scene.
-                      surface: shows3D ? Theme.panel : Theme.boardSurround,
-                      stroke: shows3D ? Theme.panelStroke : Theme.boardSurroundStroke) {
+                      surface: shows3D ? Theme.glass : Theme.boardSurround,
+                      stroke: shows3D ? Theme.glassStroke : Theme.boardSurroundStroke) {
                     // Full width, so the panel's edges line up with the
                     // picker's below it; the board centres inside.
                     Group { if shows3D { board3D } else { board } }

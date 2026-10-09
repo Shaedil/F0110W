@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 enum Snapshot {
     static func render(to path: String, pane: String?, appearance: String? = nil,
+                       time: String? = nil,
                        width: CGFloat = 1340, height: CGFloat = 820) -> Int32 {
         // Force the app appearance so both themes can be rendered on demand;
         // otherwise the snapshot follows the system setting.
@@ -29,6 +30,7 @@ enum Snapshot {
         let root = RootView(controller: controller,
                             initialPane: Pane(rawValue: pane ?? "Keyboard") ?? .keys)
             .environment(\.classicSnapshot, true)
+            .environment(\.skyTime, time.flatMap(today))
             .environment(\.colorScheme, scheme ?? (NSApp.effectiveAppearance
                 .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light))
             // Top-leading rather than centred. Snapshots drop the scroll view,
@@ -54,5 +56,12 @@ enum Snapshot {
             FileHandle.standardError.write("snapshot write failed: \(error)\n".data(using: .utf8)!)
             return 1
         }
+    }
+
+    /// "HH:MM" as that time today.
+    private static func today(_ hhmm: String) -> Date? {
+        let parts = hhmm.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: Date())
     }
 }
