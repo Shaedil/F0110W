@@ -155,6 +155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The Bluetooth discovery route picks its peripheral by name, so it
         // needs the same name the HUD watches for.
         keyboard.deviceName = config.deviceName
+        DebugLog.shared.echo = config.verbose
+        DebugLog.shared.persists = !(config.debug || config.uiDev || config.previewOnly)
 
         // Rasterise the board art now rather than when the keyboard connects.
         // It is one main-thread render either way; at launch nobody is waiting
@@ -171,6 +173,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runUIDev()
             return
         }
+
+        let info = Bundle.main.infoDictionary
+        DebugLog.shared.add(.app, "started: version "
+            + "\(info?["CFBundleShortVersionString"] as? String ?? "?") "
+            + "(\(info?["CFBundleVersion"] as? String ?? "?")), "
+            + "macOS \(ProcessInfo.processInfo.operatingSystemVersionString), "
+            + "watching for \"\(config.deviceName)\"")
 
         // The app lives in the menu bar. It has no Dock icon and opens no
         // window until asked, so this is its only permanent presence.
@@ -219,9 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor = m
 
         if config.clipboard {
-            let verbose = config.verbose
             clipboard = ClipboardBridge(deviceName: config.deviceName) { message in
-                if verbose { print(message) }
+                DebugLog.shared.add(.clipboard, message)
             }
         }
     }
@@ -289,13 +297,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeProfile = active
         if let own { ownProfile = own }
         statusItem?.model.profile = ProfileState(active: active, own: ownProfile)
-        guard let mine = ownProfile, let previous, previous != active else { return }
+        let move = ProfileMove(previous: previous, active: active, own: ownProfile)
+        DebugLog.shared.add(.app, move.explanation)
 
-        if previous == mine {
+        switch move.outcome {
+        case .away:
             hud.show(kind: .movedAway, name: name, battery: lastBattery,
                      detail: ProfileNames.name(for: active))
-        } else if active == mine {
+        case .back:
             hud.show(kind: .movedBack, name: name, battery: lastBattery)
+        case .firstReport, .unchanged, .ownUnknown, .elsewhere:
+            break
         }
     }
 

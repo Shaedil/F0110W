@@ -33,9 +33,23 @@ final class KeyboardController: ObservableObject {
         case failed(String)
 
         var isConnected: Bool { if case .connected = self { return true } else { return false } }
+
+        var logLine: String {
+            switch self {
+            case .disconnected: return "disconnected"
+            case .connecting: return "connecting"
+            case .connected(let port, let device): return "connected to \(device) on \(port)"
+            case .failed(let reason): return "failed: \(reason)"
+            }
+        }
     }
 
-    @Published var connection: Connection = .disconnected
+    @Published var connection: Connection = .disconnected {
+        didSet {
+            guard connection != oldValue else { return }
+            DebugLog.shared.add(.studio, connection.logLine)
+        }
+    }
     @Published var lockState: LockState = .locked
     @Published var layout = PhysicalLayout()
     @Published var keymap = Keymap()
@@ -106,10 +120,9 @@ final class KeyboardController: ObservableObject {
     /// that routine churn look like a fault the user had to clear by hand.
     private func attemptConnect() {
         guard wantsConnection, client == nil else { return }
-        let verbose = ProcessInfo.processInfo.arguments.contains("--verbose")
         guard let found = StudioClient.discover(
             deviceName: deviceName,
-            log: { if verbose { print("[studio] \($0)") } }) else {
+            log: { DebugLog.shared.add(.studio, $0) }) else {
             let delay = nextRetryDelay()
             publish {
                 self.connection = .failed(

@@ -50,6 +50,18 @@ screen.
   older firmware never shows these. Profiles are named in Settings.
 - **Battery**: each 10% step down, the low-battery alert, and an empty battery.
 
+## Logs
+
+Settings → Logs lists what the app heard from the keyboard and what it did
+about it: Bluetooth links and profile reports, every HUD shown, the clipboard
+and the Studio link. When a HUD did not show, the App lines say why, as in
+"Profile 2 to Profile 1, neither is this computer (Profile 3); nothing shown".
+Profiles are numbered from 1 there, as in Settings.
+
+Every line also goes to `~/Library/Logs/M0110HUD/M0110HUD.log`, which keeps
+what came before this launch; past 2 MB it moves to `M0110HUD.1.log`. The
+debug panel and `--ui-dev` runs log only to the tab.
+
 ## Clipboard
 
 With firmware that has the clipboard service, text copied on this Mac goes

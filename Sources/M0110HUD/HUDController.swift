@@ -234,6 +234,8 @@ final class HUDController {
 
     /// `detail` is the profile name on a moved-away HUD.
     func show(kind: HUDKind, name: String, battery: Int?, detail: String? = nil) {
+        DebugLog.shared.add(.app, "showing \(kind)"
+            + (detail.map { " (\($0))" } ?? "") + (battery.map { ", battery \($0)%" } ?? ""))
         // The accessibility notification covers a switch flipped while the app
         // is running; this covers the level being different from whatever it
         // was when the panel was built, at no cost worth measuring.

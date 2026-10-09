@@ -28,7 +28,7 @@ enum BoardFocus: Equatable {
         case .settings:
             switch settingsTab {
             case .popup: self = .popup
-            case .clipboard: self = .radio
+            case .clipboard, .logs: self = .radio
             }
         }
     }

@@ -257,8 +257,10 @@ struct RootView: View {
     /// paused, so leaving that pane flies the camera in from the whole board
     /// instead of starting cold.
     private var detail: some View {
-        // The Clipboard tab has nothing on the board worth pointing at.
-        let showStage = pane != .keys && !(pane == .settings && settingsTab == .clipboard)
+        // The Clipboard and Logs tabs have nothing on the board worth
+        // pointing at.
+        let showStage = pane != .keys
+            && !(pane == .settings && [.clipboard, .logs].contains(settingsTab))
         // No spacing: the column's own trailing padding is the gap, and on
         // the Keyboard pane any spacing would come out of the board's width.
         return HStack(alignment: .top, spacing: 0) {

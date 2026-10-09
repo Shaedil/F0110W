@@ -70,14 +70,7 @@ final class BluetoothMonitor: NSObject {
     }
 
     private func log(_ msg: String) {
-        guard config.verbose else { return }
-        print("[\(Self.timestamp())] \(msg)")
-    }
-
-    private static func timestamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f.string(from: Date())
+        DebugLog.shared.add(.bluetooth, msg)
     }
 
     // MARK: - Presence polling
@@ -322,8 +315,11 @@ extension BluetoothMonitor: CBPeripheralDelegate {
             guard let data = characteristic.value, let report = Self.parseProfileState(data) else {
                 return log("profile report malformed")
             }
-            log("profile \(report.active) active; this computer is "
-                + (report.own.map { "profile \($0)" } ?? "not bonded to one"))
+            // Numbered from 1 here, as Settings names them; the raw bytes
+            // are 0-based.
+            log("profile report: Profile \(report.active + 1) active; this computer is "
+                + (report.own.map { "Profile \($0 + 1)" } ?? "not bonded to one")
+                + " (raw \(data.prefix(2).map { String(format: "%02x", $0) }.joined(separator: " ")))")
             onProfile?(displayName, report.active, report.own)
             return
         }

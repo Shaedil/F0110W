@@ -4,6 +4,7 @@ import SwiftUI
 enum SettingsTab: String, CaseIterable {
     case popup = "Popup"
     case clipboard = "Clipboard"
+    case logs = "Logs"
 }
 
 /// HUD preferences, persisted under the same `UserDefaults` keys `Config` reads
@@ -31,6 +32,8 @@ struct SettingsPane: View {
                 events
             case .clipboard:
                 clipboard
+            case .logs:
+                LogsTab()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

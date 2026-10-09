@@ -48,6 +48,59 @@ struct ProfileState: Equatable {
     }
 }
 
+/// What one profile report means for this computer, against the profile
+/// that was active before it. Logged whichever way it goes, so a switch that
+/// showed nothing says why.
+struct ProfileMove: Equatable {
+    enum Outcome: Equatable {
+        /// The first report since connecting: nothing to compare with.
+        case firstReport
+        /// ZMK also reports when the active computer connects or drops.
+        case unchanged
+        /// The keyboard has not said which profile is this computer.
+        case ownUnknown
+        case away
+        case back
+        /// Between two other computers.
+        case elsewhere
+    }
+
+    /// All 0-based.
+    var previous: Int?
+    var active: Int
+    var own: Int?
+
+    var outcome: Outcome {
+        guard let previous else { return .firstReport }
+        guard previous != active else { return .unchanged }
+        guard let own else { return .ownUnknown }
+        if previous == own { return .away }
+        if active == own { return .back }
+        return .elsewhere
+    }
+
+    /// One line for the log, numbered from 1 as Settings names the profiles.
+    var explanation: String {
+        let to = "Profile \(active + 1)"
+        let mine = own.map { "Profile \($0 + 1)" } ?? "unknown"
+        let move = previous.map { "Profile \($0 + 1) to \(to)" } ?? to
+        switch outcome {
+        case .firstReport:
+            return "\(to) active, this computer is \(mine); first report since connecting, nothing shown"
+        case .unchanged:
+            return "\(to) still active, this computer is \(mine); nothing shown"
+        case .ownUnknown:
+            return "\(move), but the keyboard did not say which profile is this computer; nothing shown"
+        case .away:
+            return "\(move), away from this computer (\(mine)); showing \"Moved to\""
+        case .back:
+            return "\(move), back to this computer; showing \"Moved back\""
+        case .elsewhere:
+            return "\(move), neither is this computer (\(mine)); nothing shown"
+        }
+    }
+}
+
 /// The menu bar presence.
 ///
 /// The app runs as a background agent with no Dock icon, so this is the only
