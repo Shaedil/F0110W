@@ -33,4 +33,6 @@ config ZMK_PROFILE_REPORT
 	  keyboard has moved away from cannot tell: it stays connected and
 	  gets no keys.  This adds a GATT service that notifies each connected
 	  computer of the active profile and of its own, so a helper such as
-	  the M0110 HUD can say where the keyboard went.
+	  the M0110 HUD can say where the keyboard went.  It also keeps the
+	  names the helpers give the profiles, so every computer shows the
+	  same ones.

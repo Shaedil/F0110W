@@ -3,7 +3,7 @@
 
 zephyr_library()
 zephyr_library_sources_ifdef(CONFIG_ZMK_BATTERY_REPORT_WHILE_IDLE battery_idle_report.c)
-zephyr_library_sources_ifdef(CONFIG_ZMK_PROFILE_REPORT profile_report.c)
+zephyr_library_sources_ifdef(CONFIG_ZMK_PROFILE_REPORT profile_report.c profile_names.c)
 
 # <zmk/activity.h> and the event headers live in the main ZMK app
 # (APPLICATION_SOURCE_DIR is zmk/app), not on an out-of-tree library's path.

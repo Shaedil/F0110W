@@ -32,6 +32,10 @@
 #define CONFIG_ZMK_CLIPBOARD_ACK_WAIT_MS 700
 #define CONFIG_ZMK_LOG_LEVEL 0
 #define CONFIG_APPLICATION_INIT_PRIORITY 90
+#define CONFIG_SETTINGS 1
+
+/* Zephyr's also takes undefined options; these tests define every one used. */
+#define IS_ENABLED(option) (option)
 
 /* ---- zephyr/sys/util.h, logging, init ---- */
 
@@ -100,6 +104,19 @@ typedef struct {
     uint8_t id;
 } bt_addr_le_t;
 
+/* Zephyr's is all zeroes, as here. */
+static inline const bt_addr_le_t *fake_addr_le_any(void) {
+    static const bt_addr_le_t any = {0};
+    return &any;
+}
+#define BT_ADDR_LE_ANY fake_addr_le_any()
+
+static inline int bt_addr_le_cmp(const bt_addr_le_t *a, const bt_addr_le_t *b) {
+    return (int)a->id - (int)b->id;
+}
+
+static inline void bt_addr_le_copy(bt_addr_le_t *dst, const bt_addr_le_t *src) { *dst = *src; }
+
 struct bt_conn;
 
 struct bt_gatt_attr {
@@ -135,7 +152,9 @@ struct bt_conn_cb {
 
 #define BT_ATT_ERR_WRITE_NOT_PERMITTED 0x03
 #define BT_ATT_ERR_INVALID_OFFSET 0x07
+#define BT_ATT_ERR_NOT_SUPPORTED 0x06
 #define BT_ATT_ERR_INVALID_ATTRIBUTE_LEN 0x0d
+#define BT_ATT_ERR_VALUE_NOT_ALLOWED 0x13
 #define BT_GATT_ERR(code) (-(code))
 
 /* As in Zephyr, a characteristic is two attributes: its declaration, then its

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Host-side tests for the M0110 wire decoder, the battery estimator, the
-# clipboard module and the profile report. No Zephyr workspace needed.
+# clipboard module and the profile report and names. No Zephyr workspace needed.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,9 +48,9 @@ pure=("$root/config/clipboard/clip_proto.c" "$root/config/clipboard/clip_text.c"
     "$here/clipboard_sim_test.c" "${pure[@]}"
 "$out/clipboard_sim_small"
 
-# profile_report.c, against the same fakes.
+# profile_report.c, against the same fakes, with the naming rules it uses.
 "$CC" -std=c11 -Wall -Wextra -Werror -O1 \
     -I "$here/fake" \
     -o "$out/profile_report_test" \
-    "$here/profile_report_test.c"
+    "$here/profile_report_test.c" "$root/config/src/profile_names.c"
 "$out/profile_report_test"
