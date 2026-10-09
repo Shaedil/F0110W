@@ -74,9 +74,16 @@ int k_mutex_unlock(struct k_mutex *mutex) {
 
 static struct name_slot flash[ZMK_BLE_PROFILE_COUNT];
 static int flash_writes;
+/* Saves that fail before one goes through. */
+static int flash_failures;
 
 int settings_save_one(const char *name, const void *value, size_t val_len) {
     int index = -1;
+
+    if (flash_failures > 0) {
+        flash_failures--;
+        return -EIO;
+    }
 
     CHECK(sscanf(name, "m0110/pname/%d", &index) == 1);
     CHECK(index >= 0 && index < ZMK_BLE_PROFILE_COUNT);
@@ -151,6 +158,7 @@ static void reset(void) {
     save_work.pending = false;
     memset(flash, 0, sizeof(flash));
     flash_writes = 0;
+    flash_failures = 0;
 }
 
 bt_addr_le_t *zmk_ble_profile_address(uint8_t index) {
@@ -543,6 +551,22 @@ static void test_bad_writes(void) {
     CHECK(strcmp(read_name(mac, 1, 7), "Caf\xc3\xa9") == 0);
 }
 
+/* A save that fails is tried again rather than lost. */
+static void test_failed_save_retried(void) {
+    reset();
+    bonded[0] = 10;
+    struct bt_conn *mac = add_conn(10, BT_CONN_ROLE_PERIPHERAL);
+
+    flash_failures = 1;
+    CHECK(write_name(mac, NAMES_OP_SET, 0, "Desk") == 6);
+    run_saves();
+    CHECK(flash_writes == 0 && unsaved == BIT(0));
+
+    read_name(mac, 0, 64);
+    run_saves();
+    CHECK(flash_writes == 1 && flash[0].name.len == 4 && unsaved == 0);
+}
+
 /* Names come back from settings at boot. */
 static void test_settings_load(void) {
     reset();
@@ -627,6 +651,7 @@ int main(void) {
     test_name_before_pairing();
     test_bad_writes();
     test_settings_load();
+    test_failed_save_retried();
     test_numbering();
 
     if (failures) {

@@ -149,7 +149,9 @@ static ssize_t state_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, state, sizeof(state));
 }
 
-/* Longer than one packet, so a host reads it in pieces, each a call here. */
+/* Longer than one packet, so a host reads it in pieces, each a call here. A
+ * name that changes between pieces can tear the value, but the change also
+ * moves the state's counter, which has every host read the names again. */
 static ssize_t names_read(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
                           uint16_t len, uint16_t offset) {
     struct pname names[ZMK_BLE_PROFILE_COUNT];
@@ -295,7 +297,11 @@ static void save(struct k_work *work) {
             snprintf(key, sizeof(key), "m0110/pname/%d", i);
             int err = settings_save_one(key, &copy[i], sizeof(copy[i]));
             if (err) {
+                /* Tried again with the next change or read. */
                 LOG_ERR("could not save profile %d's name: %d", i, err);
+                k_mutex_lock(&names_lock, K_FOREVER);
+                unsaved |= BIT(i);
+                k_mutex_unlock(&names_lock);
             }
         }
     }
