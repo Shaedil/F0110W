@@ -263,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastDisconnectAt = now
         activeProfile = nil
         statusItem?.model.linked = false
+        statusItem?.model.profile = nil
         if let level = lastBattery, level <= Self.diedLevel {
             // Leaving on an empty battery is dying, whatever else is set: it
             // is the one disconnect worth knowing about. Unless a report of 0%
@@ -287,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let previous = activeProfile
         activeProfile = active
         if let own { ownProfile = own }
+        statusItem?.model.profile = ProfileState(active: active, own: ownProfile)
         guard let mine = ownProfile, let previous, previous != active else { return }
 
         if previous == mine {
@@ -443,6 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.model.name = config.deviceName
             item.model.linked = true
             item.model.battery = 72
+            item.model.profile = ProfileState(active: 0, own: 0)
             item.model.editor = keyboard.connection
             statusItem = item
         }

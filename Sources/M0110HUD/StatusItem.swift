@@ -10,8 +10,42 @@ final class StatusModel: ObservableObject {
     /// The Bluetooth link the HUD watches: is the keyboard typing to this Mac.
     @Published var linked = false
     @Published var battery: Int?
+    /// Which profile the keyboard types to, from its profile report. Nil
+    /// until the first report and after a disconnect, and always on firmware
+    /// that predates the report.
+    @Published var profile: ProfileState?
     /// The Studio link the window edits the keymap over.
     @Published var editor: KeyboardController.Connection = .disconnected
+}
+
+/// The keyboard's active Bluetooth profile against the one that is this
+/// computer, both 0-based. ZMK keeps every profile's link up, so the keyboard
+/// reads as connected here even while it types to another computer; this is
+/// what tells the two apart.
+struct ProfileState: Equatable {
+    var active: Int
+    /// Nil when the keyboard has not said which profile is this computer.
+    var own: Int?
+
+    /// Nil when that cannot be told, for want of `own`.
+    var typingHere: Bool? { own.map { $0 == active } }
+
+    /// The active profile's name, as the user gave it in Settings.
+    func activeName(in defaults: UserDefaults = .standard) -> String {
+        ProfileNames.name(for: active, in: defaults)
+    }
+
+    /// One line for a hover: where the keystrokes are going. The profile's
+    /// number is added only when its name is not already "Profile N".
+    func summary(in defaults: UserDefaults = .standard) -> String? {
+        guard let here = typingHere else { return nil }
+        let name = activeName(in: defaults)
+        let number = "Profile \(active + 1)"
+        if here {
+            return "Typing to this Mac (\(name))"
+        }
+        return name == number ? "Typing to \(name)" : "Typing to \(name) (\(number))"
+    }
 }
 
 /// The menu bar presence.
@@ -117,7 +151,9 @@ private struct StatusHeader: View {
     }
 
     private var linkLine: String {
-        model.linked ? "Connected" : "Not connected"
+        guard model.linked else { return "Not connected" }
+        guard let profile = model.profile, let here = profile.typingHere else { return "Connected" }
+        return here ? "Connected \u{00B7} typing here" : "Connected \u{00B7} on \(profile.activeName())"
     }
 
     private var editorLine: String {

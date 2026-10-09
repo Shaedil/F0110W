@@ -293,10 +293,15 @@ private struct KeycodePicker: View {
 }
 
 /// Which keyboard the pane is talking to and how: a status light, the name,
-/// the route and whether Studio is unlocked. The reason a connect failed, and
-/// the button to try again, are the empty state's; this stays one short line.
+/// the route, whether Studio is unlocked, and whether the keyboard is typing
+/// to this computer. The reason a connect failed, and the button to try
+/// again, are the empty state's; this stays one short line.
 struct ConnectionBadge: View {
     @ObservedObject var controller: KeyboardController
+    /// The keyboard's own link, for which profile it types to. Separate from
+    /// the Studio link above: ZMK keeps every profile's link up, so Studio can
+    /// be connected while the keystrokes go to another computer.
+    @ObservedObject private var status = StatusModel.shared
 
     var body: some View {
         HStack(spacing: 7) {
@@ -328,6 +333,27 @@ struct ConnectionBadge: View {
                 Text(detail)
                     .font(Theme.toolbar)
                     .foregroundStyle(Theme.textDim)
+            }
+            // Shown whatever the Studio link is doing: Studio answers only on
+            // the profile being typed to, so a keyboard moved elsewhere is
+            // also the likeliest reason it is not connected.
+            if let profile, let here = profile.typingHere {
+                if here {
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.textDim)
+                        .accessibilityLabel("Typing to this Mac")
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(profile.activeName())
+                            .font(Theme.toolbar)
+                    }
+                    .foregroundStyle(Theme.warn)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Typing to \(profile.activeName())")
+                }
             }
         }
         .lineLimit(1)
@@ -369,15 +395,22 @@ struct ConnectionBadge: View {
         }
     }
 
-    /// The full story on hover: the port, or why nothing answered.
+    /// The profile report, while the keyboard's own link is up to send one.
+    private var profile: ProfileState? { status.linked ? status.profile : nil }
+
+    /// The full story on hover: the port, or why nothing answered, then where
+    /// the keystrokes are going.
     private var help: String {
+        let link: String
         switch controller.connection {
         case .connected(let port, _):
-            return "\(port), Studio \(controller.lockState == .unlocked ? "unlocked" : "locked")"
-        case .failed(let why): return why
-        case .connecting: return "Looking for the keyboard"
-        case .disconnected: return "Not connected"
+            link = "\(port), Studio \(controller.lockState == .unlocked ? "unlocked" : "locked")"
+        case .failed(let why): link = why
+        case .connecting: link = "Looking for the keyboard"
+        case .disconnected: link = "Not connected"
         }
+        guard let typing = profile?.summary() else { return link }
+        return "\(link)\n\(typing)"
     }
 }
 
