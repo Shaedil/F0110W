@@ -29,8 +29,8 @@ enum Snapshot {
                             initialPane: Pane(rawValue: pane ?? "Keyboard") ?? .keys)
             .environment(\.classicSnapshot, true)
             .environment(\.skyTime, time.flatMap(today))
-            .environment(\.colorScheme, scheme ?? (NSApp.effectiveAppearance
-                .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light))
+            // Dark unless asked otherwise, like the real window.
+            .environment(\.colorScheme, scheme ?? .dark)
             // Top-leading, because snapshots drop the scroll view and a
             // centered frame would clip the top of a tall pane.
             .frame(width: width, height: height, alignment: .topLeading)

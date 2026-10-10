@@ -1,7 +1,7 @@
 // The window has a fixed size like the Mac one, and grows when the key picker opens.
 
 import { listen, send } from './bridge.js';
-import { ditheredTitle, pixelIcon, racingStripes, rgb } from './art.js';
+import { ditheredTitle, pixelIcon, racingStripes } from './art.js';
 import { followDiagonals, followSky } from './prism.js';
 import { h } from './ui.js';
 import { keyboardPane } from './panes/keyboard.js';
@@ -41,19 +41,12 @@ app.remember = (key, value) => { try { localStorage.setItem(key, String(value));
 
 let pane = null;
 let stage = null;
-const light = matchMedia('(prefers-color-scheme: light)');
-
-function iconTint(tint) {
-  // Same as Theme.sidebarIcon on the Mac: the tint is darkened in light mode.
-  if (!light.matches) return tint;
-  return `rgb(${rgb(tint).map((c) => Math.round(c * 0.68)).join(',')})`;
-}
 
 function renderSidebar() {
   const nav = document.getElementById('panes');
   nav.replaceChildren(...PANES.map((p) => h(`button${p.id === app.ui.pane ? '.active' : ''}`,
     { onclick: () => showPane(p.id) },
-    h('span.icon', {}, pixelIcon(p.icon, iconTint(p.tint))), p.title)));
+    h('span.icon', {}, pixelIcon(p.icon, p.tint)), p.title)));
 }
 
 function renderHeader(p) {
@@ -82,7 +75,8 @@ function showPane(id) {
 function setSidebar(visible) {
   app.ui.sidebar = visible;
   document.body.classList.toggle('sidebar-hidden', !visible);
-  document.getElementById('sidebar-show').hidden = visible;
+  const toggle = document.getElementById('sidebar-toggle');
+  toggle.title = toggle.ariaLabel = visible ? 'Hide Sidebar' : 'Show Sidebar';
   requestLayout();
 }
 
@@ -116,13 +110,11 @@ listen((message) => {
   }
 });
 
-document.getElementById('sidebar-hide').addEventListener('click', () => setSidebar(false));
-document.getElementById('sidebar-show').addEventListener('click', () => setSidebar(true));
+document.getElementById('sidebar-toggle').addEventListener('click', () => setSidebar(!app.ui.sidebar));
 document.addEventListener('keydown', (event) => {
   // Ctrl+Shift+S here, Ctrl+Cmd+S on the Mac.
   if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 's') setSidebar(!app.ui.sidebar);
 });
-light.addEventListener('change', renderSidebar);
 
 try {
   app.board3d = new Board3D();

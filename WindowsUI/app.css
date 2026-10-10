@@ -31,7 +31,8 @@
 #sidebar.prism-rim::after { inset: -1px; --rim: var(--prism-rim); }
 body.sidebar-hidden #sidebar { transform: translateX(-24px); opacity: 0; pointer-events: none; }
 
-.sidebar-band { display: flex; justify-content: flex-end; height: 22px; margin-bottom: 14px; }
+/* Room for the toggle, which sits over this spot in both states. */
+.sidebar-band { height: 24px; margin-bottom: 14px; }
 
 #panes { display: flex; flex-direction: column; gap: 2px; }
 #panes button {
@@ -50,33 +51,30 @@ body.sidebar-hidden #sidebar { transform: translateX(-24px); opacity: 0; pointer
 #panes button.active { background: var(--sidebar-key); color: var(--sidebar-text); font-weight: 600; }
 
 .sidebar-toggle {
+  flex: none;
   width: 28px;
-  height: 22px;
+  height: 24px;
   padding: 0;
   border-radius: 6px;
-  border: 1px solid var(--sidebar-key-stroke);
-  background: var(--sidebar-key) center / 14px 11px no-repeat;
-  color: var(--sidebar-text);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--sidebar-text-dim);
 }
+.sidebar-toggle:hover { background: var(--sidebar-key); color: var(--sidebar-text); }
 .sidebar-toggle::before {
   content: "";
   display: block;
-  width: 14px;
-  height: 11px;
+  width: 16px;
+  height: 12px;
   margin: auto;
-  border: 1.4px solid currentColor;
-  border-radius: 3px;
-  background: linear-gradient(currentColor, currentColor) 4px 0 / 1.4px 100% no-repeat;
+  background:
+    linear-gradient(currentColor, currentColor) 0 0 / 100% 2px no-repeat,
+    linear-gradient(currentColor, currentColor) 0 50% / 100% 2px no-repeat,
+    linear-gradient(currentColor, currentColor) 0 100% / 100% 2px no-repeat;
 }
-.sidebar-toggle.floating {
-  position: absolute;
-  z-index: 2;
-  top: 14px;
-  left: 14px;
-  border-color: var(--key-stroke);
-  background-color: var(--key);
-  color: var(--text-dim);
-}
+/* One toggle, fixed at the open sidebar's top left, so it does not move when
+   the sidebar opens or closes. */
+#sidebar-toggle { position: fixed; z-index: 3; top: 20px; left: 20px; }
 
 /* ---- Detail ---- */
 
@@ -93,7 +91,10 @@ body.sidebar-hidden #detail { left: 0; }
   min-width: 0;
   padding: var(--content-top) var(--content-side) var(--content-bottom);
   overflow: hidden;
+  transition: padding-left 0.34s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
+/* Clears the toggle when the sidebar is hidden. */
+body.sidebar-hidden #column { padding-left: 60px; }
 /* 620px of text plus padding, as on the Mac. It shrinks before the stage on narrow screens. */
 body:not([data-pane="keys"]) #column { flex: 0 1 676px; min-width: 420px; overflow-y: auto; }
 

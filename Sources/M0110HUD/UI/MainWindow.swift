@@ -117,6 +117,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
                 MainActor.assumeIsolated { self?.resize(to: layout) }
             }))
         w.title = "M0110"
+        // Always dark, sidebar included, whatever the system setting is.
+        w.appearance = NSAppearance(named: .darkAqua)
         // The theme paints its own background under the title bar.
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden

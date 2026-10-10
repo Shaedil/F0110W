@@ -1,5 +1,4 @@
-/* Tokens copied from the Mac's Theme.swift. The background and panels stay
-   dark in light mode. Only the sidebar turns white. */
+/* Tokens copied from the Mac's Theme.swift. The window is always dark. */
 
 :root {
   color-scheme: dark;
@@ -79,36 +78,6 @@
                                     rgba(var(--prism-m2), 0.38), rgba(var(--prism-m3), 0.38));
   --prism-selected-rim: linear-gradient(var(--diag, 135deg), rgb(var(--prism-m1)), rgb(var(--prism-m2)),
                                         rgb(var(--prism-m3)));
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --panel: rgba(23, 23, 23, 0.62);
-    --panel-stroke: rgba(235, 224, 204, 0.16);
-    --sidebar-floating: rgba(255, 255, 255, 0.96);
-    --sidebar-floating-stroke: rgba(245, 237, 219, 0.22);
-    --sidebar-text: rgba(30, 26, 21, 0.92);
-    --sidebar-text-dim: rgba(30, 26, 21, 0.62);
-    --sidebar-key: rgba(30, 26, 21, 0.08);
-    --sidebar-key-stroke: rgba(30, 26, 21, 0.14);
-    --sidebar-icon-scale: 0.68;
-    --board-surround: rgba(163, 156, 136, 0.94);
-    --board-surround-stroke: rgba(122, 115, 97, 0.55);
-    --key: rgba(245, 237, 219, 0.10);
-    --key-stroke: rgba(245, 237, 219, 0.20);
-    --key-stroke-soft: rgba(245, 237, 219, 0.08);
-    --text: rgba(247, 244, 236, 0.95);
-    --text-dim: rgba(247, 244, 236, 0.55);
-    --accent: #e2d8c1;
-    --case-flat: #dad6c7;
-    --plate: #131210;
-    --case-emboss: #c8c4b5;
-    --case-emboss-face: #dedacb;
-    --cap-top: #cbccc1;
-    --cap-skirt: #a2a39a;
-    --spacebar-top: #babbb1;
-    --spacebar-skirt: #92938b;
-  }
 }
 
 * { box-sizing: border-box; }
