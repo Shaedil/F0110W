@@ -34,14 +34,27 @@ function canvas(width, height) {
   return c;
 }
 
-function paint(c, lit, rgb) {
+/** `ink` is one [r, g, b], or a function of x giving one. */
+function paint(c, lit, ink) {
   const ctx = c.getContext('2d');
   const image = ctx.createImageData(c.width, c.height);
+  const at = typeof ink === 'function' ? ink : () => ink;
   for (let i = 0; i < lit.length; i++) {
     if (!lit[i]) continue;
-    image.data.set([rgb[0], rgb[1], rgb[2], 255], i * 4);
+    const [r, g, b] = at(i % c.width);
+    image.data.set([r, g, b, 255], i * 4);
   }
   ctx.putImageData(image, 0, 0);
+}
+
+/** Colours spread evenly left to right across `width`, mixed between. */
+function gradient(colours, width) {
+  return (x) => {
+    const t = (width > 1 ? x / (width - 1) : 0) * (colours.length - 1);
+    const i = Math.min(Math.floor(t), colours.length - 2), f = t - i;
+    const a = colours[i], b = colours[i + 1] ?? a;
+    return a.map((c, k) => Math.round(c + (b[k] - c) * f));
+  };
 }
 
 /** "#d9b880" to [217, 184, 128]. */
@@ -105,8 +118,10 @@ export function pixelIcon(kind, tint) {
 
 // ---- Racing stripes ----
 
-/** Two lit rows, one gap, fading out to the right in dithered dots. */
-export function racingStripes(width, tint, height = 13) {
+/** Two lit rows, one gap, fading out to the right in dithered dots. `inks`
+ *  is a "#rrggbb", or [r, g, b] colours run left to right: the prism's marks,
+ *  so the stripes fade out of the prism the way they fade out of black. */
+export function racingStripes(width, inks, height = 13) {
   width = Math.max(1, Math.floor(width));
   const level = new Float64Array(width * height);
   for (let y = 0; y < height; y++) {
@@ -115,7 +130,7 @@ export function racingStripes(width, tint, height = 13) {
   }
   const lit = dither(level, width, height, (y) => y % 3 !== 2);
   const c = canvas(width, height);
-  paint(c, lit, rgb(tint));
+  paint(c, lit, typeof inks === 'string' ? rgb(inks) : gradient(inks, width));
   return c;
 }
 

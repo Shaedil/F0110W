@@ -4,6 +4,7 @@
 
 import { listen, send } from './bridge.js';
 import { ditheredTitle, pixelIcon, racingStripes, rgb } from './art.js';
+import { followSky } from './prism.js';
 import { h } from './ui.js';
 import { keyboardPane } from './panes/keyboard.js';
 import { bluetoothPane, batteryPane, gesturesPane } from './panes/side.js';
@@ -67,7 +68,8 @@ function renderHeader(p) {
   document.getElementById('title').replaceChildren(ditheredTitle(p.title));
   const stripes = document.getElementById('stripes');
   stripes.replaceChildren();
-  requestAnimationFrame(() => stripes.replaceChildren(racingStripes(Math.min(220, stripes.clientWidth || 220), p.tint)));
+  requestAnimationFrame(() => stripes.replaceChildren(
+    racingStripes(Math.min(220, stripes.clientWidth || 220), app.prism?.marks ?? p.tint)));
 }
 
 function showPane(id) {
@@ -145,5 +147,12 @@ if (!window.chrome?.webview) window.m0110 = app;
 if (preview.has('select')) app.ui.selected = Number(preview.get('select'));
 if (preview.has('layer')) app.ui.layer = Number(preview.get('layer'));
 if (preview.get('sidebar') === '0') setSidebar(false);
+// The sky, kept current each minute; ?sky=HH:MM pins it, to review any time
+// of day.
+followSky((prism) => {
+  app.prism = prism;
+  const p = PANES.find((x) => x.id === app.ui.pane);
+  if (p) renderHeader(p);
+}, preview.get('sky'));
 showPane(preview.get('pane') ?? 'keys');
 send('ready');
