@@ -61,6 +61,8 @@ M0110_HANDLER(ProcessFailed, ICoreWebView2ProcessFailedEventHandler,
               (ICoreWebView2 * sender, ICoreWebView2ProcessFailedEventArgs *args), (sender, args))
 M0110_HANDLER(NewWindow, ICoreWebView2NewWindowRequestedEventHandler,
               (ICoreWebView2 * sender, ICoreWebView2NewWindowRequestedEventArgs *args), (sender, args))
+M0110_HANDLER(ScriptAdded, ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler,
+              (HRESULT result, LPCWSTR id), (result, id))
 
 #undef M0110_HANDLER
 
@@ -82,6 +84,7 @@ ICoreWebView2Controller *controller;
 ICoreWebView2 *webview;
 wchar_t folder[MAX_PATH * 2], data_folder[MAX_PATH * 2];
 const DWORD window_style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+bool app_region;
 
 bool developer_mode() { return GetEnvironmentVariableW(L"M0110_WEB_DEV", nullptr, 0) > 0; }
 
@@ -91,6 +94,12 @@ const COLORREF ground = RGB(0x0b, 0x0a, 0x09);
 
 void apply_frame_theme() {
     if (!window) return;
+    // The page draws the title bar. A 1 px glass margin keeps the DWM shadow, and 33 is
+    // DWMWA_WINDOW_CORNER_PREFERENCE with 2 (round) for Windows 11 corners.
+    MARGINS margins = {0, 0, 1, 0};
+    DwmExtendFrameIntoClientArea(window, &margins);
+    DWORD corners = 2;
+    DwmSetWindowAttribute(window, 33, &corners, sizeof corners);
     // Dark caption in the page's black for any theme. 20 is DWMWA_USE_IMMERSIVE_DARK_MODE
     // (Windows 10 20H1+) and 35 is DWMWA_CAPTION_COLOR (Windows 11).
     BOOL dark = TRUE;
@@ -140,8 +149,18 @@ void set_up(ICoreWebView2Controller *new_controller) {
             settings3->put_AreBrowserAcceleratorKeysEnabled(dev);
             settings3->Release();
         }
+        // Lets the page mark its title bar with `app-region: drag`.
+        ICoreWebView2Settings9 *settings9 = nullptr;
+        if (SUCCEEDED(settings->QueryInterface(__uuidof(ICoreWebView2Settings9), (void **)&settings9))) {
+            app_region = SUCCEEDED(settings9->put_IsNonClientRegionSupportEnabled(TRUE));
+            settings9->Release();
+        }
         settings->Release();
     }
+    // Without drag regions the page asks for m0110_web_begin_drag instead.
+    if (app_region)
+        webview->AddScriptToExecuteOnDocumentCreated(L"window.m0110AppRegion = true;",
+                                                     make_ScriptAdded([](HRESULT, LPCWSTR) { return S_OK; }));
 
     EventRegistrationToken token;
     webview->add_WebMessageReceived(make_MessageReceived([](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) {
@@ -225,6 +244,13 @@ void create_environment() {
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     switch (message) {
+    case WM_NCCALCSIZE:
+        // No system title bar or border: the whole window is client area.
+        if (wparam) return 0;
+        break;
+    case WM_NCACTIVATE:
+        // -1 stops DefWindowProc painting a caption over the page on focus changes.
+        return DefWindowProcW(hwnd, message, wparam, -1);
     case WM_SIZE:
         fit();
         return 0;
@@ -262,7 +288,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
-/// Outer rect for a 96 DPI client size, scaled and centered on the monitor under the mouse.
+/// Window rect for a 96 DPI size, scaled and centered on the monitor under the mouse.
 RECT placement(int width, int height) {
     POINT cursor;
     GetCursorPos(&cursor);
@@ -271,9 +297,7 @@ RECT placement(int width, int height) {
     GetMonitorInfoW(monitor, &info);
     UINT dpi_x = 96, dpi_y = 96;
     if (FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y))) dpi_x = 96;
-    RECT frame = {0, 0, MulDiv(width, dpi_x, 96), MulDiv(height, dpi_x, 96)};
-    AdjustWindowRectExForDpi(&frame, window_style, FALSE, 0, dpi_x);
-    LONG w = frame.right - frame.left, h = frame.bottom - frame.top;
+    LONG w = MulDiv(width, dpi_x, 96), h = MulDiv(height, dpi_x, 96);
     const RECT &work = info.rcWork;
     if (w > work.right - work.left) w = work.right - work.left;
     if (h > work.bottom - work.top) h = work.bottom - work.top;
@@ -339,9 +363,7 @@ extern "C" void m0110_web_post(const uint16_t *json) {
 extern "C" void m0110_web_resize(int32_t width, int32_t height) {
     if (!window) return;
     UINT dpi = GetDpiForWindow(window);
-    RECT frame = {0, 0, MulDiv(width, dpi, 96), MulDiv(height, dpi, 96)};
-    AdjustWindowRectExForDpi(&frame, window_style, FALSE, 0, dpi);
-    SetWindowPos(window, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top,
+    SetWindowPos(window, nullptr, 0, 0, MulDiv(width, dpi, 96), MulDiv(height, dpi, 96),
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
@@ -349,4 +371,19 @@ extern "C" int32_t m0110_web_is_open(void) { return window ? 1 : 0; }
 
 extern "C" void m0110_web_close(void) {
     if (window) DestroyWindow(window);
+}
+
+extern "C" void m0110_web_minimize(void) {
+    if (window) ShowWindow(window, SW_MINIMIZE);
+}
+
+extern "C" void m0110_web_request_close(void) {
+    if (window) PostMessageW(window, WM_CLOSE, 0, 0);
+}
+
+extern "C" void m0110_web_begin_drag(void) {
+    if (!window) return;
+    // The mouse is still down, so this starts the same move loop as a title bar press.
+    ReleaseCapture();
+    SendMessageW(window, WM_NCLBUTTONDOWN, HTCAPTION, 0);
 }

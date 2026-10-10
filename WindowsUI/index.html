@@ -7,10 +7,14 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div id="window">
+<header id="titlebar">
   <button id="sidebar-toggle" class="sidebar-toggle" title="Hide Sidebar" aria-label="Hide Sidebar"></button>
+  <span class="drag"></span>
+  <button id="window-minimize" class="caption minimize" title="Minimize" aria-label="Minimize"></button>
+  <button id="window-close" class="caption close" title="Close" aria-label="Close"></button>
+</header>
+<div id="window">
   <aside id="sidebar" class="prism-rim">
-    <div class="sidebar-band"></div>
     <nav id="panes"></nav>
   </aside>
   <main id="detail">

@@ -15,9 +15,9 @@ final class WinWindow {
     /// Set when the page says it is listening, cleared on close. Earlier posts would be lost.
     private(set) var isReady = false
 
-    /// Client area at 96 DPI. The Mac window's size minus its 28 pt title bar, since
-    /// Windows draws the title bar outside the client area. The page resizes it later.
-    static let size = (width: Int32(1340), height: Int32(585))
+    /// The whole window at 96 DPI, including the page's own 32 px title bar. The page
+    /// resizes it later.
+    static let size = (width: Int32(1340), height: Int32(585 + 32))
 
     init(verbose: Bool) {
         self.verbose = verbose
@@ -68,7 +68,13 @@ final class WinWindow {
         }
         if type == "ready" { isReady = true }
         log("window: \(type)", verbose: verbose)
-        onMessage?(type, object)
+        // The page's title bar buttons.
+        switch type {
+        case "window.minimize": m0110_web_minimize()
+        case "window.close": m0110_web_request_close()
+        case "window.drag": m0110_web_begin_drag()
+        default: onMessage?(type, object)
+        }
     }
 
     private func closed() {

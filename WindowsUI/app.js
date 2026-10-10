@@ -20,6 +20,8 @@ const PANES = [
 
 /** The Mac window's sizes, minus its title bar. */
 const SIZE = { expanded: 1340, collapsed: 1110, board: 585, picker: 792 };
+/** The page's own title bar, matching --titlebar in app.css. */
+const TITLEBAR = 32;
 
 const app = {
   fixed: null,
@@ -92,7 +94,7 @@ function requestLayout() {
   const size = `${width}x${height}`;
   if (size === lastSize) return;
   lastSize = size;
-  send('layout', { width, height });
+  send('layout', { width, height: height + TITLEBAR });
 }
 
 listen((message) => {
@@ -111,6 +113,14 @@ listen((message) => {
 });
 
 document.getElementById('sidebar-toggle').addEventListener('click', () => setSidebar(!app.ui.sidebar));
+document.getElementById('window-minimize').addEventListener('click', () => send('window.minimize'));
+document.getElementById('window-close').addEventListener('click', () => send('window.close'));
+// Older WebView2 runtimes ignore app-region, so the app starts the move instead.
+document.querySelector('#titlebar .drag').addEventListener('mousedown', (event) => {
+  if (event.button === 0 && window.chrome?.webview && !window.m0110AppRegion) send('window.drag');
+});
+addEventListener('blur', () => document.body.classList.add('inactive'));
+addEventListener('focus', () => document.body.classList.remove('inactive'));
 document.addEventListener('keydown', (event) => {
   // Ctrl+Shift+S here, Ctrl+Cmd+S on the Mac.
   if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 's') setSidebar(!app.ui.sidebar);

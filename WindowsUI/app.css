@@ -1,6 +1,7 @@
-/* Sizes from the Mac's RootView, minus the 28pt title bar that Windows draws itself. */
+/* Sizes from the Mac's RootView. The page draws its own 32 px title bar. */
 
 :root {
+  --titlebar: 32px;
   --sidebar-width: 214px;
   --sidebar-inset: 8px;
   --sidebar-span: 230px;
@@ -9,7 +10,58 @@
   --content-bottom: 24px;
 }
 
-#window { position: relative; width: 100vw; height: 100vh; }
+#window { position: relative; width: 100vw; height: calc(100vh - var(--titlebar)); margin-top: var(--titlebar); }
+
+/* ---- Title bar ---- */
+
+/* Dragging it moves the window. WebView2 handles app-region; older runtimes ask
+   the app instead (see app.js). */
+#titlebar {
+  position: fixed;
+  z-index: 5;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar);
+  display: flex;
+  align-items: center;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+#titlebar button { app-region: no-drag; -webkit-app-region: no-drag; }
+#titlebar .drag { flex: 1; align-self: stretch; }
+#sidebar-toggle { margin-left: 14px; }
+
+/* Minimize and close, sized and colored like the Windows 11 ones. The glyphs
+   are drawn, since the Segoe icon fonts only exist on Windows. */
+.caption {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: var(--titlebar);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+}
+.caption::before, .caption::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 1px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+.caption.minimize::after { display: none; }
+.caption.close::before { width: 14px; transform: translate(-50%, -50%) rotate(45deg); }
+.caption.close::after { width: 14px; transform: translate(-50%, -50%) rotate(-45deg); }
+.caption.minimize:hover { background: rgba(255, 255, 255, 0.06); }
+.caption.minimize:active { background: rgba(255, 255, 255, 0.04); }
+.caption.close:hover { background: #c42b1c; color: #fff; }
+.caption.close:active { background: #b22a1c; color: rgba(255, 255, 255, 0.8); }
+body.inactive .caption, body.inactive #sidebar-toggle { color: rgba(255, 255, 255, 0.4); }
 
 /* ---- Sidebar ---- */
 
@@ -30,9 +82,6 @@
 }
 #sidebar.prism-rim::after { inset: -1px; --rim: var(--prism-rim); }
 body.sidebar-hidden #sidebar { transform: translateX(-24px); opacity: 0; pointer-events: none; }
-
-/* Room for the toggle, which sits over this spot in both states. */
-.sidebar-band { height: 24px; margin-bottom: 14px; }
 
 #panes { display: flex; flex-direction: column; gap: 2px; }
 #panes button {
@@ -72,9 +121,6 @@ body.sidebar-hidden #sidebar { transform: translateX(-24px); opacity: 0; pointer
     linear-gradient(currentColor, currentColor) 0 50% / 100% 2px no-repeat,
     linear-gradient(currentColor, currentColor) 0 100% / 100% 2px no-repeat;
 }
-/* One toggle, fixed at the open sidebar's top left, so it does not move when
-   the sidebar opens or closes. */
-#sidebar-toggle { position: fixed; z-index: 3; top: 20px; left: 20px; }
 
 /* ---- Detail ---- */
 
@@ -91,10 +137,7 @@ body.sidebar-hidden #detail { left: 0; }
   min-width: 0;
   padding: var(--content-top) var(--content-side) var(--content-bottom);
   overflow: hidden;
-  transition: padding-left 0.34s cubic-bezier(0.2, 0.9, 0.25, 1);
 }
-/* Clears the toggle when the sidebar is hidden. */
-body.sidebar-hidden #column { padding-left: 60px; }
 /* 620px of text plus padding, as on the Mac. It shrinks before the stage on narrow screens. */
 body:not([data-pane="keys"]) #column { flex: 0 1 676px; min-width: 420px; overflow-y: auto; }
 
