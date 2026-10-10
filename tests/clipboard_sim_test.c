@@ -686,7 +686,7 @@ static void copy_on_profile_0(const char *text) {
 /* ---- Scenarios ---- */
 
 static void test_types_on_a_bare_host(void) {
-    const char *text = "Hello, World! (1+1=2) ~/x_y.txt\n";
+    const char *text = "Hello, World! (1+1=2) ~/x_y.txt";
 
     reset();
     copy_on_profile_0(text);
@@ -1122,7 +1122,18 @@ static void test_typographic_text(void) {
     select_endpoint(ZMK_TRANSPORT_BLE, 1);
     chord(KEY_LGUI, HID_USAGE_KEY_KEYBOARD_V);
     advance(3000);
-    expect_host("typographic punctuation", "it's \"fine\"...\nnaive");
+    expect_host("typographic punctuation", "it's \"fine\"... naive");
+}
+
+static void test_line_breaks_are_typed_as_spaces(void) {
+    /* A copied command that ends in a line break must not press Enter, which
+     * would run it in a terminal before anyone could look at it. */
+    reset();
+    copy_on_profile_0("echo one\r\necho two\n\tdone\n");
+    select_endpoint(ZMK_TRANSPORT_BLE, 1);
+    chord(KEY_LGUI, HID_USAGE_KEY_KEYBOARD_V);
+    advance(3000);
+    expect_host("line breaks as spaces", "echo one echo two  done ");
 }
 
 static void test_typing_takes_a_report_per_character(void) {
@@ -1152,7 +1163,7 @@ static void test_typing_takes_a_report_per_character(void) {
 static void test_typing_lets_go_where_it_has_to(void) {
     /* A key twice in a row has to come up in between, and Shift has to come
      * up in a report of its own, before the key that follows it goes down. */
-    const char *text = "Hello, Mississippi!! aA Aa \"Q\"...ok\n";
+    const char *text = "Hello, Mississippi!! aA Aa \"Q\"...ok ";
 
     reset();
     copy_on_profile_0(text);
@@ -2411,6 +2422,7 @@ int main(void) {
     test_only_profiles_may_write();
     test_other_shortcuts_pass();
     test_typographic_text();
+    test_line_breaks_are_typed_as_spaces();
     test_typing_takes_a_report_per_character();
     test_typing_lets_go_where_it_has_to();
     test_without_intercept();

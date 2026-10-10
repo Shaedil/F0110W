@@ -57,7 +57,8 @@ branch. The computer that is pasted into does not need a helper:
 - Without one, the keyboard swallows the paste (V with Cmd or Ctrl) and types
   the clip out as plain text on a US layout, at a few dozen characters a
   second. Accented letters lose their accents, other scripts and emoji are
-  dropped, and a line break is typed as Enter. Pressing any key stops it.
+  dropped, and a line break or tab is typed as a space. Pressing any key
+  stops it.
 
 An image, or text too long for the keyboard, goes between two computers that
 both run a helper. The keyboard carries a short message saying where the

@@ -73,12 +73,22 @@ static void test_text(void) {
     check_typed(ascii, ascii);
 
     check_typed("Hello, World!", "Hello, World!");
-    check_typed("a\tb\nc", "a\tb\nc");
 
-    /* Line endings: CRLF and a bare CR are each one Enter. */
-    check_typed("one\r\ntwo", "one\ntwo");
-    check_typed("one\rtwo", "one\ntwo");
-    check_typed("end\r", "end\n");
+    /* Line breaks and tabs come out as spaces, so a pasted command does not
+     * run by itself. CRLF and a bare CR are each one line break. */
+    check_typed("a\tb\nc", "a b c");
+    check_typed("one\r\ntwo", "one two");
+    check_typed("one\rtwo", "one two");
+    check_typed("end\r", "end ");
+    check_typed("curl x | sh\r\n", "curl x | sh ");
+    check_typed("a\r\n\r\nb", "a  b");
+    check_typed("a\n\rb", "a  b");
+    for (int c = 1; c < 0x80; c++) {
+        const char one[2] = {(char)c, '\0'};
+        const char *out = typed(one, 1);
+
+        CHECK(strchr(out, '\n') == NULL && strchr(out, '\t') == NULL);
+    }
 
     /* Typographic punctuation falls back to ASCII. */
     check_typed("\xE2\x80\x9Cquoted\xE2\x80\x9D", "\"quoted\"");

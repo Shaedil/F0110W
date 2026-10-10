@@ -8,8 +8,6 @@
 #define KEY_A 0x04
 #define KEY_1 0x1E
 #define KEY_0 0x27
-#define KEY_ENTER 0x28
-#define KEY_TAB 0x2B
 #define KEY_SPACE 0x2C
 
 /* Punctuation on a US layout: the unshifted character, the shifted one, and
@@ -45,12 +43,10 @@ static bool ascii_key(char c, struct clip_key *key) {
     case '0':
         *key = (struct clip_key){.usage = KEY_0, .shift = false};
         return true;
+    /* Enter would run a pasted command in a terminal right away, so line
+     * breaks and tabs are typed as spaces. */
     case '\n':
-        *key = (struct clip_key){.usage = KEY_ENTER, .shift = false};
-        return true;
     case '\t':
-        *key = (struct clip_key){.usage = KEY_TAB, .shift = false};
-        return true;
     case ' ':
         *key = (struct clip_key){.usage = KEY_SPACE, .shift = false};
         return true;
@@ -189,7 +185,7 @@ int clip_text_next(const uint8_t *text, size_t len, size_t *pos,
 
     uint32_t cp = decode(text, len, pos);
 
-    /* CRLF types a single Enter: the CR is skipped and the LF types it. */
+    /* CRLF is one line break: the CR is skipped and the LF types it. */
     if (cp == '\r') {
         if (*pos < len && text[*pos] == '\n') {
             return 0;
