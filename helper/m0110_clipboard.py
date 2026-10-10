@@ -58,6 +58,7 @@ RELAY_MAX = 64
 
 # Helper-to-helper messages, see PROTOCOL.md.
 KIND_TEXT, KIND_PNG, KIND_JPEG = 1, 2, 3
+KINDS = (KIND_TEXT, KIND_PNG, KIND_JPEG)
 OFFER, INLINE = 0x01, 0x02
 WANT, GONE, CANCEL = 0x01, 0x02, 0x03
 GET, PUT = 1, 2
@@ -234,7 +235,7 @@ class Offer:
 
     @classmethod
     def parse(cls, payload: bytes) -> Offer | None:
-        if len(payload) < 45 or payload[0] != OFFER:
+        if len(payload) < 45 or payload[0] != OFFER or payload[1] not in KINDS:
             return None
         addresses = unpack_addresses(payload[44:])
         if addresses is None:
@@ -300,7 +301,7 @@ def encode_inline(kind: int, ticket: bytes, content: bytes, room: int) -> bytes 
 
 
 def parse_inline(payload: bytes) -> tuple[int, bytes, bytes] | None:
-    if len(payload) < 10 or payload[0] != INLINE:
+    if len(payload) < 10 or payload[0] != INLINE or payload[1] not in KINDS:
         return None
     return payload[1], payload[2:10], payload[10:]
 
@@ -316,7 +317,8 @@ def opened(image: bytes):
     """
     from PIL import Image, ImageOps
 
-    picture = Image.open(io.BytesIO(image))
+    # Only what the protocol carries. Pillow would hand an EPS file to Ghostscript.
+    picture = Image.open(io.BytesIO(image), formats=["PNG", "JPEG"])
     picture = ImageOps.exif_transpose(picture) or picture
     if picture.mode == "I" or picture.mode.startswith("I;16"):
         picture = picture.convert("I").point(lambda value: value * (1 / 256)).convert("L")

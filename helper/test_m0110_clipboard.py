@@ -66,6 +66,8 @@ from m0110_clipboard import (
 
 TICKET = bytes(range(8))
 KEY = bytes(range(0x10, 0x30))
+# Pillow reads this as EPS, which it renders with Ghostscript.
+EPS = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n%%EndComments\nshowpage\n%%EOF\n"
 
 
 # ---- Fakes ----
@@ -486,6 +488,9 @@ def test_messages() -> None:
     assert Offer.parse(good[:44] + bytes([1, 5, 1, 2, 3, 4])) is None
     assert helper.parse_want(helper.encode_want(TICKET, 9, mixed, 63)[:-1]) is None
     assert helper.parse_inline(bytes([helper.INLINE, KIND_TEXT]) + TICKET[:7]) is None
+    for kind in (0, 4, 0xFF):
+        assert Offer.parse(good[:1] + bytes([kind]) + good[2:]) is None
+        assert helper.parse_inline(bytes([helper.INLINE, kind]) + TICKET + EPS) is None
 
     inline = helper.encode_inline(KIND_TEXT, TICKET, b"words", 100)
     assert helper.parse_inline(inline) == (KIND_TEXT, TICKET, b"words")
@@ -571,6 +576,29 @@ def test_images() -> None:
     ink.save(out, "JPEG")
     red, green, blue = Image.open(io.BytesIO(helper.to_png(KIND_JPEG, out.getvalue()))).convert("RGB").getpixel((5, 5))
     assert red > 200 and green < 60 and blue < 60
+
+    # EPS is refused before Pillow's EPS reader runs, so Ghostscript is never called.
+    from PIL import EpsImagePlugin
+
+    reached = []
+
+    def caught(*_arguments, **_options):
+        reached.append(True)
+        raise OSError("EPS reader reached")
+
+    saved = EpsImagePlugin.EpsImageFile._open, EpsImagePlugin.Ghostscript
+    EpsImagePlugin.EpsImageFile._open = EpsImagePlugin.Ghostscript = caught
+    try:
+        for kind in (KIND_PNG, KIND_JPEG, 9):
+            try:
+                helper.to_png(kind, EPS)
+            except Exception:
+                pass
+            else:
+                raise AssertionError(f"EPS taken as kind {kind}")
+    finally:
+        EpsImagePlugin.EpsImageFile._open, EpsImagePlugin.Ghostscript = saved
+    assert not reached
 
 
 def test_addresses() -> None:
@@ -1387,6 +1415,12 @@ async def test_opaque_clips_out_of_the_blue() -> None:
         broken = bytes([helper.INLINE, KIND_PNG]) + TICKET + b"not a picture"
         await world.bridges[0].send_clip(broken, OPAQUE)
         await asyncio.sleep(0.3)
+        assert world.boards[1].clip.text == "straight through"
+
+        # An INLINE of a kind the protocol does not define is ACKed and not read.
+        odd = bytes([helper.INLINE, 9]) + TICKET + EPS
+        await world.bridges[0].send_clip(odd, OPAQUE)
+        await until(lambda: zlib.crc32(odd) in acks(world.keyboard, 1))
         assert world.boards[1].clip.text == "straight through"
 
 
