@@ -1,10 +1,12 @@
 import AppKit
 import Combine
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, AnnouncerMemory {
     /// Mutable so the debug panel can change thresholds and the HUD's look
     /// while the app runs.
-    var config: Config
+    var config: Config {
+        didSet { announcer.config = config }
+    }
     /// Held for the lifetime of the app: it owns the accessibility observer
     /// that keeps a live HUD in step with System Settings.
     let transparency: SystemTransparency
@@ -21,6 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectionWatch: AnyCancellable?
 
     private var mainWindow: MainWindowController?
+    /// Decides what each event shows, from the state below; this class only
+    /// puts it on screen.
+    private lazy var announcer = Announcer(config: config, memory: self)
 
     /// Persisted so a relaunch on an already-low battery doesn't re-nag.
     var lowAlertArmed: Bool {
@@ -62,12 +67,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { state.set(newValue, forKey: "diedAnnounced") }
     }
 
-    /// The keyboard's active profile as last reported, and which profile is
-    /// this computer. Not persisted: the keyboard reports both afresh on every
-    /// connect, and a stale value would announce a move that never happened.
-    private(set) var activeProfile: Int?
-    private(set) var ownProfile: Int?
-
     /// The profiles' names as the keyboard last gave them, this connect. Nil
     /// until read, and always on firmware that does not keep them.
     private var keyboardNames: [String]?
@@ -76,12 +75,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var deviceName = DeviceName.current()
     private var nameEditWatch: NSObjectProtocol?
     private var nameEditSync: DispatchWorkItem?
-
-    /// Hours apart that make a connect the first of a new day, on top of any
-    /// connect on a new calendar day.
-    static let arrivalGap: TimeInterval = 4 * 3600
-    /// A disconnect at or below this level is the battery dying, not leaving.
-    static let diedLevel = 2
 
     init(config: Config) {
         self.config = config
@@ -269,73 +262,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // The events the keyboard reports. The debug panel calls these directly,
-    // so what it shows is what the real link would produce.
+    // so what it shows is what the real link would produce. What each one
+    // announces is the Announcer's call; see Announcer.swift.
 
-    /// `battery` is the level read on this connect, or nil if the read has not
-    /// landed yet. The last session's level is deliberately not shown in its
-    /// place: it was wrong whenever the keyboard had charged or drained while
-    /// away. A late read fills the ring in through `handleBattery`.
     func handleConnect(name: String, battery: Int?, isInitial: Bool, now: Date = Date()) {
-        let arrival = isArrival(at: now)
-        lastConnectAt = now
         statusItem?.model.linked = true
         statusItem?.model.battery = battery
-        if isInitial && config.suppressInitial { return }
-        hud.show(kind: arrival ? .arrived : .connected, name: name, battery: battery)
+        show(announcer.connect(battery: battery, isInitial: isInitial, now: now), name: name)
     }
 
-    /// The first connect of the day: none before, a new calendar day since the
-    /// last, or long enough away that it is a new stretch of work.
-    func isArrival(at now: Date) -> Bool {
-        guard let last = lastConnectAt else { return true }
-        if !Calendar.current.isDate(last, inSameDayAs: now) { return true }
-        guard let left = lastDisconnectAt, left >= last else { return false }
-        return now.timeIntervalSince(left) >= Self.arrivalGap
-    }
+    func isArrival(at now: Date) -> Bool { announcer.isArrival(at: now) }
 
     func handleDisconnect(name: String, now: Date = Date()) {
-        lastDisconnectAt = now
-        activeProfile = nil
         keyboardNames = nil
         statusItem?.model.linked = false
         statusItem?.model.profile = nil
-        if let level = lastBattery, level <= Self.diedLevel {
-            // Leaving on an empty battery is dying, whatever else is set: it
-            // is the one disconnect worth knowing about. Unless a report of 0%
-            // already said so a moment ago.
-            if !diedAnnounced {
-                diedAnnounced = true
-                hud.show(kind: .died, name: name, battery: level)
-            }
-            return
-        }
-        guard config.showDisconnect else { return }
-        hud.show(kind: .disconnected, name: name, battery: nil)
+        show(announcer.disconnect(now: now), name: name)
     }
 
-    /// The keyboard switched Bluetooth profile. `active` is the profile it now
-    /// types to, `own` the one that is this computer, both 0-based; `own` is
-    /// nil when the keyboard did not say.
-    ///
-    /// Only the moves that involve this computer say anything: away from it,
-    /// or back to it. The first report after a connect only sets the scene.
     func handleProfileSwitch(name: String, active: Int, own: Int?) {
-        let previous = activeProfile
-        activeProfile = active
-        if let own { ownProfile = own }
-        statusItem?.model.profile = ProfileState(active: active, own: ownProfile)
-        let move = ProfileMove(previous: previous, active: active, own: ownProfile)
-        DebugLog.shared.add(.app, move.explanation)
-
-        switch move.outcome {
-        case .away:
-            hud.show(kind: .movedAway, name: name, battery: lastBattery,
-                     detail: ProfileNames.name(for: active))
-        case .back:
-            hud.show(kind: .movedBack, name: name, battery: lastBattery)
-        case .firstReport, .unchanged, .ownUnknown, .elsewhere:
-            break
-        }
+        let announcement = announcer.profileSwitch(active: active, own: own)
+        statusItem?.model.profile = ProfileState(active: active, own: announcer.ownProfile)
+        if let move = announcer.lastMove { DebugLog.shared.add(.app, move.explanation) }
+        show(announcement, name: name)
         // Which profile is this Mac may only now be known, and with it which
         // name to fill in.
         syncProfileNames()
@@ -363,74 +312,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func handleBattery(name: String, level: Int) {
-        lastBattery = level
         statusItem?.model.battery = level
         // The BAS read lands shortly after connect; fill it into the live HUD.
         hud.updateBatteryIfVisible(name: name, battery: level)
-
-        if level <= 0, !diedAnnounced {
-            diedAnnounced = true
-            hud.show(kind: .died, name: name, battery: level)
-            return
-        } else if level > Self.diedLevel + 3 {
-            diedAnnounced = false
+        for announcement in announcer.battery(level: level) {
+            show(announcement, name: name)
         }
-
-        if lowAlertArmed, level <= config.lowThreshold {
-            lowAlertArmed = false
-            hud.show(kind: .lowBattery, name: name, battery: level)
-        } else if !lowAlertArmed, level >= config.rearmThreshold {
-            lowAlertArmed = true
-        }
-
-        announceMilestone(name: name, level: level)
     }
 
-    /// Show a HUD each time the level drops through a milestone.
-    ///
-    /// The low-battery alert fires once per descent, which on a 10 Ah cell is
-    /// roughly never, so it was the only battery notification and it almost
-    /// never appeared. Milestones give the ordinary discharge something to say.
-    ///
-    /// The reported percentage is not state of charge: it is a linear voltage
-    /// curve at ~7.5 mV per point, so load alone moves it several points either
-    /// way. Hence the guards:
-    ///
-    ///   * descending only: a level climbing back through a milestone rearms
-    ///     it without announcing it
-    ///   * a rearm margin: the level must recover well past a milestone before
-    ///     that milestone can fire again, so jitter around the boundary cannot
-    ///     produce a burst
-    private func announceMilestone(name: String, level: Int) {
-        let step = config.batteryMilestone
-        guard step > 0 else { return }
-
-        // The highest milestone at or below the current level.
-        let crossed = (level / step) * step
-        guard crossed > 0, crossed < 100 else { return }
-
-        if let last = lastMilestone {
-            guard crossed < last else {
-                // Recovering. Only rearm once it is clear of the boundary, so a
-                // level hovering on it does not toggle.
-                if crossed > last + step { lastMilestone = crossed }
-                return
-            }
-        }
-        lastMilestone = crossed
-        hud.show(kind: level <= config.lowThreshold ? .lowBattery : .connected,
-                 name: name, battery: level)
+    private func show(_ announcement: Announcement?, name: String) {
+        guard let announcement else { return }
+        hud.show(kind: announcement.kind, name: name, battery: announcement.battery,
+                 detail: announcement.detail)
     }
 
     /// Forget the day and battery history, for the debug panel.
-    func resetHistory() {
-        lastConnectAt = nil
-        lastDisconnectAt = nil
-        lastBattery = nil
-        diedAnnounced = false
-        activeProfile = nil
-        ownProfile = nil
-    }
+    func resetHistory() { announcer.resetHistory() }
 
     /// A programmatic menu bar, since this app has no nib. Without it a
     /// `.regular` app has no way to quit or reopen its window.

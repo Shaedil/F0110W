@@ -1,0 +1,253 @@
+/* The window: a floating sidebar over the ground, the pane's column, and on
+   the side panes a stage to the right. Measurements are the Mac's
+   RootView's, less the 28 pt title bar the Mac draws over and Windows draws
+   above. */
+
+:root {
+  --sidebar-width: 214px;
+  --sidebar-inset: 8px;
+  --sidebar-span: 230px;
+  --content-top: 26px;
+  --content-side: 28px;
+  --content-bottom: 24px;
+}
+
+#window { position: relative; width: 100vw; height: 100vh; }
+
+/* ---- Sidebar ---- */
+
+#sidebar {
+  position: absolute;
+  z-index: 2;
+  top: var(--sidebar-inset);
+  left: var(--sidebar-inset);
+  bottom: var(--sidebar-inset);
+  width: var(--sidebar-width);
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--sidebar-floating);
+  border: 1px solid var(--sidebar-floating-stroke);
+  box-shadow: 0 7px 36px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(30px) saturate(1.6);
+  transition: transform 0.34s cubic-bezier(0.2, 0.9, 0.25, 1), opacity 0.34s;
+}
+body.sidebar-hidden #sidebar { transform: translateX(-24px); opacity: 0; pointer-events: none; }
+
+.sidebar-band { display: flex; justify-content: flex-end; height: 22px; margin-bottom: 14px; }
+
+#panes { display: flex; flex-direction: column; gap: 2px; }
+#panes button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sidebar-text-dim);
+  font-size: 14px;
+  text-align: left;
+}
+#panes button .icon { display: inline-flex; width: 18px; justify-content: center; }
+#panes button.active { background: var(--sidebar-key); color: var(--sidebar-text); font-weight: 600; }
+
+.sidebar-toggle {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--sidebar-key-stroke);
+  background: var(--sidebar-key) center / 14px 11px no-repeat;
+  color: var(--sidebar-text);
+}
+.sidebar-toggle::before {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 11px;
+  margin: auto;
+  border: 1.4px solid currentColor;
+  border-radius: 3px;
+  background: linear-gradient(currentColor, currentColor) 4px 0 / 1.4px 100% no-repeat;
+}
+.sidebar-toggle.floating {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  left: 14px;
+  border-color: var(--key-stroke);
+  background-color: var(--key);
+  color: var(--text-dim);
+}
+
+/* ---- Detail ---- */
+
+#detail {
+  position: absolute;
+  inset: 0 0 0 var(--sidebar-span);
+  display: flex;
+  transition: left 0.34s cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+body.sidebar-hidden #detail { left: 0; }
+
+#column {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--content-top) var(--content-side) var(--content-bottom);
+  overflow: hidden;
+}
+/* 620 points of text, as on the Mac; on a screen too narrow for the whole
+   window the column gives way before the stage does. */
+body:not([data-pane="keys"]) #column { flex: 0 1 676px; min-width: 420px; overflow-y: auto; }
+
+.pane-header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; height: 44px; }
+#title canvas { display: block; }
+#stripes { flex: 0 1 220px; min-width: 0; height: 13px; overflow: hidden; }
+#stripes canvas { display: block; }
+
+#stage-column {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--content-top) var(--content-side) var(--content-bottom) 0;
+}
+body[data-pane="keys"] #stage-column { display: none; }
+
+/* ---- Pane building blocks ---- */
+
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.stack > .segments { align-self: flex-start; }
+.group { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.spacer { flex: 1; }
+.label { font-size: 12px; color: var(--text-dim); }
+.value { font-size: 11px; color: var(--text); font-family: var(--font-mono); }
+.note { font-size: 11px; color: var(--text-dim); }
+.warning { display: flex; gap: 6px; font-size: 11px; color: var(--warn); }
+
+/* ---- Keyboard pane ---- */
+
+.toolbar { display: flex; align-items: center; gap: 10px; height: 34px; }
+.toolbar .status {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+.badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 100px;
+  background: var(--panel);
+  border: 1px solid var(--panel-stroke);
+}
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+.badge .name { font-size: 13px; font-weight: 600; }
+.empty { display: flex; flex-direction: column; gap: 7px; max-width: 460px; }
+.board-panel {
+  padding: 42px 14px;
+  background: var(--board-surround);
+  border-color: var(--board-surround-stroke);
+}
+.board-panel::before { display: none; }
+.board2d { display: block; overflow: visible; }
+.keygrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(82px, 1fr)); gap: 8px; }
+
+/* ---- Stage ---- */
+
+#stage-column { display: flex; flex-direction: column; }
+.stage { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.stage::before { display: none; }
+.stage-view {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  perspective: 900px;
+}
+.stage-view { position: relative; }
+.stage-view canvas.board3d { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.stage-view.flat svg { transform: rotateX(48deg) rotateZ(-8deg); }
+.stage-caption { position: absolute; left: 0; bottom: 0; }
+.stage { position: relative; }
+.stage-caption { padding: 14px; display: flex; flex-direction: column; gap: 1px; pointer-events: none; }
+
+/* ---- Popup preview ---- */
+
+:root {
+  --hud-fill: rgba(42, 42, 42, 0.94);
+  --hud-title: rgba(255, 255, 255, 0.95);
+  --hud-secondary: rgba(255, 255, 255, 0.64);
+  --hud-track: rgba(255, 255, 255, 0.22);
+  --hud-good: rgb(48, 209, 88);
+  --hud-low: rgb(255, 69, 58);
+  --taskbar: rgba(32, 32, 32, 0.86);
+  --taskbar-ink: rgba(255, 255, 255, 0.86);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --hud-fill: rgba(249, 249, 249, 0.95);
+    --hud-title: rgba(0, 0, 0, 0.89);
+    --hud-secondary: rgba(0, 0, 0, 0.60);
+    --hud-track: rgba(0, 0, 0, 0.13);
+    --hud-good: rgb(52, 199, 89);
+    --hud-low: rgb(255, 59, 48);
+    --taskbar: rgba(243, 243, 243, 0.86);
+    --taskbar-ink: rgba(0, 0, 0, 0.82);
+  }
+}
+
+.popup-preview {
+  position: relative;
+  height: 200px;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--panel-stroke);
+  background: radial-gradient(120% 140% at 85% 110%, #2c6fd6 0%, #1c3f8f 38%, #0d1b46 70%, #0a1230 100%);
+  pointer-events: none;
+}
+.popup-preview .desk { position: absolute; inset: 0 0 48px 0; transform-origin: bottom right; }
+.popup-preview .taskbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  padding: 0 14px;
+  background: var(--taskbar);
+  color: var(--taskbar-ink);
+  font-size: 12px;
+  backdrop-filter: blur(20px);
+}
+.preview-label {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.hud {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  background: var(--hud-fill);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+.hud svg { flex: none; }
+.hud-text { display: flex; flex-direction: column; align-items: center; flex: 1; line-height: 1.15; }
+
+.board-panel-3d { padding: 24px 14px; }
+.board-panel-3d .board-host { position: relative; }
+.board-panel-3d canvas.board3d { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }

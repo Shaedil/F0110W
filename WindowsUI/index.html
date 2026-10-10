@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>M0110</title>
+<link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="window">
+  <aside id="sidebar">
+    <div class="sidebar-band">
+      <button id="sidebar-hide" class="sidebar-toggle" title="Hide Sidebar" aria-label="Hide Sidebar"></button>
+    </div>
+    <nav id="panes"></nav>
+  </aside>
+  <button id="sidebar-show" class="sidebar-toggle floating" title="Show Sidebar" aria-label="Show Sidebar" hidden></button>
+  <main id="detail">
+    <section id="column">
+      <header class="pane-header"><span id="title"></span><span id="stripes"></span></header>
+      <div id="pane"></div>
+    </section>
+    <section id="stage-column"></section>
+  </main>
+</div>
+<script>
+  // Errors land on the page too, where a preview can read them.
+  addEventListener('error', (e) => { document.documentElement.dataset.error = `${e.message} @ ${e.filename}:${e.lineno}`; });
+  addEventListener('unhandledrejection', (e) => { document.documentElement.dataset.error = String(e.reason?.stack ?? e.reason); });
+</script>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

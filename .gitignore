@@ -2,3 +2,4 @@
 build/
 *.blend1
 __pycache__/
+.deps/

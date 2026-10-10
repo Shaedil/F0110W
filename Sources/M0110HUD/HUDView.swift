@@ -1,50 +1,5 @@
 import AppKit
 
-/// What a HUD is announcing.
-enum HUDKind: String, CaseIterable {
-    /// The first connect of the day: after hours away, or on a new day.
-    case arrived
-    /// Any other connect.
-    case connected
-    case lowBattery
-    case disconnected
-    /// Gone with a flat battery: a report of 0%, or a disconnect right after
-    /// a near-empty one.
-    case died
-    /// The keyboard switched to another of its Bluetooth profiles.
-    case movedAway
-    /// The keyboard switched back to this computer from another profile.
-    case movedBack
-
-    /// Whether the battery ring belongs on this HUD when a level is known.
-    var showsRing: Bool {
-        switch self {
-        case .arrived, .connected, .lowBattery, .movedBack: true
-        case .disconnected, .died, .movedAway: false
-        }
-    }
-}
-
-/// Profile names, for "Moved to ...": this computer's copy of the ones the
-/// keyboard keeps (see `ProfileNameStore`).
-enum ProfileNames {
-    static let count = 5
-
-    static func key(_ index: Int) -> String { "profileName\(index)" }
-
-    /// The name for a 0-based profile index, or "Profile N" when none is set.
-    static func name(for index: Int, in defaults: UserDefaults = .standard) -> String {
-        if let n = defaults.string(forKey: key(index))?.trimmingCharacters(in: .whitespaces),
-           !n.isEmpty {
-            return n
-        }
-        return placeholder(index)
-    }
-
-    /// What a profile with no name is called.
-    static func placeholder(_ index: Int) -> String { "Profile \(index + 1)" }
-}
-
 /// How the HUD arrives.
 enum HUDEntrance: String, CaseIterable {
     /// In from the right, fading up.
@@ -171,14 +126,7 @@ final class HUDView: NSView {
                    detail: String? = nil, canMoveBack: Bool = false) {
         titleLabel.stringValue = name
 
-        switch kind {
-        case .arrived, .connected: statusLabel.stringValue = "Connected"
-        case .disconnected:        statusLabel.stringValue = "Disconnected"
-        case .lowBattery:          statusLabel.stringValue = "Low Battery"
-        case .died:                statusLabel.stringValue = "Battery Empty"
-        case .movedAway:           statusLabel.stringValue = "Moved to \(detail ?? "another device")"
-        case .movedBack:           statusLabel.stringValue = "Moved back"
-        }
+        statusLabel.stringValue = kind.status(detail: detail)
 
         moveBackButton.isHidden = !(kind == .movedAway && canMoveBack)
 

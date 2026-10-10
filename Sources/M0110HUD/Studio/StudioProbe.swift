@@ -6,7 +6,11 @@ enum StudioProbe {
     static func run(verbose: Bool) -> Int32 {
         let ports = SerialTransport.candidatePorts()
         print("candidate ports: \(ports.isEmpty ? "none found" : ports.joined(separator: ", "))")
+        #if canImport(CoreBluetooth)
         print("bluetooth: tried after the serial ports")
+        #else
+        print("bluetooth: not on this platform; USB only")
+        #endif
 
         guard let (client, info) = StudioClient.discover(
             deviceName: "M0110", log: { if verbose { print("  \($0)") } }) else {

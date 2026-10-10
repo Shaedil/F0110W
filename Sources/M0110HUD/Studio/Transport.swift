@@ -73,7 +73,9 @@ protocol StudioTransport: AnyObject {
     func receiveFrameIfAvailable() throws -> [UInt8]?
 }
 
-/// Blocking serial transport over a CDC ACM port.
+#if canImport(Darwin)
+/// Blocking serial transport over a CDC ACM port. The Windows one is in
+/// Windows/SerialTransport.swift.
 ///
 /// ZMK exposes two CDC ACM interfaces on this build, a logging console and the
 /// Studio RPC endpoint, so callers generally probe each candidate port.
@@ -176,3 +178,4 @@ final class SerialTransport: StudioTransport {
         }
     }
 }
+#endif

@@ -1,0 +1,256 @@
+/* The Mac window's Theme.swift, token for token. The ground is the same
+   near-black in both modes; panels stay dark in light mode too, and only the
+   sidebar turns white. */
+
+:root {
+  color-scheme: dark;
+
+  --ink: #0b0a09;
+  --on-accent: #1e1a15;
+  --good: #59c773;
+  --warn: #f2b840;
+  --bad: #e6594d;
+  --cap-ink: #3e4047;
+  --selected-cap-top: #e5c37a;
+  --selected-cap-skirt: #ba924a;
+  --selected-cap-ink: #3d2d13;
+
+  /* Dark appearance. */
+  --panel: rgba(18, 18, 18, 0.58);
+  --panel-stroke: rgba(235, 224, 204, 0.14);
+  --sidebar-floating: rgba(13, 13, 13, 0.38);
+  --sidebar-floating-stroke: rgba(245, 237, 219, 0.18);
+  --sidebar-text: rgba(247, 244, 236, 0.94);
+  --sidebar-text-dim: rgba(247, 244, 236, 0.52);
+  --sidebar-key: rgba(245, 237, 219, 0.09);
+  --sidebar-key-stroke: rgba(245, 237, 219, 0.18);
+  --sidebar-icon-scale: 1;
+  --board-surround: rgba(156, 150, 130, 0.94);
+  --board-surround-stroke: rgba(115, 109, 91, 0.55);
+  --key: rgba(245, 237, 219, 0.09);
+  --key-stroke: rgba(245, 237, 219, 0.18);
+  --key-stroke-soft: rgba(245, 237, 219, 0.072);
+  --text: rgba(247, 244, 236, 0.94);
+  --text-dim: rgba(247, 244, 236, 0.52);
+  --accent: #e0d6bf;
+  --case-flat: #d6d2c3;
+  --plate: #100f0d;
+  --case-emboss: #c4c0b1;
+  --case-emboss-face: #dad6c7;
+  --cap-top: #c7c8bd;
+  --cap-skirt: #9e9f96;
+  --spacebar-top: #b6b7ad;
+  --spacebar-skirt: #8e8f87;
+
+  --corner: 14px;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-title: "Georgia", "Cambria", serif;
+  --font-cap: "Helvetica", "Arial", sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --panel: rgba(23, 23, 23, 0.62);
+    --panel-stroke: rgba(235, 224, 204, 0.16);
+    --sidebar-floating: rgba(255, 255, 255, 0.96);
+    --sidebar-floating-stroke: rgba(245, 237, 219, 0.22);
+    --sidebar-text: rgba(30, 26, 21, 0.92);
+    --sidebar-text-dim: rgba(30, 26, 21, 0.62);
+    --sidebar-key: rgba(30, 26, 21, 0.08);
+    --sidebar-key-stroke: rgba(30, 26, 21, 0.14);
+    --sidebar-icon-scale: 0.68;
+    --board-surround: rgba(163, 156, 136, 0.94);
+    --board-surround-stroke: rgba(122, 115, 97, 0.55);
+    --key: rgba(245, 237, 219, 0.10);
+    --key-stroke: rgba(245, 237, 219, 0.20);
+    --key-stroke-soft: rgba(245, 237, 219, 0.08);
+    --text: rgba(247, 244, 236, 0.95);
+    --text-dim: rgba(247, 244, 236, 0.55);
+    --accent: #e2d8c1;
+    --case-flat: #dad6c7;
+    --plate: #131210;
+    --case-emboss: #c8c4b5;
+    --case-emboss-face: #dedacb;
+    --cap-top: #cbccc1;
+    --cap-skirt: #a2a39a;
+    --spacebar-top: #babbb1;
+    --spacebar-skirt: #92938b;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--text);
+  font: 12px/1.35 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+button { font: inherit; color: inherit; }
+
+/* Type scale: Theme.sectionTitle, body, small, toolbar. */
+.section-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.body { font-size: 12px; }
+.small { font-size: 11px; }
+.dim { color: var(--text-dim); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* Panel: a rounded slab with a faint stipple and a hairline. */
+.panel {
+  position: relative;
+  padding: 16px;
+  border-radius: var(--corner);
+  background: var(--panel);
+  border: 1px solid var(--panel-stroke);
+}
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.045;
+  background-image: conic-gradient(#fff 25%, transparent 0 50%, #fff 0 75%, transparent 0);
+  background-size: 2px 2px;
+}
+
+/* PillButtonStyle. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 12px;
+  border-radius: 100px;
+  border: 1px solid var(--key-stroke-soft);
+  background: var(--key);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pill.prominent { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.pill:active:not(:disabled) { opacity: 0.7; }
+.pill:disabled { opacity: 0.4; }
+
+/* SegmentPills. */
+.segments {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 100px;
+  background: var(--key);
+  border: 1px solid var(--key-stroke-soft);
+}
+.segments button {
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 100px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.segments button.active { background: var(--accent); color: var(--on-accent); }
+
+/* ThemeSwitch. */
+.switch {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border-radius: 9px;
+  border: 1px solid var(--key-stroke);
+  background: var(--key);
+  transition: background 0.12s ease-out;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.12s ease-out, background 0.12s ease-out;
+}
+.switch.on { background: var(--accent); border-color: transparent; }
+.switch.on::after { transform: translateX(14px); background: var(--on-accent); }
+
+/* ThemeSlider. */
+.slider { position: relative; height: 13px; touch-action: none; }
+.slider .track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4.5px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--key);
+  border: 1px solid var(--key-stroke);
+}
+.slider .fill {
+  position: absolute;
+  left: 0;
+  top: 4.5px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.slider .knob {
+  position: absolute;
+  top: 0;
+  width: 13px;
+  height: 13px;
+  margin-left: -6.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+/* ThemeStepper. */
+.stepper { display: inline-flex; gap: 4px; }
+.stepper button {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--key-stroke);
+  background: var(--key);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.stepper button:disabled { opacity: 0.4; }
+
+/* A native text field, as the Mac's Bluetooth pane uses unthemed. */
+.field {
+  width: 220px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--key-stroke);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font: 12px var(--font-ui);
+  outline: none;
+  user-select: text;
+}
+.field:focus { border-color: var(--accent); }
+.field::placeholder { color: var(--text-dim); }
+
+[hidden] { display: none !important; }

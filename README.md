@@ -2,7 +2,8 @@
 
 A macOS menu-bar app for the M0110 converter. It draws the connect and battery
 HUD macOS shows for Apple accessories but never for third-party Bluetooth
-keyboards, and edits the keymap live over ZMK Studio.
+keyboards, and edits the keymap live over ZMK Studio. The HUD also builds for
+Windows; see [Windows](#windows).
 
 The firmware is on the `nice-nano` and `framework-cb` branches.
 
@@ -37,6 +38,46 @@ To iterate on the HUD, run `tools/hud-dev.sh`. It opens a debug panel that
 drives the real connect, disconnect and battery handlers by hand, and rebuilds
 and relaunches on every save under `Sources/`, putting the last HUD back on
 screen.
+
+## Windows
+
+The same HUD, in the corner by the tray, with a tray icon in place of the
+menu bar item. It announces the same things at the same moments: what each
+event shows is decided in `Announcer.swift`, which both builds share, along
+with presence, settings and the Studio RPC client. The keymap editor and the
+clipboard bridge are AppKit and SwiftUI and stay on the Mac; on Windows the
+clipboard has its script, below.
+
+Build it on Windows with the [Swift toolchain](https://www.swift.org/install/windows/):
+
+```powershell
+.\build.ps1             # build\M0110HUD\, the executable and the Swift runtime
+.\build.ps1 -Install    # and copy it to %LOCALAPPDATA%\Programs\M0110HUD, and start it
+```
+
+Start at Login is in the tray menu, or `M0110HUD.exe --install`, which keeps
+the other options given with it. The keyboard has to be paired with Windows.
+`--ble-probe` says what Windows reports for it: found or not, connected, the
+battery, the profile report. It is a GUI program, so pipe it to have
+PowerShell wait for the output: `.\M0110HUD.exe --ble-probe | Out-Host`.
+
+Profile names for "Moved to …" are kept on the keyboard, so the Mac and Windows
+show the same ones, and are set in the window's Bluetooth pane. When this PC's
+own profile has none, it names it "Windows 11 PC" (or 10); the keyboard numbers
+twins. `%LOCALAPPDATA%\M0110HUD\settings.json` keeps a copy, as `profileNames`,
+and names in it from before the keyboard kept them are offered to it once.
+`--ble-probe` prints the names the keyboard has.
+
+The HUD is drawn in software (`Windows/HUDRaster.swift`), so its look can be
+worked on from a Mac: `tools/win-hud-preview.sh` draws every state to a PNG,
+and `tools/win-typecheck.sh` type-checks the Windows Swift against the C
+layer's header. The C layer itself (`Sources/CM0110Win`) needs Windows to
+build; `.github/workflows/hud-windows.yml` builds it all on a Windows runner and
+uploads the package and a `--snapshot` of every state.
+
+Windows caches a paired keyboard's GATT services. If the firmware gained the
+profile report after pairing, Windows will not show it until the keyboard is
+removed and paired again; `--ble-probe` says so.
 
 ## When a HUD shows
 

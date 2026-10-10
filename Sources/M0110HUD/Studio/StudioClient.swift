@@ -270,7 +270,9 @@ final class StudioClient {
         var transports: [StudioTransport] = SerialTransport.candidatePorts().map {
             SerialTransport(path: $0)
         }
+        #if canImport(CoreBluetooth)
         transports.append(BLETransport(deviceName: deviceName, log: log))
+        #endif
 
         for transport in transports {
             let client = StudioClient(transport: transport)
