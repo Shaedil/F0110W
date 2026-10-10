@@ -58,9 +58,6 @@
   --prism-m1: 255, 30, 140;
   --prism-m2: 26, 229, 229;
   --prism-m3: 255, 232, 59;
-  --prism-glow: 0.96;
-  --sun-x: 50%;
-  --sun-y: 22%;
   /* PrismTokens, several times prismorphism's web strengths, for a desktop
      window at arm's length. The triad runs corner to corner. */
   --prism-wash: linear-gradient(to bottom right, rgba(var(--prism-t1), 0.08), rgba(var(--prism-t2), 0.08),
@@ -126,20 +123,9 @@ html, body {
   cursor: default;
 }
 
-/* The ground: near-black with prismorphism's sun-tracking ambient in it,
-   pm-ambient-chronos. Three soft glows of the triad, the strongest centred
-   where the sun is, so it climbs the window through the morning and sets at
-   the far edge, and all of them dim, though not out, at night. */
-body {
-  background:
-    radial-gradient(ellipse 70% 55% at var(--sun-x) var(--sun-y),
-                    rgba(var(--prism-t1), calc(0.55 * var(--prism-glow))), transparent 60%),
-    radial-gradient(ellipse 60% 50% at calc(var(--sun-x) + 18%) calc(var(--sun-y) + 12%),
-                    rgba(var(--prism-t2), calc(0.4 * var(--prism-glow))), transparent 60%),
-    radial-gradient(ellipse 80% 70% at 50% 60%,
-                    rgba(var(--prism-t3), calc(0.2 * var(--prism-glow))), transparent 60%),
-    var(--ink);
-}
+/* The ground's glows are a canvas behind the window (see prism.js), so only
+   the root keeps the ink: a body background would paint over it. */
+body { background: transparent; }
 
 button { font: inherit; color: inherit; }
 
