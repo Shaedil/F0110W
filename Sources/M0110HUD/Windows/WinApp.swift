@@ -27,6 +27,8 @@ final class WinApp {
     /// The profiles' names as the keyboard last gave them, this connect. Nil
     /// until read, and always on firmware that does not keep them.
     private var keyboardNames: [String]?
+    /// Which of those the keyboard read from the devices themselves.
+    private var keyboardNamesFromDevice: Set<Int> = []
     /// This PC's side of the names, kept in settings.json.
     private lazy var names = ProfileNameStore(
         load: { [unowned self] in
@@ -138,15 +140,18 @@ final class WinApp {
             // which name to fill in.
             self.syncProfileNames()
         }
-        m.onNames = { [weak self] keyboard in self?.handleProfileNames(keyboard) }
+        m.onNames = { [weak self] keyboard, fromDevice in
+            self?.handleProfileNames(keyboard, fromDevice: fromDevice)
+        }
         m.onNameWritten = { [weak self] write, _ in self?.names.answered(write) }
         monitor = m
         m.start()
     }
 
     /// The keyboard's names, read on connect and again whenever one changes.
-    private func handleProfileNames(_ keyboard: [String]) {
+    private func handleProfileNames(_ keyboard: [String], fromDevice: Set<Int>) {
         keyboardNames = keyboard
+        keyboardNamesFromDevice = fromDevice
         names.carryOverIfNeeded(keyboard: keyboard)
         syncProfileNames()
     }
@@ -160,7 +165,8 @@ final class WinApp {
         names.cache(keyboard)
         guard let monitor, monitor.canWriteNames, !monitor.isWritingNames else { return }
         for write in ProfileNameSync.writes(keyboard: keyboard, pending: names.pending,
-                                            own: monitor.reportedOwn, deviceName: deviceName) {
+                                            own: monitor.reportedOwn, deviceName: deviceName,
+                                            fromDevice: keyboardNamesFromDevice) {
             monitor.write(write)
         }
     }

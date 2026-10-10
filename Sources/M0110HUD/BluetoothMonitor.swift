@@ -76,8 +76,8 @@ final class BluetoothMonitor: NSObject {
     /// receiver compares with what it last heard.
     var onProfile: ((String, Int, Int?) -> Void)?
     /// Fires on every read of the profiles' names, one per profile, "" where
-    /// none was given.
-    var onNames: (([String]) -> Void)?
+    /// none was given, and which of them the keyboard read from the device.
+    var onNames: (([String], Set<Int>) -> Void)?
     /// Fires when the keyboard answers a name write: whether it took it.
     var onNameWritten: ((ProfileNameSync.Write, Bool) -> Void)?
 
@@ -395,9 +395,11 @@ extension BluetoothMonitor: CBPeripheralDelegate {
             guard let data = characteristic.value, let names = ProfileNamesWire.parse(data) else {
                 return log("profile names malformed")
             }
+            let fromDevice = ProfileNamesWire.fromDevice(data)
             log("profile names: " + names.enumerated()
-                .map { "\($0.offset + 1)=\"\($0.element)\"" }.joined(separator: " "))
-            onNames?(names)
+                .map { "\($0.offset + 1)=\"\($0.element)\"" + (fromDevice.contains($0.offset) ? "*" : "") }
+                .joined(separator: " ") + (fromDevice.isEmpty ? "" : " (* read from the device)"))
+            onNames?(names, fromDevice)
             return
         }
         if characteristic.uuid == Self.profileStateChar {

@@ -24,6 +24,18 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(ProfileNamesWire.parse(data), ["Desk", "", "Café"])
     }
 
+    /// After the names, a bit per profile whose name the keyboard read from
+    /// the device itself; firmware from before it sends no such byte.
+    func testReadsWhichNamesCameFromTheDevice() {
+        let names: [UInt8] = [1, 3, 4] + Array("Desk".utf8) + [0, 2] + Array("S9".utf8)
+        XCTAssertEqual(ProfileNamesWire.fromDevice(Data(names + [0b100])), [2])
+        XCTAssertEqual(ProfileNamesWire.parse(Data(names + [0b100])), ["Desk", "", "S9"])
+        XCTAssertEqual(ProfileNamesWire.fromDevice(Data(names)), [])
+        XCTAssertEqual(ProfileNamesWire.fromDevice(Data(names + [0b1000_0000])), [],
+                       "no such profile")
+        XCTAssertEqual(ProfileNamesWire.fromDevice(Data([1, 1, 5, 65])), [], "malformed")
+    }
+
     func testRejectsMalformedNames() {
         XCTAssertNil(ProfileNamesWire.parse(Data()))
         XCTAssertNil(ProfileNamesWire.parse(Data([2, 0])), "unknown format")
@@ -123,6 +135,31 @@ final class ProfileNameSyncTests: XCTestCase {
             ProfileNameSync.writes(keyboard: ["Work"], pending: [0: ""], own: 0,
                                    deviceName: "Windows 11 PC"),
             [write(.set, 0, ""), write(.auto, 0, "Windows 11 PC")])
+    }
+
+    /// The keyboard named this computer after itself before this app did:
+    /// that is a stand-in, which this computer's own name replaces.
+    func testReplacesTheDevicesOwnName() {
+        XCTAssertEqual(
+            ProfileNameSync.writes(keyboard: ["Galaxy S9", "DESKTOP-7F3K2"], pending: [:], own: 1,
+                                   deviceName: "Windows 11 PC", fromDevice: [0, 1]),
+            [write(.auto, 1, "Windows 11 PC")])
+        XCTAssertEqual(
+            ProfileNameSync.writes(keyboard: ["Galaxy S9", "Desk"], pending: [:], own: 1,
+                                   deviceName: "Windows 11 PC", fromDevice: [0]),
+            [], "the phone's is left to the phone")
+    }
+
+    /// A rename made here wins, even one that reads the same as the device's.
+    func testRenameHereBeatsTheDevicesName() {
+        XCTAssertEqual(
+            ProfileNameSync.writes(keyboard: ["DESKTOP-7F3K2"], pending: [0: "DESKTOP-7F3K2"],
+                                   own: 0, deviceName: "Windows 11 PC", fromDevice: [0]),
+            [write(.set, 0, "DESKTOP-7F3K2")])
+        XCTAssertEqual(
+            ProfileNameSync.writes(keyboard: ["", "Galaxy S9"], pending: [1: "Sam's phone"],
+                                   own: 0, deviceName: "MacBook Air M4", fromDevice: [1]),
+            [write(.set, 1, "Sam's phone"), write(.auto, 0, "MacBook Air M4")])
     }
 
     func testCarriesOverOnlyRealNamesForBlankProfiles() {

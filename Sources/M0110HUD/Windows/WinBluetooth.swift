@@ -132,8 +132,8 @@ final class WinBluetoothMonitor {
     var onBattery: ((String, Int) -> Void)?
     var onProfile: ((String, Int, Int?) -> Void)?
     /// Every read of the profiles' names, one per profile, "" where none was
-    /// given.
-    var onNames: (([String]) -> Void)?
+    /// given, and which of them the keyboard read from the device.
+    var onNames: (([String], Set<Int>) -> Void)?
     /// The keyboard answered a name write: whether it took it.
     var onNameWritten: ((ProfileNameSync.Write, Bool) -> Void)?
     /// The keyboard's device instance as it connects, and nil as it leaves:
@@ -396,9 +396,11 @@ final class WinBluetoothMonitor {
         guard let names = ProfileNamesWire.parse(Data(value)) else {
             return log("profile names: malformed \(value)")
         }
-        log("profile names: " + names.enumerated().map { "\($0.offset)=\"\($0.element)\"" }
-            .joined(separator: " "))
-        onNames?(names)
+        let fromDevice = ProfileNamesWire.fromDevice(Data(value))
+        log("profile names: " + names.enumerated()
+            .map { "\($0.offset)=\"\($0.element)\"" + (fromDevice.contains($0.offset) ? "*" : "") }
+            .joined(separator: " ") + (fromDevice.isEmpty ? "" : " (* read from the device)"))
+        onNames?(names, fromDevice)
     }
 
     /// As BluetoothMonitor.parseProfileState: both 0-based, `own` nil when
@@ -465,8 +467,10 @@ enum BLEProbe {
             switch link.read(capacity: 256) {
             case .success(let value):
                 if let names = ProfileNamesWire.parse(Data(value)) {
+                    let fromDevice = ProfileNamesWire.fromDevice(Data(value))
                     print("  profile names: " + names.enumerated()
-                        .map { "\($0.offset)=\"\($0.element)\"" }.joined(separator: " "))
+                        .map { "\($0.offset)=\"\($0.element)\"" + (fromDevice.contains($0.offset) ? "*" : "") }
+                        .joined(separator: " ") + (fromDevice.isEmpty ? "" : " (* read from the device)"))
                 } else {
                     print("  profile names: malformed \(value)")
                 }

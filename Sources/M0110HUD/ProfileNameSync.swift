@@ -24,7 +24,20 @@ enum ProfileNamesWire {
 
     /// One name per profile, "" where none was given. Nil if malformed.
     static func parse(_ data: Data) -> [String]? {
+        decode([UInt8](data))?.names
+    }
+
+    /// The profiles whose name the keyboard read from the device itself, as
+    /// a stand-in until its helper names it: a byte after the names, a bit
+    /// per profile. Firmware from before it sends none.
+    static func fromDevice(_ data: Data) -> Set<Int> {
         let bytes = [UInt8](data)
+        guard let (names, end) = decode(bytes), end < bytes.count else { return [] }
+        return Set(names.indices.filter { $0 < 8 && bytes[end] & (1 << $0) != 0 })
+    }
+
+    /// The names, and where the bytes after them start.
+    private static func decode(_ bytes: [UInt8]) -> (names: [String], end: Int)? {
         guard bytes.count >= 2, bytes[0] == format else { return nil }
         var names: [String] = []
         var at = 2
@@ -36,7 +49,7 @@ enum ProfileNamesWire {
             names.append(String(decoding: bytes[at..<at + len], as: UTF8.self))
             at += len
         }
-        return names
+        return (names, at)
     }
 
     static func write(_ op: Op, index: Int, name: String) -> Data {
@@ -70,18 +83,25 @@ enum ProfileNameSync {
     ///   until that is known nothing is sent and renames wait.
     /// - deviceName: what this computer calls itself, for its own profile
     ///   when that has no name or is called "Profile N".
+    /// - fromDevice: the profiles whose name the keyboard read from the
+    ///   device itself. On this computer's own profile that is only a stand-in,
+    ///   which the keyboard lets this computer's name replace.
     static func writes(keyboard: [String], pending: [Int: String], own: Int?,
-                       deviceName: String?) -> [Write] {
+                       deviceName: String?, fromDevice: Set<Int> = []) -> [Write] {
         guard let own else { return [] }
         var names = keyboard
+        var standIns = fromDevice
         var out: [Write] = []
 
         for (index, name) in pending.sorted(by: { $0.key < $1.key })
         where names.indices.contains(index) {
             let name = ProfileNamesWire.clean(name)
-            guard names[index] != name else { continue }
+            // Sent even when it reads the same as the device's own name, so
+            // the keyboard keeps it as given here.
+            guard names[index] != name || standIns.contains(index) else { continue }
             out.append(Write(op: .set, index: index, name: name))
             names[index] = name
+            standIns.remove(index)
         }
 
         guard names.indices.contains(own),
@@ -96,7 +116,7 @@ enum ProfileNameSync {
             out.append(Write(op: .set, index: own, name: ""))
             names[own] = ""
         }
-        if names[own].isEmpty {
+        if names[own].isEmpty || standIns.contains(own) {
             out.append(Write(op: .auto, index: own, name: deviceName))
         }
         return out

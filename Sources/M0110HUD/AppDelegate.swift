@@ -70,6 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AnnouncerMemory {
     /// The profiles' names as the keyboard last gave them, this connect. Nil
     /// until read, and always on firmware that does not keep them.
     private var keyboardNames: [String]?
+    /// Which of those the keyboard read from the devices themselves.
+    private var keyboardNamesFromDevice: Set<Int> = []
     private let names = ProfileNameStore.shared
     /// What this Mac offers as its own profile's name, e.g. "MacBook Air M4".
     private lazy var deviceName = DeviceName.current()
@@ -227,8 +229,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AnnouncerMemory {
         m.onProfile = { [weak self] name, active, own in
             self?.handleProfileSwitch(name: name, active: active, own: own)
         }
-        m.onNames = { [weak self] names in
-            self?.handleProfileNames(names)
+        m.onNames = { [weak self] names, fromDevice in
+            self?.handleProfileNames(names, fromDevice: fromDevice)
         }
         m.onNameWritten = { [weak self] write, _ in
             self?.names.answered(write)
@@ -291,8 +293,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AnnouncerMemory {
     }
 
     /// The keyboard's names, read on connect and again whenever one changes.
-    func handleProfileNames(_ keyboard: [String]) {
+    func handleProfileNames(_ keyboard: [String], fromDevice: Set<Int> = []) {
         keyboardNames = keyboard
+        keyboardNamesFromDevice = fromDevice
         names.carryOverIfNeeded(keyboard: keyboard)
         syncProfileNames()
     }
@@ -306,7 +309,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AnnouncerMemory {
         names.cache(keyboard)
         guard let monitor, monitor.canWriteNames, !monitor.isWritingNames else { return }
         for write in ProfileNameSync.writes(keyboard: keyboard, pending: names.pending,
-                                            own: monitor.reportedOwn, deviceName: deviceName) {
+                                            own: monitor.reportedOwn, deviceName: deviceName,
+                                            fromDevice: keyboardNamesFromDevice) {
             monitor.write(write)
         }
     }
