@@ -258,9 +258,11 @@ static int is_private(void) {
 /// The PNG's real length from its chunks, since the clipboard copy can have padding after IEND.
 static uint32_t png_length(const uint8_t *png, uint32_t length) {
     uint32_t at = 8;
-    while (at + 12 <= length) {
+    // Compared by subtraction, since a huge chunk length would wrap a sum.
+    while (length >= 12 && at <= length - 12) {
         uint32_t chunk = (uint32_t)png[at] << 24 | (uint32_t)png[at + 1] << 16 | (uint32_t)png[at + 2] << 8 | png[at + 3];
         if (memcmp(png + at + 4, "IEND", 4) == 0) return at + 12;
+        if (chunk > length - at - 12) return length;
         at += 12 + chunk;
     }
     return length;
