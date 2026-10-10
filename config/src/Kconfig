@@ -28,6 +28,8 @@ config ZMK_PROFILE_REPORT
 	bool "Tell connected computers which Bluetooth profile is active"
 	default y
 	depends on ZMK_BLE
+	# To ask a device with no name, such as a phone, for its own.
+	select BT_GATT_CLIENT
 	help
 	  Switching profile leaves every Bluetooth link up, so a computer the
 	  keyboard has moved away from cannot tell: it stays connected and
@@ -35,4 +37,5 @@ config ZMK_PROFILE_REPORT
 	  computer of the active profile and of its own, so a helper such as
 	  the M0110 HUD can say where the keyboard went.  It also keeps the
 	  names the helpers give the profiles, so every computer shows the
-	  same ones.
+	  same ones, and names a profile no helper has named after its
+	  device's own Bluetooth name.

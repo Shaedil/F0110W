@@ -73,6 +73,7 @@ int k_mutex_unlock(struct k_mutex *mutex) {
 /* ---- Settings ---- */
 
 static struct name_slot flash[ZMK_BLE_PROFILE_COUNT];
+static uint8_t flash_from_device;
 static int flash_writes;
 /* Saves that fail before one goes through. */
 static int flash_failures;
@@ -85,6 +86,12 @@ int settings_save_one(const char *name, const void *value, size_t val_len) {
         return -EIO;
     }
 
+    if (strcmp(name, "m0110/pname/dev") == 0) {
+        CHECK(val_len == 1);
+        flash_from_device = *(const uint8_t *)value;
+        flash_writes++;
+        return 0;
+    }
     CHECK(sscanf(name, "m0110/pname/%d", &index) == 1);
     CHECK(index >= 0 && index < ZMK_BLE_PROFILE_COUNT);
     CHECK(val_len == sizeof(struct name_slot));
@@ -105,12 +112,29 @@ static ssize_t read_from(void *cb_arg, void *data, size_t len) {
     return (ssize_t)len;
 }
 
-/* Runs broadcast_work until it stops rescheduling itself or `until` passes. */
+/* The delayed work due soonest, by `until`. */
+static struct k_work_delayable *next_due(int64_t until) {
+    struct k_work_delayable *works[] = {&broadcast_work, &device_name_work};
+    struct k_work_delayable *soonest = NULL;
+
+    for (size_t i = 0; i < ARRAY_SIZE(works); i++) {
+        if (works[i]->scheduled && works[i]->due <= until &&
+            (!soonest || works[i]->due < soonest->due)) {
+            soonest = works[i];
+        }
+    }
+    return soonest;
+}
+
+/* Runs the delayed work, in the order it falls due, until none is left by
+ * `until`. */
 static void run_until(int64_t until) {
-    while (broadcast_work.scheduled && broadcast_work.due <= until) {
-        now = broadcast_work.due;
-        broadcast_work.scheduled = false;
-        broadcast_work.work.handler(&broadcast_work.work);
+    struct k_work_delayable *work;
+
+    while ((work = next_due(until))) {
+        now = work->due;
+        work->scheduled = false;
+        work->work.handler(&work->work);
     }
     now = until;
 }
@@ -122,6 +146,10 @@ static void run_until(int64_t until) {
 struct bt_conn {
     bt_addr_le_t addr;
     uint8_t role;
+    bt_security_t security;
+    /* Holds taken with bt_conn_ref and not yet given back. */
+    int refs;
+    bool gone;
     bool subscribed;
     /* Notifications this link refuses for want of a buffer before it takes one. */
     int busy;
@@ -141,9 +169,17 @@ static struct bt_conn *add_conn(uint8_t id, uint8_t role) {
     memset(conn, 0, sizeof(*conn));
     conn->addr.id = id;
     conn->role = role;
+    conn->security = BT_SECURITY_L2;
     conn->subscribed = true;
     return conn;
 }
+
+/* The read out to a device for its name, if any. */
+static struct bt_conn *read_conn;
+static struct bt_gatt_read_params *read_params;
+static int reads;
+/* What the next bt_gatt_read returns instead of sending. */
+static int read_err;
 
 static void reset(void) {
     memset(conns, 0, sizeof(conns));
@@ -157,8 +193,17 @@ static void reset(void) {
     unsaved = 0;
     save_work.pending = false;
     memset(flash, 0, sizeof(flash));
+    flash_from_device = 0;
     flash_writes = 0;
     flash_failures = 0;
+    from_device = 0;
+    asked = 0;
+    asking = NULL;
+    device_name_work.scheduled = false;
+    read_conn = NULL;
+    read_params = NULL;
+    reads = 0;
+    read_err = 0;
 }
 
 bt_addr_le_t *zmk_ble_profile_address(uint8_t index) {
@@ -190,8 +235,38 @@ int bt_conn_get_info(const struct bt_conn *conn, struct bt_conn_info *info) {
 void bt_conn_foreach(int type, void (*func)(struct bt_conn *conn, void *data), void *data) {
     (void)type;
     for (int i = 0; i < conn_count; i++) {
-        func(&conns[i], data);
+        if (!conns[i].gone) {
+            func(&conns[i], data);
+        }
     }
+}
+
+struct bt_conn *bt_conn_ref(struct bt_conn *conn) {
+    conn->refs++;
+    return conn;
+}
+
+void bt_conn_unref(struct bt_conn *conn) {
+    CHECK(conn->refs > 0);
+    conn->refs--;
+}
+
+bt_security_t bt_conn_get_security(const struct bt_conn *conn) { return conn->security; }
+
+int bt_gatt_read(struct bt_conn *conn, struct bt_gatt_read_params *params) {
+    CHECK(params->handle_count == 0 && params->by_uuid.uuid == BT_UUID_GAP_DEVICE_NAME);
+    CHECK(params->by_uuid.start_handle == 0x0001 && params->by_uuid.end_handle == 0xffff);
+    CHECK(conn->refs > 0);
+    if (read_err) {
+        int err = read_err;
+        read_err = 0;
+        return err;
+    }
+    CHECK(read_conn == NULL);
+    read_conn = conn;
+    read_params = params;
+    reads++;
+    return 0;
 }
 
 int bt_gatt_notify(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *data,
@@ -356,6 +431,9 @@ static ssize_t write_name(struct bt_conn *conn, uint8_t op, uint8_t index, const
     return NAMES_ATTR->write(conn, NAMES_ATTR, frame, (uint16_t)(2 + len), 0, 0);
 }
 
+/* The from_device byte from the last read_name. */
+static uint8_t read_from_device;
+
 /* Reads the names characteristic in pieces of `chunk`, as a host does when it
  * is longer than a packet, and returns profile `index`'s name. */
 static const char *read_name(struct bt_conn *conn, int index, uint16_t chunk) {
@@ -381,7 +459,8 @@ static const char *read_name(struct bt_conn *conn, int index, uint16_t chunk) {
         }
         p += len;
     }
-    CHECK(p == at);
+    CHECK(p + 1 == at);
+    read_from_device = value[p];
     return name;
 }
 
@@ -391,11 +470,12 @@ static void test_names_start_empty(void) {
     struct bt_conn *mac = add_conn(10, BT_CONN_ROLE_PERIPHERAL);
     uint8_t buf[32];
 
-    CHECK(NAMES_ATTR->read(mac, NAMES_ATTR, buf, sizeof(buf), 0) == 2 + ZMK_BLE_PROFILE_COUNT);
+    CHECK(NAMES_ATTR->read(mac, NAMES_ATTR, buf, sizeof(buf), 0) == 3 + ZMK_BLE_PROFILE_COUNT);
     CHECK(buf[0] == PNAME_FORMAT && buf[1] == ZMK_BLE_PROFILE_COUNT);
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
         CHECK(buf[2 + i] == 0);
     }
+    CHECK(buf[2 + ZMK_BLE_PROFILE_COUNT] == 0);
 }
 
 /* A name given on one computer is what every computer reads, each is told it
@@ -585,6 +665,283 @@ static void test_settings_load(void) {
     CHECK(strcmp(read_name(pc, 1, 64), "") == 0);
 }
 
+/* ---- Names read from the devices themselves ---- */
+
+/* A link comes up encrypted, as it does each time a bonded device connects. */
+static void secure(struct bt_conn *conn) {
+    conn->security = BT_SECURITY_L2;
+    profile_names_conn_cb.security_changed(conn, BT_SECURITY_L2, BT_SECURITY_ERR_SUCCESS);
+}
+
+static void drop(struct bt_conn *conn) {
+    conn->gone = true;
+    profile_names_conn_cb.disconnected(conn, 0x13);
+}
+
+/* The device answers the read out to it with `name`, or has none to give. */
+static void answer(const char *name, size_t len) {
+    struct bt_conn *conn = read_conn;
+    struct bt_gatt_read_params *params = read_params;
+
+    CHECK(conn != NULL);
+    if (!conn) {
+        return;
+    }
+    read_conn = NULL;
+    if (name) {
+        CHECK(params->func(conn, 0, params, name, (uint16_t)len) == BT_GATT_ITER_STOP);
+    } else {
+        params->func(conn, 0x0A, params, NULL, 0);
+    }
+}
+
+#define ANSWER(name) answer(name, strlen(name))
+
+/* A phone, which has no helper, is named after itself once it has been
+ * connected a while, and the name says where it came from. */
+static void test_phone_named_after_itself(void) {
+    reset();
+    bonded[0] = 10;
+    bonded[3] = 40;
+    struct bt_conn *mac = add_conn(10, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *phone = add_conn(40, BT_CONN_ROLE_PERIPHERAL);
+
+    /* The Mac's helper named it on connect. */
+    CHECK(write_name(mac, NAMES_OP_AUTO, 0, "MacBook Air M4") == 16);
+    run_until(0);
+    int told = mac->notified;
+
+    secure(phone);
+    run_until(DEVICE_NAME_DELAY_MS - 1);
+    CHECK(reads == 0);
+    run_until(DEVICE_NAME_DELAY_MS);
+    CHECK(reads == 1 && read_conn == phone);
+
+    ANSWER("Galaxy S9");
+    CHECK(strcmp(read_name(mac, 3, 64), "Galaxy S9") == 0);
+    CHECK(read_from_device == BIT(3));
+    CHECK(phone->refs == 0);
+
+    run_until(DEVICE_NAME_DELAY_MS + 1000);
+    CHECK(mac->notified == told + 1 && mac->last[2] == 2);
+    CHECK(reads == 1);
+
+    run_saves();
+    CHECK(flash[3].peer.id == 40 && flash[3].name.len == 9);
+    CHECK(flash_from_device == BIT(3));
+}
+
+/* A computer whose helper names it on connect is never asked. */
+static void test_helper_names_first(void) {
+    reset();
+    bonded[0] = 10;
+    struct bt_conn *mac = add_conn(10, BT_CONN_ROLE_PERIPHERAL);
+
+    secure(mac);
+    run_until(500);
+    CHECK(write_name(mac, NAMES_OP_AUTO, 0, "MacBook Air M4") == 16);
+    run_until(DEVICE_NAME_DELAY_MS + 5000);
+    CHECK(reads == 0);
+    CHECK(strcmp(read_name(mac, 0, 64), "MacBook Air M4") == 0);
+    CHECK(read_from_device == 0);
+}
+
+/* A computer named after itself before its helper ran is renamed by the
+ * helper, and the name is no longer marked as the device's. */
+static void test_helper_replaces_device_name(void) {
+    reset();
+    bonded[1] = 11;
+    struct bt_conn *pc = add_conn(11, BT_CONN_ROLE_PERIPHERAL);
+
+    secure(pc);
+    run_until(DEVICE_NAME_DELAY_MS);
+    ANSWER("DESKTOP-7F3K2");
+    CHECK(strcmp(read_name(pc, 1, 64), "DESKTOP-7F3K2") == 0);
+    CHECK(read_from_device == BIT(1));
+    run_saves();
+
+    CHECK(write_name(pc, NAMES_OP_AUTO, 1, "Windows 11 PC") == 15);
+    CHECK(strcmp(read_name(pc, 1, 64), "Windows 11 PC") == 0);
+    CHECK(read_from_device == 0);
+    run_saves();
+    CHECK(flash_from_device == 0 && flash[1].name.len == 13);
+
+    /* And it stays the helper's: a second AUTO changes nothing. */
+    CHECK(write_name(pc, NAMES_OP_AUTO, 1, "Something Else") == 16);
+    CHECK(strcmp(read_name(pc, 1, 64), "Windows 11 PC") == 0);
+}
+
+/* A name given by hand beats the device's, even one that reads the same. */
+static void test_hand_name_beats_device(void) {
+    reset();
+    bonded[0] = 10;
+    bonded[3] = 40;
+    struct bt_conn *mac = add_conn(10, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *phone = add_conn(40, BT_CONN_ROLE_PERIPHERAL);
+
+    CHECK(write_name(mac, NAMES_OP_SET, 0, "Desk") == 6);
+    secure(phone);
+    run_until(DEVICE_NAME_DELAY_MS);
+    CHECK(read_conn == phone);
+    ANSWER("Galaxy S9");
+    CHECK(strcmp(read_name(mac, 3, 64), "Galaxy S9") == 0);
+    CHECK(read_from_device == BIT(3));
+
+    CHECK(write_name(mac, NAMES_OP_SET, 3, "Galaxy S9") == 11);
+    CHECK(strcmp(read_name(mac, 3, 64), "Galaxy S9") == 0);
+    CHECK(read_from_device == 0);
+    CHECK(write_name(phone, NAMES_OP_AUTO, 3, "Phone") == 7);
+    CHECK(strcmp(read_name(mac, 3, 64), "Galaxy S9") == 0);
+}
+
+/* Two of the same phone are numbered as two of the same computer are. */
+static void test_device_twins(void) {
+    reset();
+    bonded[2] = 30;
+    bonded[3] = 40;
+    struct bt_conn *a = add_conn(30, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *b = add_conn(40, BT_CONN_ROLE_PERIPHERAL);
+
+    secure(a);
+    secure(b);
+    run_until(DEVICE_NAME_DELAY_MS);
+    CHECK(reads == 1);
+    ANSWER("Galaxy S9");
+    run_until(DEVICE_NAME_DELAY_MS);
+    CHECK(reads == 2);
+    ANSWER("Galaxy S9");
+    CHECK(strcmp(read_name(a, 2, 64), "Galaxy S9 1") == 0);
+    CHECK(strcmp(read_name(a, 3, 64), "Galaxy S9 2") == 0);
+    CHECK(read_from_device == (BIT(2) | BIT(3)));
+    CHECK(a->refs == 0 && b->refs == 0);
+}
+
+/* Only an encrypted link to a bonded device, typing to a profile with no
+ * name, and only from the keyboard's side of it. */
+static void test_who_is_asked(void) {
+    reset();
+    bonded[0] = 10;
+    bonded[1] = 11;
+    struct bt_conn *named = add_conn(10, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *plain = add_conn(11, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *stranger = add_conn(99, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *central = add_conn(12, BT_CONN_ROLE_CENTRAL);
+
+    bonded[2] = 12;
+    CHECK(write_name(named, NAMES_OP_SET, 0, "Desk") == 6);
+    plain->security = BT_SECURITY_L1;
+    secure(named);
+    secure(stranger);
+    secure(central);
+    profile_names_conn_cb.security_changed(plain, BT_SECURITY_L1, BT_SECURITY_ERR_SUCCESS);
+    profile_names_conn_cb.security_changed(plain, BT_SECURITY_L2, BT_SECURITY_ERR_AUTH_FAIL);
+    run_until(DEVICE_NAME_DELAY_MS * 3);
+    CHECK(reads == 0);
+}
+
+/* A device with no name to give, or a read that fails, is not asked again
+ * until it reconnects. */
+static void test_no_name_asked_once_per_connection(void) {
+    reset();
+    bonded[3] = 40;
+    struct bt_conn *phone = add_conn(40, BT_CONN_ROLE_PERIPHERAL);
+
+    secure(phone);
+    run_until(DEVICE_NAME_DELAY_MS);
+    answer(NULL, 0);
+    secure(phone);
+    run_until(DEVICE_NAME_DELAY_MS * 3);
+    CHECK(reads == 1);
+
+    /* Nothing printable is no name either. */
+    drop(phone);
+    phone->gone = false;
+    secure(phone);
+    run_until(now + DEVICE_NAME_DELAY_MS);
+    CHECK(reads == 2);
+    answer("\0\0  ", 4);
+    CHECK(strcmp(read_name(phone, 3, 64), "") == 0);
+    CHECK(phone->refs == 0);
+}
+
+/* A link that goes while its read is out lets go of it, and the next device
+ * is asked. */
+static void test_drop_during_read(void) {
+    reset();
+    bonded[2] = 30;
+    bonded[3] = 40;
+    struct bt_conn *a = add_conn(30, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *b = add_conn(40, BT_CONN_ROLE_PERIPHERAL);
+
+    secure(a);
+    secure(b);
+    run_until(DEVICE_NAME_DELAY_MS);
+    CHECK(read_conn == a);
+    struct bt_gatt_read_params *late = read_params;
+    read_conn = NULL;
+    drop(a);
+    CHECK(a->refs == 0);
+    run_until(now);
+    CHECK(read_conn == b);
+
+    /* The dropped link's read failing afterwards changes nothing. */
+    late->func(a, 0x0E, late, NULL, 0);
+    CHECK(a->refs == 0 && b->refs == 1 && read_conn == b);
+    ANSWER("Pixel 8");
+    CHECK(strcmp(read_name(b, 3, 64), "Pixel 8") == 0);
+    CHECK(strcmp(read_name(b, 2, 64), "") == 0);
+}
+
+/* No buffer for the read: tried again shortly. No answer at all: given up
+ * on, and the next device asked. */
+static void test_busy_and_silent(void) {
+    reset();
+    bonded[2] = 30;
+    bonded[3] = 40;
+    struct bt_conn *a = add_conn(30, BT_CONN_ROLE_PERIPHERAL);
+    struct bt_conn *b = add_conn(40, BT_CONN_ROLE_PERIPHERAL);
+
+    read_err = -ENOMEM;
+    secure(a);
+    run_until(DEVICE_NAME_DELAY_MS);
+    CHECK(reads == 0 && a->refs == 0);
+    run_until(DEVICE_NAME_DELAY_MS + DEVICE_NAME_BUSY_RETRY_MS);
+    CHECK(reads == 1 && read_conn == a);
+
+    /* a never answers. */
+    read_conn = NULL;
+    secure(b);
+    run_until(now + DEVICE_NAME_STALE_MS);
+    CHECK(a->refs == 0);
+    run_until(now + DEVICE_NAME_DELAY_MS);
+    CHECK(reads == 2 && read_conn == b);
+    ANSWER("Pixel 8");
+    CHECK(b->refs == 0);
+}
+
+/* Which names came from devices is kept across a restart. */
+static void test_from_device_saved(void) {
+    reset();
+    bonded[3] = 40;
+    struct bt_conn *phone = add_conn(40, BT_CONN_ROLE_PERIPHERAL);
+    uint8_t flags = BIT(3) | BIT(7);
+    struct name_slot saved = {.peer = {.id = 40}, .name = {.len = 4, .text = "S9 1"}};
+
+    CHECK(fake_settings_m0110_pname.set("dev", 1, read_from, &flags) == 0);
+    CHECK(fake_settings_m0110_pname.set("dev", 2, read_from, &flags) == -EINVAL);
+    CHECK(fake_settings_m0110_pname.set("3", sizeof(saved), read_from, &saved) == 0);
+    CHECK(strcmp(read_name(phone, 3, 64), "S9 1") == 0);
+    CHECK(read_from_device == BIT(3));
+
+    /* A new device on the profile takes the mark away with the name. */
+    bonded[3] = 41;
+    raise_switch(3);
+    CHECK(strcmp(read_name(phone, 3, 64), "") == 0);
+    CHECK(read_from_device == 0);
+    run_saves();
+    CHECK(flash_from_device == 0);
+}
+
 /* ---- The naming rules on their own ---- */
 
 static struct pname named(const char *text) {
@@ -635,6 +992,33 @@ static void test_numbering(void) {
     CHECK(auto_name(names, 5, "x") == -EINVAL);
 }
 
+static bool cleans_to(const char *in, size_t len, const char *want) {
+    uint8_t out[PNAME_AUTO_MAX];
+    size_t n = pname_clean((const uint8_t *)in, len, out);
+    return n == strlen(want) && memcmp(out, want, n) == 0;
+}
+
+#define CLEANS_TO(in, want) cleans_to(in, sizeof(in) - 1, want)
+
+static void test_clean(void) {
+    CHECK(CLEANS_TO("Galaxy S9", "Galaxy S9"));
+    /* A trailing NUL, as some devices send, and other control characters. */
+    CHECK(CLEANS_TO("Galaxy S9\0", "Galaxy S9"));
+    CHECK(CLEANS_TO("  Sam\tsung\n ", "Samsung"));
+    CHECK(CLEANS_TO("", ""));
+    CHECK(CLEANS_TO(" \x01 ", ""));
+    /* Cut at the limit, then any space it leaves trimmed. */
+    CHECK(CLEANS_TO("123456789012345678901234567890", "123456789012345678901"));
+    CHECK(CLEANS_TO("12345678901234567890 abc", "12345678901234567890"));
+    /* Never through a character: "é" is two bytes and would straddle 21. */
+    CHECK(CLEANS_TO("12345678901234567890\xc3\xa9", "12345678901234567890"));
+    CHECK(CLEANS_TO("1234567890123456789\xc3\xa9x", "1234567890123456789\xc3\xa9"));
+    /* A device that cut its own name mid-character loses the half. */
+    CHECK(CLEANS_TO("Caf\xc3", "Caf"));
+    CHECK(CLEANS_TO("\xf0\x9f\x93", ""));
+    CHECK(CLEANS_TO("\xf0\x9f\x93\xb1 Phone", "\xf0\x9f\x93\xb1 Phone"));
+}
+
 int main(void) {
     test_layout();
     test_read();
@@ -652,7 +1036,18 @@ int main(void) {
     test_bad_writes();
     test_settings_load();
     test_failed_save_retried();
+    test_phone_named_after_itself();
+    test_helper_names_first();
+    test_helper_replaces_device_name();
+    test_hand_name_beats_device();
+    test_device_twins();
+    test_who_is_asked();
+    test_no_name_asked_once_per_connection();
+    test_drop_during_read();
+    test_busy_and_silent();
+    test_from_device_saved();
     test_numbering();
+    test_clean();
 
     if (failures) {
         printf("profile_report: %d failure(s)\n", failures);

@@ -29,7 +29,14 @@
  *
  *   SET  op:u8=1 index:u8 name...  names a profile; an empty name clears it
  *   AUTO op:u8=2 index:u8 name...  names a profile only if it has no name,
- *                                  numbering any others that share it
+ *                                  or only the one the keyboard read from its
+ *                                  device, numbering any others that share it
+ *
+ * A device with no name some while after it connects, such as a phone with
+ * no helper on it, is asked for its own: the GAP Device Name every Bluetooth
+ * device keeps. That fills the name in as AUTO would, flagged as read from the
+ * device, so a computer's helper still names itself over it and a name given
+ * by hand beats both.
  *
  * A name belongs to the computer bonded to its profile when it was given, so
  * one that pairs there later, after the profile was cleared, starts without
@@ -40,6 +47,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <zephyr/bluetooth/att.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -73,6 +81,18 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define RETRY_MS 100
 #define RETRY_LIMIT 20
 
+/* How long after a device's link is encrypted before its name is asked for:
+ * time for a computer's helper to name itself first, as it does on connect. */
+#define DEVICE_NAME_DELAY_MS 10000
+/* A read that has had no answer by now is given up on. ATT's own timeout is
+ * 30 s and drops the link, which also ends it; this covers a reply Zephyr
+ * drops without telling anyone. */
+#define DEVICE_NAME_STALE_MS 35000
+#define DEVICE_NAME_BUSY_RETRY_MS 1000
+
+/* `unsaved` bit for `from_device`, past any profile's. */
+#define UNSAVED_FROM_DEVICE BIT(31)
+
 /* What is saved per profile. Every field is bytes, so there is no padding,
  * and all zeroes is BT_ADDR_LE_ANY with no name. */
 struct name_slot {
@@ -83,6 +103,8 @@ struct name_slot {
 };
 
 static struct name_slot slots[ZMK_BLE_PROFILE_COUNT];
+/* A bit per profile whose name was read from its device rather than given. */
+static uint8_t from_device;
 static uint8_t names_generation;
 /* Profiles whose slot has changed since it was last saved. */
 static uint32_t unsaved;
@@ -121,6 +143,10 @@ static bool reconcile(void) {
         LOG_DBG("profile %d has a new computer; dropping its name", i);
         memset(slot, 0, sizeof(*slot));
         unsaved |= BIT(i);
+        if (from_device & BIT(i)) {
+            from_device &= ~BIT(i);
+            unsaved |= UNSAVED_FROM_DEVICE;
+        }
         changed = true;
     }
 
@@ -164,13 +190,15 @@ static ssize_t names_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
         names[i] = slots[i].name;
     }
+    uint8_t read_from_device = from_device;
     k_mutex_unlock(&names_lock);
 
     if (unsaved) {
         k_work_submit(&save_work);
     }
 
-    size_t value_len = pname_encode(names, ZMK_BLE_PROFILE_COUNT, value, sizeof(value));
+    size_t value_len =
+        pname_encode(names, ZMK_BLE_PROFILE_COUNT, read_from_device, value, sizeof(value));
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value, value_len);
 }
 
@@ -218,11 +246,21 @@ static ssize_t names_write(struct bt_conn *conn, const struct bt_gatt_attr *attr
                             text_len > 0 ? zmk_ble_profile_address(index) : BT_ADDR_LE_ANY);
             result = BIT(index);
         }
+        /* Given by hand now, even if it reads the same as the device's. */
+        if (from_device & BIT(index)) {
+            from_device &= ~BIT(index);
+            unsaved |= UNSAVED_FROM_DEVICE;
+            changed = true;
+        }
     } else if (op == NAMES_OP_AUTO) {
         struct pname names[ZMK_BLE_PROFILE_COUNT];
 
         for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
             names[i] = slots[i].name;
+        }
+        /* The device's own name is only a stand-in until its helper names it. */
+        if (from_device & BIT(index)) {
+            names[index].len = 0;
         }
         result = pname_auto(names, ZMK_BLE_PROFILE_COUNT, index, text, text_len);
         for (int i = 0; result > 0 && i < ZMK_BLE_PROFILE_COUNT; i++) {
@@ -232,6 +270,10 @@ static ssize_t names_write(struct bt_conn *conn, const struct bt_gatt_attr *attr
         }
         if (result & BIT(index)) {
             bt_addr_le_copy(&slots[index].peer, zmk_ble_profile_address(index));
+            if (from_device & BIT(index)) {
+                from_device &= ~BIT(index);
+                unsaved |= UNSAVED_FROM_DEVICE;
+            }
         }
     } else {
         result = -ENOTSUP;
@@ -290,6 +332,19 @@ static void save(struct k_work *work) {
     k_mutex_unlock(&names_lock);
 
 #if IS_ENABLED(CONFIG_SETTINGS)
+    if (pending & UNSAVED_FROM_DEVICE) {
+        k_mutex_lock(&names_lock, K_FOREVER);
+        uint8_t flags = from_device;
+        k_mutex_unlock(&names_lock);
+
+        int err = settings_save_one("m0110/pname/dev", &flags, sizeof(flags));
+        if (err) {
+            LOG_ERR("could not save which names came from devices: %d", err);
+            k_mutex_lock(&names_lock, K_FOREVER);
+            unsaved |= UNSAVED_FROM_DEVICE;
+            k_mutex_unlock(&names_lock);
+        }
+    }
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
         if (pending & BIT(i)) {
             char key[24];
@@ -317,6 +372,17 @@ static int names_settings_set(const char *key, size_t len, settings_read_cb read
                               void *cb_arg) {
     struct name_slot slot;
 
+    if (strcmp(key, "dev") == 0) {
+        uint8_t flags;
+
+        if (len != sizeof(flags) || read_cb(cb_arg, &flags, sizeof(flags)) != sizeof(flags)) {
+            return -EINVAL;
+        }
+        k_mutex_lock(&names_lock, K_FOREVER);
+        from_device = flags & (uint8_t)(BIT(ZMK_BLE_PROFILE_COUNT) - 1);
+        k_mutex_unlock(&names_lock);
+        return 0;
+    }
     if (key[0] < '0' || key[0] >= '0' + ZMK_BLE_PROFILE_COUNT || key[1] != '\0') {
         return -ENOENT;
     }
@@ -375,6 +441,206 @@ static void broadcast(struct k_work *work) {
         k_work_reschedule(&broadcast_work, K_MSEC(RETRY_MS));
     }
 }
+
+/* ---- Asking a device for its own name ---- */
+
+static void ask_next(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(device_name_work, ask_next);
+static struct bt_gatt_read_params device_name_params;
+/* The link a read is out on, held until it answers, and profiles whose device
+ * has been asked since it connected. Both under `names_lock`: the read is
+ * started from the work queue and ends on the Bluetooth thread. */
+static struct bt_conn *asking;
+static int64_t asking_since;
+static uint32_t asked;
+
+/* Names profile `index` after its device, as AUTO would, if it still has no
+ * name. */
+static void take_device_name(int index, const uint8_t *base, size_t len) {
+    struct pname names[ZMK_BLE_PROFILE_COUNT];
+
+    k_mutex_lock(&names_lock, K_FOREVER);
+    bool changed = reconcile();
+
+    for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+        names[i] = slots[i].name;
+    }
+    int result = pname_auto(names, ZMK_BLE_PROFILE_COUNT, index, base, len);
+    if (result > 0) {
+        for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+            if (result & BIT(i)) {
+                slots[i].name = names[i];
+            }
+        }
+        bt_addr_le_copy(&slots[index].peer, zmk_ble_profile_address(index));
+        from_device |= BIT(index);
+        unsaved |= (uint32_t)result | UNSAVED_FROM_DEVICE;
+        changed = true;
+        LOG_DBG("profile %d named after its device", index);
+    }
+    if (changed) {
+        names_changed();
+    }
+    k_mutex_unlock(&names_lock);
+
+    if (unsaved) {
+        k_work_submit(&save_work);
+    }
+}
+
+/* Ends the read out on `conn`, or whichever is out if NULL, and moves on to
+ * the next device. Whoever ends it drops the hold on the link, so it is
+ * dropped once however the read ends: answered, failed, or the link gone. */
+static void end_asking(struct bt_conn *conn) {
+    struct bt_conn *held = NULL;
+
+    k_mutex_lock(&names_lock, K_FOREVER);
+    if (asking && (!conn || asking == conn)) {
+        held = asking;
+        asking = NULL;
+    }
+    k_mutex_unlock(&names_lock);
+
+    if (held) {
+        bt_conn_unref(held);
+        k_work_reschedule(&device_name_work, K_NO_WAIT);
+    }
+}
+
+/* Called with the first value found, or with none when the device has no
+ * name to give or the read failed. */
+static uint8_t device_name_read(struct bt_conn *conn, uint8_t err,
+                                struct bt_gatt_read_params *params, const void *data,
+                                uint16_t length) {
+    ARG_UNUSED(params);
+
+    if (!err && data && length > 0) {
+        int index = zmk_ble_profile_index(bt_conn_get_dst(conn));
+        uint8_t base[PNAME_AUTO_MAX];
+        size_t base_len = pname_clean(data, length, base);
+
+        if (index >= 0 && base_len > 0) {
+            take_device_name(index, base, base_len);
+        }
+    }
+    end_asking(conn);
+    return BT_GATT_ITER_STOP;
+}
+
+/* Finds a device to ask: one that types to a profile with no name, whose link
+ * is encrypted, and that has not been asked since it connected. */
+static void find_unnamed(struct bt_conn *conn, void *data) {
+    struct bt_conn **found = data;
+    struct bt_conn_info info;
+
+    if (*found || bt_conn_get_info(conn, &info) != 0 || info.role != BT_CONN_ROLE_PERIPHERAL ||
+        bt_conn_get_security(conn) < BT_SECURITY_L2) {
+        return;
+    }
+
+    int index = zmk_ble_profile_index(bt_conn_get_dst(conn));
+    if (index < 0) {
+        return;
+    }
+
+    k_mutex_lock(&names_lock, K_FOREVER);
+    bool wanted = !(asked & BIT(index)) && slots[index].name.len == 0;
+    k_mutex_unlock(&names_lock);
+    if (wanted) {
+        *found = conn;
+    }
+}
+
+static void ask_next(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    k_mutex_lock(&names_lock, K_FOREVER);
+    bool busy = asking != NULL;
+    int64_t waited = busy ? k_uptime_get() - asking_since : 0;
+    if (!busy && reconcile()) {
+        names_changed();
+    }
+    k_mutex_unlock(&names_lock);
+
+    if (busy && waited >= DEVICE_NAME_STALE_MS) {
+        LOG_WRN("no answer to the device name read; giving up on it");
+        end_asking(NULL);
+        return;
+    }
+    if (busy) {
+        /* Its answer moves on to the next device; this is in case none comes. */
+        k_work_reschedule(&device_name_work, K_MSEC(DEVICE_NAME_STALE_MS - waited));
+        return;
+    }
+    if (unsaved) {
+        k_work_submit(&save_work);
+    }
+
+    struct bt_conn *conn = NULL;
+    bt_conn_foreach(BT_CONN_TYPE_LE, find_unnamed, &conn);
+    if (!conn) {
+        return;
+    }
+
+    int index = zmk_ble_profile_index(bt_conn_get_dst(conn));
+    device_name_params = (struct bt_gatt_read_params){
+        .func = device_name_read,
+        .handle_count = 0,
+        .by_uuid =
+            {
+                .start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE,
+                .end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE,
+                .uuid = BT_UUID_GAP_DEVICE_NAME,
+            },
+    };
+    k_mutex_lock(&names_lock, K_FOREVER);
+    asked |= BIT(index);
+    asking = bt_conn_ref(conn);
+    asking_since = k_uptime_get();
+    k_mutex_unlock(&names_lock);
+
+    int err = bt_gatt_read(conn, &device_name_params);
+    if (err) {
+        LOG_DBG("could not ask profile %d's device for its name: %d", index, err);
+        if (is_backpressure(err) || err == -EBUSY) {
+            /* Asked again once there is room. */
+            k_mutex_lock(&names_lock, K_FOREVER);
+            asked &= ~BIT(index);
+            k_mutex_unlock(&names_lock);
+            end_asking(conn);
+            k_work_reschedule(&device_name_work, K_MSEC(DEVICE_NAME_BUSY_RETRY_MS));
+        } else {
+            end_asking(conn);
+        }
+    }
+}
+
+static void name_security_changed(struct bt_conn *conn, bt_security_t level,
+                                  enum bt_security_err err) {
+    ARG_UNUSED(conn);
+    if (err == BT_SECURITY_ERR_SUCCESS && level >= BT_SECURITY_L2) {
+        k_work_reschedule(&device_name_work, K_MSEC(DEVICE_NAME_DELAY_MS));
+    }
+}
+
+static void name_disconnected(struct bt_conn *conn, uint8_t reason) {
+    ARG_UNUSED(reason);
+    int index = zmk_ble_profile_index(bt_conn_get_dst(conn));
+
+    if (index >= 0) {
+        k_mutex_lock(&names_lock, K_FOREVER);
+        asked &= ~BIT(index);
+        k_mutex_unlock(&names_lock);
+    }
+    /* The read is answered with an error as the link goes, but not always
+     * before this. */
+    end_asking(conn);
+}
+
+BT_CONN_CB_DEFINE(profile_names_conn_cb) = {
+    .security_changed = name_security_changed,
+    .disconnected = name_disconnected,
+};
 
 /* Sent from the work queue rather than here: the event can be raised from
  * inside a key press, and a notification may have to wait for a buffer. The

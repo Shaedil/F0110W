@@ -44,11 +44,22 @@ bool pname_valid(const uint8_t *text, size_t len);
 int pname_auto(struct pname *names, int count, int index, const uint8_t *base, size_t len);
 
 /*
- * The names as the characteristic carries them: format:u8 count:u8, then per
- * profile len:u8 and the bytes. Returns the length written, 0 if `cap` is too
- * small.
+ * A name a device gave for itself, made fit to offer to pname_auto: control
+ * characters dropped, spaces trimmed from both ends, and cut to at most
+ * PNAME_AUTO_MAX bytes without splitting a UTF-8 character, including one the
+ * device's own value already cut short. Returns the length written to `out`,
+ * 0 if nothing is left.
  */
-size_t pname_encode(const struct pname *names, int count, uint8_t *out, size_t cap);
+size_t pname_clean(const uint8_t *in, size_t len, uint8_t out[PNAME_AUTO_MAX]);
+
+/*
+ * The names as the characteristic carries them: format:u8 count:u8, then per
+ * profile len:u8 and the bytes, then from_device:u8, a bit per profile whose
+ * name the keyboard read from the device itself. Returns the length written,
+ * 0 if `cap` is too small.
+ */
+size_t pname_encode(const struct pname *names, int count, uint8_t from_device, uint8_t *out,
+                    size_t cap);
 
 #define PNAME_FORMAT 1
-#define PNAME_ENCODED_MAX(count) (2 + (count) * (1 + PNAME_MAX))
+#define PNAME_ENCODED_MAX(count) (3 + (count) * (1 + PNAME_MAX))

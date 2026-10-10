@@ -107,8 +107,53 @@ int pname_auto(struct pname *names, int count, int index, const uint8_t *base, s
     return changed | 1 << index;
 }
 
-size_t pname_encode(const struct pname *names, int count, uint8_t *out, size_t cap) {
-    size_t need = 2;
+/* The bytes a UTF-8 character starting with `lead` takes, or 1 for a byte
+ * that cannot start one, so a stray byte is kept rather than lost. */
+static size_t utf8_width(uint8_t lead) {
+    if (lead >= 0xF0 && lead <= 0xF4) {
+        return 4;
+    }
+    if (lead >= 0xE0) {
+        return lead <= 0xEF ? 3 : 1;
+    }
+    return lead >= 0xC2 && lead <= 0xDF ? 2 : 1;
+}
+
+size_t pname_clean(const uint8_t *in, size_t len, uint8_t out[PNAME_AUTO_MAX]) {
+    uint8_t kept[PNAME_AUTO_MAX + 4];
+    size_t n = 0;
+
+    /* Printable bytes, leading spaces skipped, up to a character past the
+     * limit so the cut below can see whether one straddles it. */
+    for (size_t i = 0; i < len && n < sizeof(kept); i++) {
+        if (in[i] < 0x20 || in[i] == 0x7F || (n == 0 && in[i] == ' ')) {
+            continue;
+        }
+        kept[n++] = in[i];
+    }
+
+    /* Back off to the start of the last character that does not fit, or that
+     * the device's value ended in the middle of. */
+    size_t end = 0;
+    for (size_t at = 0; at < n;) {
+        size_t width = (kept[at] & 0xC0) == 0x80 ? 1 : utf8_width(kept[at]);
+        if (at + width > n || at + width > PNAME_AUTO_MAX) {
+            break;
+        }
+        at += width;
+        end = at;
+    }
+    while (end > 0 && kept[end - 1] == ' ') {
+        end--;
+    }
+
+    memcpy(out, kept, end);
+    return end;
+}
+
+size_t pname_encode(const struct pname *names, int count, uint8_t from_device, uint8_t *out,
+                    size_t cap) {
+    size_t need = 3;
     for (int i = 0; i < count; i++) {
         need += 1 + names[i].len;
     }
@@ -124,5 +169,6 @@ size_t pname_encode(const struct pname *names, int count, uint8_t *out, size_t c
         memcpy(&out[at], names[i].text, names[i].len);
         at += names[i].len;
     }
+    out[at++] = from_device;
     return at;
 }

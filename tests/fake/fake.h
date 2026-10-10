@@ -132,13 +132,54 @@ struct bt_gatt_service_static {
     size_t attr_count;
 };
 
+typedef int bt_security_t;
+#define BT_SECURITY_L1 1
+#define BT_SECURITY_L2 2
+
+enum bt_security_err {
+    BT_SECURITY_ERR_SUCCESS = 0,
+    BT_SECURITY_ERR_AUTH_FAIL = 1,
+};
+
 struct bt_conn_cb {
     void (*disconnected)(struct bt_conn *conn, uint8_t reason);
+    void (*security_changed)(struct bt_conn *conn, bt_security_t level,
+                             enum bt_security_err err);
 };
 
 #define BT_ID_DEFAULT 0
 #define BT_UUID_128_ENCODE(...) 0
 #define BT_UUID_DECLARE_128(...) NULL
+
+struct bt_uuid {
+    uint16_t val;
+};
+
+static inline const struct bt_uuid *fake_uuid_gap_device_name(void) {
+    static const struct bt_uuid uuid = {0x2A00};
+    return &uuid;
+}
+#define BT_UUID_GAP_DEVICE_NAME fake_uuid_gap_device_name()
+
+#define BT_ATT_FIRST_ATTRIBUTE_HANDLE 0x0001
+#define BT_ATT_LAST_ATTRIBUTE_HANDLE 0xffff
+#define BT_GATT_ITER_STOP 0
+#define BT_GATT_ITER_CONTINUE 1
+
+struct bt_gatt_read_params;
+typedef uint8_t (*bt_gatt_read_func_t)(struct bt_conn *conn, uint8_t err,
+                                       struct bt_gatt_read_params *params, const void *data,
+                                       uint16_t length);
+
+struct bt_gatt_read_params {
+    bt_gatt_read_func_t func;
+    size_t handle_count;
+    struct {
+        uint16_t start_handle;
+        uint16_t end_handle;
+        const struct bt_uuid *uuid;
+    } by_uuid;
+};
 
 #define BT_GATT_CHRC_READ 0x02
 #define BT_GATT_CHRC_WRITE 0x08
@@ -186,6 +227,9 @@ struct bt_conn_info {
 int bt_conn_get_info(const struct bt_conn *conn, struct bt_conn_info *info);
 struct bt_conn *bt_conn_lookup_addr_le(uint8_t id, const bt_addr_le_t *peer);
 void bt_conn_unref(struct bt_conn *conn);
+struct bt_conn *bt_conn_ref(struct bt_conn *conn);
+bt_security_t bt_conn_get_security(const struct bt_conn *conn);
+int bt_gatt_read(struct bt_conn *conn, struct bt_gatt_read_params *params);
 const bt_addr_le_t *bt_conn_get_dst(const struct bt_conn *conn);
 uint16_t bt_gatt_get_mtu(struct bt_conn *conn);
 int bt_gatt_notify(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *data,
