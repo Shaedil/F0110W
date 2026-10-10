@@ -49,15 +49,21 @@ enum StudioProbe {
 
         do {
             let keymap = try client.keymap()
+            let behaviors = verbose ? (try? client.behaviorTable()) ?? [:] : [:]
             print("\nkeymap (\(keymap.layers.count) layers, \(keymap.availableLayers) available):")
             for layer in keymap.layers {
                 let name = layer.name.isEmpty ? "(unnamed)" : layer.name
                 print("  id \(layer.id): \(name) (\(layer.bindings.count) bindings)")
-                if verbose {
-                    let sample = layer.bindings.prefix(8)
-                        .map { "\($0.behaviorID)/\($0.param1)" }
-                        .joined(separator: " ")
-                    print("       first bindings: \(sample)")
+                guard verbose else { continue }
+                // Every binding as position=behavior(keycode), skipping &trans.
+                let shown = layer.bindings.enumerated().compactMap { position, binding -> String? in
+                    let behavior = behaviors[binding.behaviorID]?.displayName ?? "#\(binding.behaviorID)"
+                    if behavior.lowercased() == "transparent" { return nil }
+                    let key = binding.param1 == 0 ? "" : "(\(HIDKeycodes.name(for: binding.param1)))"
+                    return "\(position)=\(behavior)\(key)"
+                }
+                for line in stride(from: 0, to: shown.count, by: 6) {
+                    print("       " + shown[line..<min(line + 6, shown.count)].joined(separator: "  "))
                 }
             }
         } catch {
