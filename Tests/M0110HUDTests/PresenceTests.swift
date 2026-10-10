@@ -19,8 +19,7 @@ final class PresenceTests: XCTestCase {
         XCTAssertTrue(p.isPresent)
     }
 
-    /// The case the old poll missed: a drop caught only by the app's own link,
-    /// then still gone when the grace period ends.
+    /// A drop seen only on the app's own link, still gone when the grace period ends.
     func testLinkDropThatLastsIsAnnounced() {
         var p = present()
         XCTAssertEqual(p.linkDropped(at: at(10)), .leaving(until: at(13)))
@@ -29,8 +28,7 @@ final class PresenceTests: XCTestCase {
         XCTAssertFalse(p.isPresent)
     }
 
-    /// Today's 0.7 s blips: gone and back inside the grace period says nothing,
-    /// in either direction.
+    /// A short drop (about 0.7 s) that comes back within the grace period is not announced.
     func testBlipIsNotAnnounced() {
         var p = present()
         XCTAssertEqual(p.linkDropped(at: at(10)), .leaving(until: at(13)))
@@ -40,8 +38,7 @@ final class PresenceTests: XCTestCase {
         XCTAssertNil(p.observe(present: true, at: at(15)))
     }
 
-    /// A poll inside the grace period that finds it missing does not decide
-    /// early, and one that finds it back does not cancel: only the end counts.
+    /// Polls during the grace period decide nothing. Only the end of the period counts.
     func testPollsInsideGraceDoNotDecide() {
         var p = present()
         XCTAssertEqual(p.observe(present: false, at: at(10)), .leaving(until: at(13)))
@@ -50,7 +47,6 @@ final class PresenceTests: XCTestCase {
         XCTAssertEqual(p.observe(present: false, at: at(13.05)), .left)
     }
 
-    /// A second signal during a grace period does not push its end back.
     func testSecondSignalDoesNotRestartGrace() {
         var p = present()
         XCTAssertEqual(p.observe(present: false, at: at(10)), .leaving(until: at(13)))
@@ -102,8 +98,7 @@ final class ProfileReportTests: XCTestCase {
         XCTAssertNil(BluetoothMonitor.parseProfileState(Data([1])))
     }
 
-    /// Must match PROFILE_UUID in config/src/profile_report.c on the firmware
-    /// branch.
+    /// Must match PROFILE_UUID in config/src/profile_report.c in the firmware.
     func testUUIDsMatchTheFirmware() {
         XCTAssertEqual(BluetoothMonitor.profileService.uuidString,
                        "05B3A8EB-1160-4B0F-B56D-700006AAEFEB")
@@ -115,7 +110,6 @@ final class ProfileReportTests: XCTestCase {
 final class DisconnectHoldTests: XCTestCase {
     private let dust = HUDStyle.defaults[.disconnected]!
 
-    /// A disconnect stays up as long as a connect does.
     func testDisconnectHoldsForTheConfiguredTime() {
         XCTAssertEqual(HUDController.hold(for: dust, configured: 7), 7)
         XCTAssertEqual(HUDController.hold(for: HUDStyle.defaults[.connected]!, configured: 7), 7)
@@ -125,8 +119,7 @@ final class DisconnectHoldTests: XCTestCase {
         XCTAssertEqual(HUDController.hold(for: dust, configured: 1), SpinningBoardView.dustEnds)
     }
 
-    /// The crumble ends with the hold, so the fade and the last of the dust
-    /// still finish together.
+    /// The crumble ends with the hold, so the fade and the dust finish together.
     func testCrumbleEndsWithTheHold() {
         let hold = HUDController.hold(for: dust, configured: 7)
         XCTAssertEqual(SpinningBoardView.dustBeat(hold: hold) + SpinningBoardView.dustDuration,

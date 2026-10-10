@@ -1,7 +1,6 @@
-// Small builders for the Mac theme's controls: Panel, PillButtonStyle,
-// SegmentPills, ThemeSwitch, ThemeSlider and ThemeStepper.
+// Copies of the Mac theme's controls.
 
-/** An element: `h('div.panel', {onclick}, child, 'text', ...)`. */
+/** Usage: `h('div.panel', {onclick}, child, 'text', ...)`. */
 export function h(tag, props = {}, ...children) {
   const [name, ...classes] = tag.split('.');
   const node = document.createElement(name || 'div');
@@ -44,8 +43,6 @@ export function toggle(on, onchange, { disabled = false } = {}) {
   });
 }
 
-/** A ThemeSlider: snaps to `step`, reports while dragging through `oninput`
- *  and once let go through `onchange`. */
 export function slider(value, { min, max, step }, oninput, onchange) {
   const fill = h('div.fill');
   const knob = h('div.knob');
@@ -53,7 +50,7 @@ export function slider(value, { min, max, step }, oninput, onchange) {
   let current = value;
   const place = (v) => {
     const fraction = (v - min) / (max - min);
-    // The knob's centre travels between half a knob in from either end.
+    // 6.5px is half the knob's width, so the knob stays inside the track.
     knob.style.left = `calc(6.5px + (100% - 13px) * ${fraction})`;
     fill.style.width = `calc(6.5px + (100% - 13px) * ${fraction})`;
   };
@@ -93,7 +90,6 @@ export function stepper(value, { min, max }, onchange) {
     h('button', { disabled: value >= max, onclick: () => onchange(value + 1), 'aria-label': 'Increase' }, '+'));
 }
 
-/** printf's %.Nf, for the Mac's slider readouts. */
 export function fixed(value, digits) {
   return Number(value).toFixed(digits);
 }

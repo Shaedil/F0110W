@@ -20,8 +20,7 @@ int32_t m0110_serial_ports(uint16_t *out, uint32_t capacity) {
     if (capacity < 2) return 0;
     out[0] = out[1] = 0;
 
-    // The kernel's own list: the device behind each COM name. The inbox
-    // usbser.sys driver, which takes every CDC ACM port, names them USBSER.
+    // usbser.sys, the inbox driver for every CDC ACM port, names its devices USBSER.
     HKEY key;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DEVICEMAP\\SERIALCOMM", 0, KEY_READ, &key) != ERROR_SUCCESS)
         return 0;
@@ -45,7 +44,6 @@ int32_t m0110_serial_ports(uint16_t *out, uint32_t capacity) {
     }
     RegCloseKey(key);
 
-    // In COM number order, as the Mac lists /dev/cu.usbmodem*.
     for (int i = 1; i < count; i++) {
         for (int j = i; j > 0 && port_number(ports[j - 1]) > port_number(ports[j]); j--) {
             wchar_t swap[32];
@@ -81,7 +79,7 @@ void *m0110_serial_open(const uint16_t *port, uint32_t *error) {
     memset(&dcb, 0, sizeof dcb);
     dcb.DCBlength = sizeof dcb;
     if (!GetCommState(handle, &dcb)) goto fail;
-    // The baud rate means nothing to a CDC ACM device; raw 8N1 does.
+    // CDC ACM ignores the baud rate, but the port must be raw 8N1.
     dcb.BaudRate = CBR_115200;
     dcb.ByteSize = 8;
     dcb.Parity = NOPARITY;
@@ -95,14 +93,13 @@ void *m0110_serial_open(const uint16_t *port, uint32_t *error) {
     dcb.fInX = FALSE;
     dcb.fNull = FALSE;
     dcb.fAbortOnError = FALSE;
-    // Asserted, as macOS does on open: a CDC ACM device may hold its output
-    // until the host raises DTR.
+    // Raise DTR as macOS does. A CDC ACM device may hold its output until DTR is up.
     dcb.fDtrControl = DTR_CONTROL_ENABLE;
     dcb.fRtsControl = RTS_CONTROL_ENABLE;
     if (!SetCommState(handle, &dcb)) goto fail;
 
-    // A read returns what has arrived, or waits up to 100 ms for the first
-    // byte: the VMIN 0 / VTIME 1 the Mac transport uses.
+    // Same as VMIN 0 / VTIME 1 on the Mac: return what has arrived, or wait
+    // up to 100 ms for the first byte.
     COMMTIMEOUTS timeouts;
     memset(&timeouts, 0, sizeof timeouts);
     timeouts.ReadIntervalTimeout = MAXDWORD;

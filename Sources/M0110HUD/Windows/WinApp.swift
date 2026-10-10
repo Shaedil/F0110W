@@ -1,15 +1,12 @@
 import CM0110Win
 import Foundation
 
-/// The Windows app: a tray icon in place of the menu bar item, the HUD, and
-/// the keyboard's events between them. What each event shows is the
-/// Announcer's call, exactly as on the Mac.
+/// The Windows app: tray icon, HUD and keyboard events. The Announcer decides
+/// what each event shows, same as on the Mac.
 final class WinApp {
     /// For the C callbacks, which carry no context.
     static var shared: WinApp?
 
-    /// The flags and settings in force. Settings changed in the window apply
-    /// at once, here and in the HUD and announcer.
     private var config: Config
     private var settings = WinSettings.load()
     private let hud: WinHUD
@@ -24,12 +21,9 @@ final class WinApp {
     /// Off for --test and --preview, which only show a HUD.
     private var hasTray = false
 
-    /// The profiles' names as the keyboard last gave them, this connect. Nil
-    /// until read, and always on firmware that does not keep them.
+    /// Names read from the keyboard this connection. Nil until read, and on firmware without name storage.
     private var keyboardNames: [String]?
-    /// Which of those the keyboard read from the devices themselves.
     private var keyboardNamesFromDevice: Set<Int> = []
-    /// This PC's side of the names, kept in settings.json.
     private lazy var names = ProfileNameStore(
         load: { [unowned self] in
             let saved = settings.profileNames ?? []
@@ -48,20 +42,16 @@ final class WinApp {
             settings.profileNamesCarriedOver = state.carriedOver
             saveSettings()
         })
-    /// What this PC offers as its own profile's name, e.g. "Windows 11 PC".
     private lazy var deviceName = DeviceName.current()
-    /// Typing in the window renames on every keystroke; the name goes to the
-    /// keyboard once the typing stops.
+    /// Debounces name edits so the keyboard gets the name after typing stops.
     private var nameEditSync: UInt32?
 
-    /// What the tray shows.
     private var linked = false
     private var battery: Int?
-    /// Which profile the keyboard types to: the link stays up while it types
-    /// to another computer. Nil until reported, and after a disconnect.
+    /// The profile the keyboard is typing to. The link stays up while it types to
+    /// another computer. Nil until reported and after a disconnect.
     private var profile: ProfileState?
 
-    /// The name the app is registered under in HKCU\...\Run.
     static let runName = "M0110HUD"
 
     init(config: Config) {
@@ -109,8 +99,7 @@ final class WinApp {
             startClipboard()
             keyboard.onChange = { [weak self] in self?.postWindowState() }
             if openWindowAtLaunch { window.open() }
-            // For CI: holds the app thread once, so hang.log has something
-            // to record.
+            // For CI: blocks the app thread once so hang.log has something to record.
             if let hang = ProcessInfo.processInfo.environment["M0110_HANG_TEST"].flatMap(Double.init) {
                 Main.after(2) { Thread.sleep(forTimeInterval: hang) }
             }
@@ -136,8 +125,7 @@ final class WinApp {
             self.profile = ProfileState(active: active, own: self.announcer.ownProfile)
             self.updateTray()
             self.show(announcement, name: name)
-            // Which profile is this PC may only now be known, and with it
-            // which name to fill in.
+            // Now that this PC's profile may be known, fill in its name if needed.
             self.syncProfileNames()
         }
         m.onNames = { [weak self] keyboard, fromDevice in
@@ -148,7 +136,6 @@ final class WinApp {
         m.start()
     }
 
-    /// The keyboard's names, read on connect and again whenever one changes.
     private func handleProfileNames(_ keyboard: [String], fromDevice: Set<Int>) {
         keyboardNames = keyboard
         keyboardNamesFromDevice = fromDevice
@@ -156,10 +143,8 @@ final class WinApp {
         syncProfileNames()
     }
 
-    /// As on the Mac: sends the keyboard the renames made here and, if this
-    /// PC's profile has no name, this PC's; then takes the keyboard's names
-    /// as the copy here. Writes wait for any already sent, whose answer reads
-    /// the names again and comes back here.
+    /// Same as the Mac: sends local renames (and this PC's name if its profile has none), then
+    /// caches the keyboard's names. Each write's answer re-reads the names and calls this again.
     private func syncProfileNames() {
         guard let keyboard = keyboardNames else { return }
         names.cache(keyboard)
@@ -171,7 +156,6 @@ final class WinApp {
         }
     }
 
-    /// Walk through each HUD state, as the Mac's --preview does.
     private func runPreview() {
         let name = config.deviceName
         let step = config.hudDuration + 0.6
@@ -183,8 +167,6 @@ final class WinApp {
 
     // MARK: Clipboard
 
-    /// The keyboard's clipboard: text and small images carried to and from
-    /// the other computers it switches between.
     private func startClipboard() {
         let courier = WinClipCourier(clipboard: WindowsClipboard())
         clipLink = WinClipLink(courier: courier, deviceName: config.deviceName,
@@ -192,7 +174,6 @@ final class WinApp {
                                log: { [weak self] in log($0, verbose: self?.config.verbose ?? false) })
     }
 
-    /// Something was copied, by any program.
     func clipboardChanged() {
         clipLink?.courier.checkClipboard()
     }
@@ -264,7 +245,7 @@ final class WinApp {
         case "ready":
             window.post(FixedState())
             postWindowState()
-            // The Mac's window connects its editor when it appears.
+            // Connect the editor when the window appears, as the Mac does.
             keyboard.connect()
         case "layout":
             if let width = body["width"] as? Int, let height = body["height"] as? Int {
@@ -284,8 +265,7 @@ final class WinApp {
         case "profiles.set":
             if let index = body["index"] as? Int, let name = body["name"] as? String,
                (0..<ProfileNames.count).contains(index) {
-                // Cut to what the keyboard keeps, so what shows is what every
-                // other computer will show.
+                // Trim to what the keyboard stores, so every computer shows the same name.
                 names.edit(index, name.utf8.count > ProfileNamesWire.maxBytes
                     ? ProfileNamesWire.clean(name) : name)
                 Main.cancel(nameEditSync)
@@ -299,8 +279,7 @@ final class WinApp {
         }
     }
 
-    /// A setting from the Battery or Settings pane: saved, and in force from
-    /// the next popup.
+    /// Saves a Battery or Settings pane value. It applies from the next popup.
     private func setSetting(_ key: String, _ value: Any?) {
         let number = (value as? NSNumber)?.doubleValue
         let flag = (value as? NSNumber)?.boolValue
@@ -376,8 +355,7 @@ final class WinApp {
         }
     }
 
-    /// Adds this executable to HKCU\...\Run, or takes it off. Returns the
-    /// Win32 status, 0 on success.
+    /// Adds or removes the HKCU Run entry. Returns the Win32 status, 0 on success.
     static func setRunAtLogin(_ on: Bool, arguments: [String] = []) -> Int32 {
         guard on else { return m0110_run_at_login(runName.wide, nil) }
         var path = [UInt16](repeating: 0, count: 4096)
@@ -387,19 +365,17 @@ final class WinApp {
     }
 }
 
-/// Sent once as the page loads: what never changes.
+/// Sent once when the page loads, with what never changes.
 struct FixedState: Encodable {
     var type = "fixed"
     var board = BoardJSON.m0110
     var picker = PickerGroupJSON.all
-    /// The pane to open on, from M0110_WINDOW_PANE: for screenshots in CI.
+    /// Starting pane from M0110_WINDOW_PANE, used for CI screenshots.
     var pane = ProcessInfo.processInfo.environment["M0110_WINDOW_PANE"]
 }
 
-/// Everything the window shows that changes.
 struct WindowState: Encodable {
     struct Device: Encodable {
-        /// Which profile the keyboard types to; see ProfileState.
         struct Profile: Encodable {
             var active: Int
             var own: Int?
@@ -436,8 +412,7 @@ struct WindowState: Encodable {
             locked = keyboard.lockState != .unlocked
             status = keyboard.status
             pendingEdits = keyboard.pendingEdits
-            // A keymap already loaded stays on show while locked, dimmed, as
-            // on the Mac; the locked empty state is for a board never read.
+            // Keep showing a loaded keymap while locked (dimmed), as on the Mac.
             layers = keyboard.layers
         }
     }

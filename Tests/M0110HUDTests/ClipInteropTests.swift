@@ -3,15 +3,12 @@ import XCTest
 
 @testable import M0110HUD
 
-/// The Mac side and the Windows/Linux helper passing content to each other
-/// over a real socket, both ways and in both roles.
-///
-/// Needs `uv` and a network fetch of the helper's dependencies the first time,
-/// so it only runs when asked: `M0110_INTEROP=1 swift test --filter Interop`.
+/// Tests the Mac side against the Python helper over a real socket. Needs `uv` and
+/// network access, so run it with `M0110_INTEROP=1 swift test --filter Interop`.
 final class ClipInteropTests: XCTestCase {
     private let id: [UInt8] = Array(0x50...0x57)
     private let key: [UInt8] = (0..<32).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ 3) }
-    /// Three records' worth, so record numbering is exercised too.
+    /// Enough for three records, so record numbering gets tested too.
     private let content = Data((0..<150_000).map { UInt8(truncatingIfNeeded: $0 &* 13 &+ 5) })
 
     private let loopback = ClipAddress([127, 0, 0, 1])!
@@ -34,8 +31,6 @@ final class ClipInteropTests: XCTestCase {
         hex(Array(SHA256.hash(data: data)))
     }
 
-    /// The helper's test script in one of its interop modes, with its output
-    /// collected a line at a time.
     private final class Helper {
         let process = Process()
         private let pipe = Pipe()

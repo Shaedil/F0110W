@@ -3,8 +3,7 @@ import XCTest
 
 @testable import M0110HUD
 
-// Frames as the firmware sends them, built from zmk-studio-messages:
-// zmk.studio.Response{request_response = 1 | notification = 2}.
+// From zmk-studio-messages: zmk.studio.Response{request_response = 1 | notification = 2}.
 
 private func reply(to id: UInt32, keymap body: [UInt8]) -> [UInt8] {
     var inner = ProtobufWriter()
@@ -22,8 +21,7 @@ private func bindingAccepted(_ id: UInt32) -> [UInt8] {
     return reply(to: id, keymap: body.bytes)
 }
 
-/// Notification{keymap = 5 {unsaved_changes_status_changed = 1}}, which the
-/// firmware raises from inside the set_layer_binding handler.
+/// Notification{keymap = 5 {unsaved_changes_status_changed = 1}}, sent during set_layer_binding.
 private let unsavedChanges: [UInt8] = {
     var keymap = ProtobufWriter(); keymap.bool(1, true)
     var n = ProtobufWriter(); n.message(5, keymap.bytes)
@@ -52,7 +50,6 @@ private func requestID(_ frame: [UInt8]) -> UInt32 {
 
 private let aBinding = BehaviorBinding(behaviorID: 5, param1: HIDKeycodes.encode(usage: 0x68), param2: 0)
 
-/// Answers each request from a script, with no radio or port in the way.
 private final class ScriptedTransport: StudioTransport {
     var label = "scripted"
     var isOpen = true
@@ -73,9 +70,8 @@ private final class ScriptedTransport: StudioTransport {
 }
 
 final class StudioClientTests: XCTestCase {
-    /// The firmware writes the notification and the reply back to back, so a
-    /// USB read routinely returns both. Keeping only the first frame of a read
-    /// lost the reply, and every rebind over USB timed out.
+    /// The firmware writes the notification and the reply back to back, so one
+    /// USB read often returns both frames. Both must be kept.
     func testBindingReplyArrivingInTheSameReadAsANotificationIsKept() throws {
         var master: Int32 = -1, slave: Int32 = -1
         XCTAssertEqual(openpty(&master, &slave, nil, nil, nil), 0)
@@ -113,8 +109,7 @@ final class StudioClientTests: XCTestCase {
         XCTAssertEqual(announced, [.unlocked])
     }
 
-    /// The idle re-lock arrives with no request in flight, and reading it must
-    /// not send one: a request would restart the firmware's idle clock.
+    /// Reading the idle re-lock must not send a request, which would reset the idle timer.
     func testIdleRelockIsReadWithoutSendingARequest() throws {
         let transport = ScriptedTransport()
         transport.frames = [lockChanged(.locked)]

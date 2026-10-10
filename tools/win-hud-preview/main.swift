@@ -1,7 +1,5 @@
-// Draws the Windows HUD on a Mac: every state, light and dark, one PNG.
-// Built and run by tools/win-hud-preview.sh with Sources/M0110HUD/Windows/
-// HUDRaster.swift, so the look can be worked on without a Windows machine.
-// Text comes from Core Text here rather than GDI, so it is close, not exact.
+// Draws the Windows HUD to a PNG on a Mac. Run by tools/win-hud-preview.sh.
+// Text uses Core Text instead of GDI, so it is close to Windows but not exact.
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
@@ -17,7 +15,7 @@ struct CoreTextRasterizer: TextRasterizer {
         }
         var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
         let width = max(1, Int(CTLineGetTypographicBounds(line, &ascent, &descent, &leading).rounded(.up)))
-        // GDI's line height, roughly: Segoe UI's is 1.33 em.
+        // Roughly GDI's line height for Segoe UI, which is 1.33 em.
         let height = Int((CGFloat(size) * 1.33).rounded())
         let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
                                 space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!

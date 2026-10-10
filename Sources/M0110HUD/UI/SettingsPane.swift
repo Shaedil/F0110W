@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The Settings pane's sections, one at a time.
 enum SettingsTab: String, CaseIterable {
     case popup = "Popup"
     case clipboard = "Clipboard"
@@ -18,7 +17,6 @@ struct SettingsPane: View {
     @AppStorage("suppressInitial") private var suppressInitial: Bool = false
     @AppStorage(ClipboardBridge.enabledKey) private var clipboardSync: Bool = true
 
-    /// The tab showing, remembered across launches.
     @AppStorage("settingsTab") private var tab: SettingsTab = .popup
 
     var body: some View {
@@ -63,7 +61,7 @@ struct SettingsPane: View {
     private var clipboard: some View {
         settingsGroup("Clipboard") {
             settingsToggle("Carry copied text to the keyboard's other computers", $clipboardSync)
-            // The last words are held together so no width can strand one.
+            // The no-break space keeps the last two words together.
             Text("Text copied here goes with the keyboard when it switches computers: "
                  + "onto that computer's clipboard if this app runs there, typed out if "
                  + "not. Concealed passwords are never\u{00A0}sent.")
@@ -74,7 +72,6 @@ struct SettingsPane: View {
     }
 }
 
-/// Low-battery alert thresholds, on their own sidebar pane.
 struct BatteryPane: View {
     @AppStorage("lowThreshold") private var lowThreshold: Int = 20
     @AppStorage("rearmThreshold") private var rearmThreshold: Int = 30
@@ -95,14 +92,12 @@ struct BatteryPane: View {
     }
 }
 
-/// The keyboard's Bluetooth profiles, on their own sidebar pane.
 struct BluetoothPane: View {
     var body: some View {
         settingsGroup("Profiles") {
             ForEach(0..<ProfileNames.count, id: \.self) { index in
                 profileField(index)
             }
-            // Short enough for one line, so there is no last line to orphan.
             Text("Shown when the keyboard switches away, as in \"Moved to Work\u{00A0}Laptop\".")
                 .font(Theme.small)
                 .foregroundStyle(Theme.textDim)
@@ -158,10 +153,8 @@ func settingsStepper(_ label: String, _ value: Binding<Int>,
     }
 }
 
-/// One profile's name. A rename is written straight to the key ProfileNames
-/// reads, so it shows on the very next HUD, and goes on to the keyboard,
-/// which shares it with every computer paired to it. Names the keyboard sends
-/// show here as they arrive.
+/// A rename shows on the next HUD and is sent to the keyboard, which shares it
+/// with every paired computer.
 func profileField(_ index: Int) -> some View {
     ProfileField(index: index)
 }
@@ -179,8 +172,7 @@ private struct ProfileField: View {
         let name = Binding<String>(
             get: { stored },
             set: {
-                // Cut to what the keyboard keeps, so what shows is what
-                // every other computer will show.
+                // Trim to what the keyboard stores, so every computer shows the same name.
                 let fitted = $0.utf8.count > ProfileNamesWire.maxBytes
                     ? ProfileNamesWire.clean($0) : $0
                 ProfileNameStore.shared.edit(index, fitted)

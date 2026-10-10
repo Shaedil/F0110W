@@ -1,13 +1,11 @@
 import CM0110Win
 import Foundation
 
-/// Blocking serial transport over a CDC ACM port: the Windows side of
-/// Studio/Transport.swift's, with COM ports in place of /dev/cu.usbmodem*.
+/// Blocking CDC ACM serial transport. The Windows version of Studio/Transport.swift.
 final class SerialTransport: StudioTransport {
     private var port: UnsafeMutableRawPointer?
     private let path: String
     private var decoder = StudioFraming.Decoder()
-    /// Frames decoded but not yet handed out; see the Mac transport.
     private var pending: [[UInt8]] = []
 
     var label: String { path }
@@ -19,7 +17,7 @@ final class SerialTransport: StudioTransport {
 
     deinit { close() }
 
-    /// Every USB CDC ACM port, in COM number order.
+    /// USB CDC ACM ports in COM number order.
     static func candidatePorts() -> [String] {
         var buffer = [UInt16](repeating: 0, count: 4096)
         guard m0110_serial_ports(&buffer, UInt32(buffer.count)) > 0 else { return [] }
@@ -66,7 +64,7 @@ final class SerialTransport: StudioTransport {
         return pending.isEmpty ? nil : pending.removeFirst()
     }
 
-    /// One read, waiting at most 100 ms, with every frame it completes queued.
+    /// One read (up to 100 ms), queuing every frame it completes.
     private func readOnce() throws {
         guard let port else { throw StudioError.portUnavailable("\(path): not open") }
         var scratch = [UInt8](repeating: 0, count: 512)

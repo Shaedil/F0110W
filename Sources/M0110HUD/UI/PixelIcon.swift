@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Sidebar icons drawn pixel-by-pixel on a 16x16 grid rather than taken from SF
-/// Symbols, so the navigation carries a hint of a 1-bit icon set while still
-/// being tinted for the modern palette.
+/// Sidebar icons drawn on a 16x16 pixel grid for a 1-bit look.
 struct PixelIcon: View {
     enum Kind { case keys, bluetooth, battery, gestures, settings }
     let kind: Kind
@@ -25,7 +23,7 @@ struct PixelIcon: View {
                 }
                 fill(5, 10, 6, 1.4, 0.85)
             case .bluetooth:
-                // The rune: a spine with two chevrons off its right side.
+                // The Bluetooth logo: a spine with two chevrons on its right.
                 fill(7, 1, 1.6, 14)
                 fill(8.6, 2, 1.4, 1.4); fill(10, 3.4, 1.4, 1.4); fill(11.4, 4.8, 1.4, 1.4)
                 fill(10, 6.2, 1.4, 1.4); fill(8.6, 7.6, 1.4, 1.4)

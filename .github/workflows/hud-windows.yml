@@ -1,6 +1,4 @@
-# Builds the HUD for Windows, so the Windows side is checked without a
-# Windows machine. The packaged folder and a drawing of every HUD state
-# (--snapshot) are uploaded as artifacts.
+# Builds and tests the Windows HUD, then uploads the build and screenshots.
 name: HUD for Windows
 
 on:
@@ -48,7 +46,7 @@ jobs:
 
       - name: Draw every HUD state
         shell: pwsh
-        # Piped, so PowerShell waits on a GUI-subsystem program.
+        # Piped so PowerShell waits for the GUI-subsystem exe to exit.
         run: .\build\M0110HUD\M0110HUD.exe --snapshot hud-windows.bmp --scale 1.5 | Out-Host
 
       - name: Try the clipboard
@@ -67,8 +65,7 @@ jobs:
       - name: Measure memory
         shell: pwsh
         continue-on-error: true
-        # The app and every process it starts (WebView2's), as it sits in the
-        # tray, with a HUD up, and with the window open. No keyboard here.
+        # Includes the app's child processes (WebView2).
         run: |
           function Tree($root) {
             $all = Get-CimInstance Win32_Process
@@ -141,8 +138,7 @@ jobs:
           $env:M0110_HANG_TEST = '4'
           $log = Join-Path $env:LOCALAPPDATA 'M0110HUD\hang.log'
           $p = Start-Process -FilePath .\build\M0110HUD\M0110HUD.exe -PassThru
-          # The stall starts two seconds after the app is up, which can take a
-          # while on a busy runner: wait for the report rather than a fixed time.
+          # Wait for the log line, since startup can be slow on a busy runner.
           $deadline = (Get-Date).AddSeconds(30)
           while ((Get-Date) -lt $deadline -and -not ((Test-Path $log) -and (Select-String -Path $log -Pattern 'answered again' -SimpleMatch -Quiet))) {
             Start-Sleep -Milliseconds 500

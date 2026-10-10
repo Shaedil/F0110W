@@ -1,11 +1,7 @@
 import Foundation
 
-/// The window's link to the keyboard's keymap: the Mac's KeyboardController,
-/// without SwiftUI. ZMK Studio over the USB serial port, which is the only
-/// route Windows has.
-///
-/// `StudioClient` blocks, so every call runs on a private serial queue, and
-/// results come back on the app thread, where `onChange` reports them.
+/// Keymap editor link over ZMK Studio on USB serial, like the Mac's KeyboardController.
+/// StudioClient blocks, so calls run on a private queue and results come back on the app thread.
 final class WinKeyboard {
     enum Connection: Equatable {
         case disconnected
@@ -22,13 +18,11 @@ final class WinKeyboard {
     private(set) var behaviors: [Int32: BehaviorInfo] = [:]
     private(set) var pendingEdits = 0
     private(set) var status: String?
-    /// The keymap as the page draws it, rebuilt when the keymap changes.
     private(set) var layers: [LayerJSON] = []
 
     /// Called on the app thread after anything above changes.
     var onChange: (() -> Void)?
-    /// Finds the keyboard in place of StudioClient.discover: tests hand in a
-    /// scripted firmware this way.
+    /// Replaces StudioClient.discover. Tests pass in a scripted firmware here.
     var discover: (() -> (client: StudioClient, info: DeviceInfo)?)?
     var deviceName = "M0110"
     var verbose = false
@@ -37,16 +31,15 @@ final class WinKeyboard {
 
     private var client: StudioClient?
     private let queue = DispatchQueue(label: "m0110hud.studio", qos: .userInitiated)
-    /// The lock as last seen on the wire; owned by `queue`.
+    /// Last lock state seen on the wire. Queue only.
     private var lockOnWire: LockState = .locked
     private var lockPoll: DispatchSourceTimer?
     private var wantsConnection = false
     private var reconnect: DispatchWorkItem?
     private var retryDelay: TimeInterval = firstRetryDelay
 
-    /// While locked the app asks, in case the unlock notification is missed;
-    /// while unlocked it only listens, because any request would restart the
-    /// firmware's ten-minute idle lock.
+    /// While locked, poll in case the unlock notification is missed. While unlocked, only
+    /// listen, because any request would reset the firmware's 10-minute idle lock.
     private static let lockPollInterval: TimeInterval = 1.5
     private static let firstRetryDelay: TimeInterval = 2
     private static let maxRetryDelay: TimeInterval = 15
@@ -102,8 +95,7 @@ final class WinKeyboard {
         queue.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// Lets the serial port go, as the window closes: other tools, ZMK Studio
-    /// in a browser among them, can only open it while nothing holds it.
+    /// Frees the serial port when the window closes, so other tools like ZMK Studio can open it.
     func disconnect() {
         queue.async { [weak self] in
             guard let self else { return }
@@ -134,9 +126,7 @@ final class WinKeyboard {
                 publish { self.status = nil }
                 return
             }
-            // The keymap before the layouts: it is what the editor needs, and
-            // the layouts are the reply most likely to fail. The board drawn
-            // here is the app's own, so a missing layout costs nothing.
+            // Keymap first, since layouts fail most often and the board drawing does not need them.
             let km = try retrying { try client.keymap() }
             let table = (try? client.behaviorTable()) ?? [:]
             let layers = KeymapModel.layers(km, behaviors: table)
@@ -176,7 +166,6 @@ final class WinKeyboard {
         throw lastError ?? StudioError.rpc("the request failed")
     }
 
-    /// The empty state's Reload button.
     func reload() {
         if connection.isConnected {
             queue.async { [weak self] in self?.reloadEverything() }
@@ -185,7 +174,6 @@ final class WinKeyboard {
         }
     }
 
-    /// "Unlock check": reads the lock, and the keymap if it is open.
     func refreshLockState() {
         queue.async { [weak self] in
             guard let self, let client = self.client else { return }
@@ -204,7 +192,7 @@ final class WinKeyboard {
         startLockPolling()
     }
 
-    /// The firmware said the lock changed. Must run on `queue`.
+    /// The firmware reported a lock change. Must run on `queue`.
     private func lockAnnounced(_ lock: LockState) {
         guard lock != lockOnWire else { return }
         noteLock(lock)
@@ -246,9 +234,7 @@ final class WinKeyboard {
             noteLock(lock)
             if lock == .unlocked { reloadEverything() }
         } catch {
-            // The poll is the only regular traffic, so it is where a dead link
-            // shows first: a cable pulled, or the keyboard switched to typing
-            // over Bluetooth.
+            // The poll is the only regular traffic, so a pulled cable or a switch to Bluetooth shows up here.
             dropLink(because: error)
         }
     }
@@ -268,8 +254,7 @@ final class WinKeyboard {
 
     // MARK: Editing
 
-    /// Rebinds `position` on layer `layerIndex` to send `param`, a
-    /// page-encoded HID usage, as the Mac's picker does.
+    /// `param` is a page-encoded HID usage, as from the Mac's picker.
     func rebind(layerIndex: Int, position: Int, to param: UInt32) {
         guard keymap.layers.indices.contains(layerIndex) else { return }
         let layer = keymap.layers[layerIndex]
@@ -353,8 +338,7 @@ final class WinKeyboard {
         }
     }
 
-    /// Applies `work` on the app thread and reports the change. Main.async,
-    /// not DispatchQueue.main: on Windows the Win32 loop owns that thread.
+    /// Uses Main.async because the Win32 loop owns the main thread on Windows.
     private func publish(_ work: @escaping () -> Void) {
         Main.async { [weak self] in
             work()

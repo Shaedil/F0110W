@@ -1,6 +1,5 @@
 import Foundation
 
-/// One HUD to put on screen.
 struct Announcement: Equatable {
     var kind: HUDKind
     var battery: Int?
@@ -10,47 +9,36 @@ struct Announcement: Equatable {
 
 /// What the announcer remembers across launches.
 protocol AnnouncerMemory: AnyObject {
-    /// Persisted so a relaunch on an already-low battery doesn't re-nag.
+    /// Saved so a relaunch on a low battery does not alert again.
     var lowAlertArmed: Bool { get set }
-    /// The last milestone announced, persisted for the same reason: a relaunch
-    /// should not re-announce a level the user has already been told about.
+    /// Saved so a relaunch does not announce the same level again.
     var lastMilestone: Int? { get set }
-    /// When the keyboard last connected and last left, for telling the first
-    /// connect of the day from the rest. Persisted: the gap that makes an
-    /// arrival is usually a night, and the app may well restart inside it.
+    /// Saved because the gap before the day's first connect is usually a night,
+    /// and the app may restart during it.
     var lastConnectAt: Date? { get set }
     var lastDisconnectAt: Date? { get set }
-    /// The last level the keyboard reported. The monitor forgets it on
-    /// disconnect, but that is exactly when the announcer decides between
-    /// "disconnected" and "died".
+    /// Kept here because the monitor clears it on disconnect, which is exactly
+    /// when it is needed to tell "disconnected" from "died".
     var lastBattery: Int? { get set }
-    /// Set once the empty-battery HUD has been shown, until the battery is
-    /// charged again, so a level bouncing on 0 does not repeat it.
+    /// Stays set until the battery charges again, so a level bouncing on 0 shows the HUD once.
     var diedAnnounced: Bool { get set }
 }
 
-/// Decides which HUD, if any, each thing the keyboard reports should show.
-///
-/// Shared by the Mac and Windows apps, so both say the same things at the
-/// same moments; each platform only decides how a HUD looks.
+/// Decides which HUD, if any, each keyboard report should show. Shared by the Mac and Windows apps.
 final class Announcer {
     var config: Config
     unowned let memory: AnnouncerMemory
-    /// The name for a 0-based profile index, for "Moved to ...".
     var profileName: (Int) -> String = { ProfileNames.name(for: $0) }
 
-    /// The keyboard's active profile as last reported, and which profile is
-    /// this computer. Not persisted: the keyboard reports both afresh on every
-    /// connect, and a stale value would announce a move that never happened.
+    /// Not saved, since the keyboard reports both profiles on every connect and a
+    /// stale value would show a move that never happened.
     private(set) var activeProfile: Int?
     private(set) var ownProfile: Int?
-    /// What the last profile report meant, for the log.
     private(set) var lastMove: ProfileMove?
 
-    /// Hours apart that make a connect the first of a new day, on top of any
-    /// connect on a new calendar day.
+    /// A connect this long after the last disconnect also counts as the first of the day.
     static let arrivalGap: TimeInterval = 4 * 3600
-    /// A disconnect at or below this level is the battery dying, not leaving.
+    /// A disconnect at or below this level means the battery died.
     static let diedLevel = 2
 
     init(config: Config, memory: AnnouncerMemory) {
@@ -58,10 +46,7 @@ final class Announcer {
         self.memory = memory
     }
 
-    /// `battery` is the level read on this connect, or nil if the read has not
-    /// landed yet. The last session's level is deliberately not shown in its
-    /// place: it was wrong whenever the keyboard had charged or drained while
-    /// away. A late read fills the ring in through `battery(level:)`.
+    /// `battery` is nil until this connect's reading arrives. Old levels are not used since they may be stale.
     func connect(battery: Int?, isInitial: Bool, now: Date = Date()) -> Announcement? {
         let arrival = isArrival(at: now)
         memory.lastConnectAt = now
@@ -69,8 +54,7 @@ final class Announcer {
         return Announcement(kind: arrival ? .arrived : .connected, battery: battery)
     }
 
-    /// The first connect of the day: none before, a new calendar day since the
-    /// last, or long enough away that it is a new stretch of work.
+    /// True for the first connect ever, on a new calendar day, or after `arrivalGap` away.
     func isArrival(at now: Date) -> Bool {
         guard let last = memory.lastConnectAt else { return true }
         if !Calendar.current.isDate(last, inSameDayAs: now) { return true }
@@ -82,9 +66,7 @@ final class Announcer {
         memory.lastDisconnectAt = now
         activeProfile = nil
         if let level = memory.lastBattery, level <= Self.diedLevel {
-            // Leaving on an empty battery is dying, whatever else is set: it
-            // is the one disconnect worth knowing about. Unless a report of 0%
-            // already said so a moment ago.
+            // Shown even when disconnect HUDs are off, unless a 0% report already showed it.
             guard !memory.diedAnnounced else { return nil }
             memory.diedAnnounced = true
             return Announcement(kind: .died, battery: level)
@@ -93,12 +75,8 @@ final class Announcer {
         return Announcement(kind: .disconnected, battery: nil)
     }
 
-    /// The keyboard switched Bluetooth profile. `active` is the profile it now
-    /// types to, `own` the one that is this computer, both 0-based; `own` is
-    /// nil when the keyboard did not say.
-    ///
-    /// Only the moves that involve this computer say anything: away from it,
-    /// or back to it. The first report after a connect only sets the scene.
+    /// `active` is the profile the keyboard now types to and `own` is this computer's, both
+    /// 0-based (`own` is nil if not reported). Only moves to or from this computer show a HUD.
     func profileSwitch(active: Int, own: Int?) -> Announcement? {
         if let own { ownProfile = own }
         let move = ProfileMove(previous: activeProfile, active: active, own: ownProfile)
@@ -116,8 +94,7 @@ final class Announcer {
         }
     }
 
-    /// A fresh battery reading. Returns the HUDs it calls for in order, each
-    /// replacing the one before it on screen.
+    /// Returns the HUDs to show in order, each replacing the one before.
     func battery(level: Int) -> [Announcement] {
         memory.lastBattery = level
 
@@ -140,33 +117,20 @@ final class Announcer {
         return shown
     }
 
-    /// Show a HUD each time the level drops through a milestone.
-    ///
-    /// The low-battery alert fires once per descent, which on a 10 Ah cell is
-    /// roughly never, so it was the only battery notification and it almost
-    /// never appeared. Milestones give the ordinary discharge something to say.
-    ///
-    /// The reported percentage is not state of charge: it is a linear voltage
-    /// curve at ~7.5 mV per point, so load alone moves it several points either
-    /// way. Hence the guards:
-    ///
-    ///   * descending only: a level climbing back through a milestone rearms
-    ///     it without announcing it
-    ///   * a rearm margin: the level must recover well past a milestone before
-    ///     that milestone can fire again, so jitter around the boundary cannot
-    ///     produce a burst
+    /// Shows a HUD each time the level drops through a milestone, since the low alert rarely
+    /// fires on a 10 Ah cell. The percentage is a linear voltage curve (about 7.5 mV per point)
+    /// that moves with load, so only drops announce, and a milestone rearms only after the
+    /// level climbs a full step above it.
     private func milestone(level: Int) -> Announcement? {
         let step = config.batteryMilestone
         guard step > 0 else { return nil }
 
-        // The highest milestone at or below the current level.
         let crossed = (level / step) * step
         guard crossed > 0, crossed < 100 else { return nil }
 
         if let last = memory.lastMilestone {
             guard crossed < last else {
-                // Recovering. Only rearm once it is clear of the boundary, so a
-                // level hovering on it does not toggle.
+                // Rising. Rearm only once clear of the boundary so jitter does not toggle it.
                 if crossed > last + step { memory.lastMilestone = crossed }
                 return nil
             }
@@ -176,7 +140,6 @@ final class Announcer {
                             battery: level)
     }
 
-    /// Forget the day and battery history.
     func resetHistory() {
         memory.lastConnectAt = nil
         memory.lastDisconnectAt = nil
@@ -188,16 +151,13 @@ final class Announcer {
     }
 }
 
-/// The keyboard's active Bluetooth profile against the one that is this
-/// computer, both 0-based. ZMK keeps every profile's link up, so the keyboard
-/// reads as connected here even while it types to another computer; this is
-/// what tells the two apart.
+/// The keyboard's active profile vs this computer's, both 0-based. ZMK keeps every
+/// profile's link up, so the keyboard looks connected here even while typing elsewhere.
 struct ProfileState: Equatable {
     var active: Int
-    /// Nil when the keyboard has not said which profile is this computer.
+    /// Nil until the keyboard reports which profile is this computer.
     var own: Int?
 
-    /// Nil when that cannot be told, for want of `own`.
     var typingHere: Bool? { own.map { $0 == active } }
 
     #if os(Windows)
@@ -206,13 +166,11 @@ struct ProfileState: Equatable {
     static let thisComputer = "this Mac"
     #endif
 
-    /// The active profile's name, as the user gave it in Settings.
     func activeName(in defaults: UserDefaults = .standard) -> String {
         ProfileNames.name(for: active, in: defaults)
     }
 
-    /// One line for a hover: where the keystrokes are going. The profile's
-    /// number is added only when its name is not already "Profile N".
+    /// Hover text. Adds the profile number unless the name is already "Profile N".
     func summary(in defaults: UserDefaults = .standard) -> String? {
         guard let here = typingHere else { return nil }
         let name = activeName(in: defaults)
@@ -224,16 +182,13 @@ struct ProfileState: Equatable {
     }
 }
 
-/// What one profile report means for this computer, against the profile
-/// that was active before it. Logged whichever way it goes, so a switch that
-/// showed nothing says why.
+/// What one profile report means for this computer. Always logged, so a switch
+/// that showed nothing says why.
 struct ProfileMove: Equatable {
     enum Outcome: Equatable {
-        /// The first report since connecting: nothing to compare with.
         case firstReport
         /// ZMK also reports when the active computer connects or drops.
         case unchanged
-        /// The keyboard has not said which profile is this computer.
         case ownUnknown
         case away
         case back
@@ -255,7 +210,7 @@ struct ProfileMove: Equatable {
         return .elsewhere
     }
 
-    /// One line for the log, numbered from 1 as Settings names the profiles.
+    /// Log line. Profiles are numbered from 1 to match Settings.
     var explanation: String {
         let to = "Profile \(active + 1)"
         let mine = own.map { "Profile \($0 + 1)" } ?? "unknown"

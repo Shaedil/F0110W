@@ -2,25 +2,21 @@ import CM0110Web
 import CM0110Win
 import Foundation
 
-/// The M0110 window: the page in WindowsUI, shown by WebView2, and the JSON
-/// passed between it and the app. The page sends small messages, each an
-/// object with a "type"; the app answers with whole states for it to draw.
+/// The M0110 window, the WindowsUI page in WebView2. The page sends small JSON
+/// messages with a "type", and the app answers with whole states to draw.
 final class WinWindow {
     /// For the C callbacks, which carry no context.
     private static var current: WinWindow?
 
-    /// A message from the page, already parsed: an object with a "type".
     var onMessage: ((_ type: String, _ body: [String: Any]) -> Void)?
     var onClosed: (() -> Void)?
 
     private let verbose: Bool
-    /// Set once the page has said it is listening, and cleared when the window
-    /// closes: posts before then would be lost.
+    /// Set when the page says it is listening, cleared on close. Earlier posts would be lost.
     private(set) var isReady = false
 
-    /// The client area at 96 DPI, which the page changes as its sidebar and
-    /// key picker come and go. The Mac window's sizes, less its 28 pt title
-    /// bar, which the Mac draws over and Windows draws above.
+    /// Client area at 96 DPI. The Mac window's size minus its 28 pt title bar, since
+    /// Windows draws the title bar outside the client area. The page resizes it later.
     static let size = (width: Int32(1340), height: Int32(585))
 
     init(verbose: Bool) {
@@ -29,7 +25,6 @@ final class WinWindow {
 
     var isOpen: Bool { m0110_web_is_open() != 0 }
 
-    /// Opens the window, or brings it forward.
     func open() {
         Self.current = self
         var callbacks = m0110_web_callbacks(
@@ -48,12 +43,11 @@ final class WinWindow {
 
     func close() { m0110_web_close() }
 
-    /// The client area the page asked for, at 96 DPI.
+    /// Client size at 96 DPI.
     func resize(width: Int, height: Int) {
         m0110_web_resize(Int32(clamping: width), Int32(clamping: height))
     }
 
-    /// Sends `message` to the page if it is listening.
     func post<Message: Encodable>(_ message: Message) {
         guard isReady else { return }
         do {
@@ -85,7 +79,7 @@ final class WinWindow {
 
     private func failed(_ result: Int32) {
         log("window: WebView2 failed (\(hex(result)))", verbose: true)
-        // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND): no runtime to start.
+        // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) means the runtime is missing.
         let text = result == Int32(bitPattern: 0x8007_0002)
             ? "The M0110 window needs the Microsoft Edge WebView2 Runtime, which this PC does not have."
             : "The M0110 window could not start WebView2 (\(hex(result)))."
@@ -95,8 +89,7 @@ final class WinWindow {
 
     // MARK: Files
 
-    /// WindowsUI as build.ps1 lays it out, a `ui` folder beside the
-    /// executable, unless M0110_UI_DIR points elsewhere for development.
+    /// The `ui` folder next to the exe (from build.ps1), unless M0110_UI_DIR overrides it.
     static var pageFolder: String {
         if let override = ProcessInfo.processInfo.environment["M0110_UI_DIR"], !override.isEmpty {
             return override

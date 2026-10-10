@@ -1,9 +1,7 @@
 import Foundation
 
-/// Minimal protobuf wire-format codec, covering exactly the field kinds the ZMK
-/// Studio messages use. Hand-rolled deliberately: pulling in SwiftProtobuf would
-/// add a `protoc-gen-swift` toolchain step and a network-fetched SwiftPM
-/// dependency, and this app needs about a dozen message shapes.
+/// Minimal protobuf codec for the field types ZMK Studio messages use. Written
+/// by hand to avoid SwiftProtobuf's codegen step and package dependency.
 enum WireType: UInt8 {
     case varint = 0
     case fixed64 = 1
@@ -36,8 +34,8 @@ struct ProtobufWriter {
     }
 
     mutating func bool(_ field: Int, _ value: Bool) {
-        // proto3 omits false, but Studio's `oneof` members are bool-typed markers
-        // whose presence is the signal, so always emit.
+        // proto3 omits false, but Studio's `oneof` bool members signal by being
+        // present, so always write it.
         tag(field, .varint)
         bytes += Self.varint(value ? 1 : 0)
     }
@@ -99,7 +97,6 @@ struct ProtobufReader {
         return result
     }
 
-    /// Next field's number and wire type.
     mutating func nextField() throws -> (field: Int, type: WireType) {
         let key = try varint()
         guard let type = WireType(rawValue: UInt8(key & 0x07)) else {
@@ -124,7 +121,6 @@ struct ProtobufReader {
         return Int32(bitPattern: (u >> 1)) ^ -Int32(bitPattern: u & 1)
     }
 
-    /// Advance past a field whose contents we don't care about.
     mutating func skip(_ type: WireType) throws {
         switch type {
         case .varint: _ = try varint()

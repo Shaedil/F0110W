@@ -1,5 +1,4 @@
-// The Keyboard pane: the Mac's KeysPane. A toolbar, the board, and the key
-// picker under it while a key is selected.
+// The Keyboard pane, matching KeysPane on the Mac.
 
 import { drawBoard } from '../board2d.js';
 import { h, panel, pill, segments } from '../ui.js';
@@ -20,31 +19,25 @@ function icon(paths, { width = 14, height = 14, stroke = 1.6 } = {}) {
 }
 const USB = () => icon('<path d="M5 2h6v5H5z"/><path d="M7 4h0M9 4h0"/><path d="M4 7h8v3a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z"/><path d="M8 13v2"/>');
 const LOCKED = () => icon('<rect x="3.5" y="7" width="9" height="7" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>', { width: 12, height: 12 });
-// The Bluetooth rune, as the Mac draws it: a spine with two arrowheads off its
-// right side, crossed by the two diagonals.
 const BLUETOOTH = () => icon('<path d="M4 4.8 12 11.2 8 15V1l4 3.8L4 11.2"/>');
 const DESKTOP = () => icon('<rect x="2" y="2.5" width="12" height="8.5" rx="1.2"/><path d="M6 14h4M8 11v3"/>',
                            { width: 13, height: 13 });
 const ARROW = () => icon('<path d="M3 8h10M9 4l4 4-4 4"/>', { width: 11, height: 11, stroke: 1.9 });
 const UNLOCKED = () => icon('<rect x="3.5" y="7" width="9" height="7" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5-.5"/>', { width: 12, height: 12 });
 
-/** The profile report, while the keyboard's own link is up to send one. */
 function typingTo(device) {
   const profile = device?.linked ? device.profile : null;
   return profile && profile.own != null ? profile : null;
 }
 
-/** One line for a hover: where the keystrokes are going, as the Mac says it. */
 function typingSummary(profile) {
   const number = `Profile ${profile.active + 1}`;
   if (profile.active === profile.own) return `Typing to this PC (${profile.name})`;
   return profile.name === number ? `Typing to ${profile.name}` : `Typing to ${profile.name} (${number})`;
 }
 
-// Which keyboard and how: a status light, the name, the route and whether
-// Studio is unlocked, then whether the keyboard is typing to this PC. Windows
-// has no Studio over Bluetooth, so with no USB link the keyboard's own
-// Bluetooth link is the route, with no lock to show.
+// Windows has no Studio over Bluetooth, so without USB the route shown is the
+// keyboard's own Bluetooth link, and there is no lock to show.
 function connectionBadge(keyboard, device) {
   const c = keyboard.connection;
   const connected = c.state === 'connected';
@@ -69,9 +62,8 @@ function connectionBadge(keyboard, device) {
     children.push(h('span.dim', { style: { fontSize: '13px' } },
       c.state === 'connecting' ? 'Connecting…' : 'Not connected'));
   }
-  // Shown whatever the Studio link is doing: Studio answers only on the
-  // profile being typed to, so a keyboard moved elsewhere is also the
-  // likeliest reason it is not connected.
+  // Shown even when Studio is not connected. Studio only answers on the profile
+  // being typed to, so a keyboard switched elsewhere is the likely reason.
   if (profile) {
     children.push(profile.active === profile.own
       ? h('span', { style: { color: 'var(--text-dim)', display: 'inline-flex' } }, DESKTOP())
@@ -142,8 +134,7 @@ function render(app) {
                                              pendingEdits: 0 };
   const layers = keyboard.layers ?? [];
   const hasKeymap = layers.length > 0 && !!app.fixed;
-  // Only once the app has said what it has: before then there is nothing to
-  // check a layer or a selection against.
+  // Wait for the first state message before checking the layer and selection.
   if (app.state) {
     if (ui.layer >= layers.length) ui.layer = 0;
     if (!hasKeymap) ui.selected = null;
@@ -178,7 +169,7 @@ function render(app) {
     const boardHost = h('div.board-host');
     const slots = layers[ui.layer]?.slots;
     if (ui.keyboard3D && app.board3d) {
-      // The same box as the flat board: the case's 1750 x 600 units.
+      // Same shape as the flat board: the case is 1750 x 600 units.
       boardHost.style.width = `${width}px`;
       boardHost.style.height = `${width * 600 / 1750}px`;
       children.push(h('div.panel.board-panel-3d', { style: { width: `${width + 28}px` } }, boardHost));

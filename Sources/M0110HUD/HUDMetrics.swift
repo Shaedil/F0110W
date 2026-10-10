@@ -1,38 +1,23 @@
 import CoreGraphics
 
-/// Every dimension the HUD uses, derived from one scale factor so the whole
-/// thing can be resized with `--scale` without re-tuning the layout.
-///
-/// Sizes are calibrated against the macOS menu bar, whose text is 13pt: the
-/// title matches it, the status line and ring label sit one step below.
+/// Every HUD dimension, from one scale factor so `--scale` resizes it without re-tuning.
+/// Sizes match the 13 pt menu bar text: the title is the same size, and the status line
+/// and ring label are one step smaller.
 struct HUDMetrics {
     var scale: CGFloat = 1
 
     var height: CGFloat { 46 * scale }
     var cornerRadius: CGFloat { height / 2 }
 
-    /// The slot the board turns in. Squarer than the board's own 2.6:1
-    /// footprint on purpose: a rotating solid sweeps its depth through the
-    /// frame, and a slot cut to the head-on silhouette clips the corners for
-    /// most of every turn.
-    ///
-    /// 92, twice the 46 it started at, and that factor is also how much bigger
-    /// the board itself draws. The scene camera fixes its *horizontal* field of view, so the
-    /// board fills a constant fraction of the slot however wide the slot is:
-    /// widening the slot is what enlarges the model, and scaling the model node
-    /// as well would compound the two and shear its ends off against the edge.
-    ///
-    /// The first 23pt of that came free: `minWidth` used to be the binding
-    /// constraint, stretching the text stack past the 61.5pt its labels
-    /// actually want, and the glyph took that slack. Past 69 the capsule does
-    /// grow, to about 231.
+    /// The slot the board rotates in. Squarer than the board's 2.6:1 footprint because a
+    /// rotating solid sweeps its depth through the frame. The camera fixes its horizontal field
+    /// of view, so widening the slot is what enlarges the board. Scaling the node as well would
+    /// clip its ends.
     var glyphWidth: CGFloat { 92 * scale }
 
-    /// The slot's 1.45 aspect, but never taller than the capsule holding it.
-    /// At 1.5× the derived height passes the HUD's own 46pt, which is an
-    /// unsatisfiable pair of constraints rather than a bigger glyph. Clamping
-    /// squares the slot up instead, and the roll's vertical sweep is far
-    /// shorter than its width, so it still has room.
+    /// The slot's 1.45 aspect, capped at the capsule height. At 1.5x scale the height would pass
+    /// 46 pt and the constraints could not be met. The roll's vertical sweep is much shorter than
+    /// its width, so it still fits.
     var glyphHeight: CGFloat { min(glyphWidth / 1.45, height) }
 
     var titleSize: CGFloat { 13 * scale }
@@ -42,9 +27,8 @@ struct HUDMetrics {
     var ringLineWidth: CGFloat { 4 * scale }
     var ringFontSize: CGFloat { 11 * scale }
 
-    /// Wider than the trailing inset on purpose. The capsule end is a
-    /// semicircle, so a rectangular glyph is tightest at its corners rather than
-    /// its middle, while the circular ring on the right follows the curve.
+    /// Wider than the trailing inset because the capsule end is a semicircle. A rectangular glyph
+    /// hits it at the corners, while the round ring on the right follows the curve.
     var padLeading: CGFloat { 13 * scale }
     var padTrailing: CGFloat { 8 * scale }
     var gap: CGFloat { 12 * scale }
@@ -52,10 +36,8 @@ struct HUDMetrics {
     var minWidth: CGFloat { 208 * scale }
     var maxWidth: CGFloat { 360 * scale }
 
-    /// Inset of the HUD's right edge from the right screen edge. macOS anchors
-    /// its own popup under the device's menu bar item rather than the screen
-    /// corner; this approximates that without claiming a menu bar slot.
+    /// macOS anchors its own popup under the device's menu bar item. This roughly matches that
+    /// without taking a menu bar slot.
     var insetX: CGFloat = 110
-    /// Gap below the menu bar.
     var insetY: CGFloat = 6
 }

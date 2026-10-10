@@ -1,7 +1,4 @@
-// The Windows clipboard, and the image work the keyboard's clipboard needs:
-// reading what was copied, putting what was delivered, and making a picture
-// small enough for the keyboard to carry. Images go through the Windows
-// Imaging Component.
+// The Windows clipboard, plus image work through the Windows Imaging Component (WIC).
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -25,8 +22,7 @@
 
 // ---- COM, for the Imaging Component ----
 
-/// Whatever apartment the thread is in will do; only one this call started is
-/// ended by it.
+/// Any apartment the thread is already in is fine. Returns 1 when com_end must balance it.
 static int com_begin(void) {
     HRESULT result = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     return result == S_OK || result == S_FALSE;
@@ -42,7 +38,6 @@ static IWICImagingFactory *factory(void) {
     return wic;
 }
 
-/// The first frame of an encoded image, decoded.
 static IWICBitmapSource *decode(IWICImagingFactory *wic, const uint8_t *data, uint32_t length, IWICStream **stream_out,
                                 IWICBitmapDecoder **decoder_out) {
     IWICStream *stream = NULL;
@@ -62,7 +57,6 @@ static IWICBitmapSource *decode(IWICImagingFactory *wic, const uint8_t *data, ui
     return (IWICBitmapSource *)frame;
 }
 
-/// `source` as 32-bit BGRA, premultiplied or not as asked.
 static IWICBitmapSource *as_bgra(IWICImagingFactory *wic, IWICBitmapSource *source, REFWICPixelFormatGUID format) {
     IWICFormatConverter *converter = NULL;
     if (FAILED(IWICImagingFactory_CreateFormatConverter(wic, &converter))) return NULL;
@@ -74,7 +68,6 @@ static IWICBitmapSource *as_bgra(IWICImagingFactory *wic, IWICBitmapSource *sour
     return (IWICBitmapSource *)converter;
 }
 
-/// Encodes `source` as PNG or JPEG into freshly allocated memory.
 static int encode(IWICImagingFactory *wic, IWICBitmapSource *source, int jpeg, float quality, uint8_t **out,
                   uint32_t *out_length) {
     IStream *memory = NULL;
@@ -130,16 +123,13 @@ done:
 
 // ---- Shrinking ----
 
-/// Longest side and JPEG quality, tried in turn until the result fits: the
-/// Mac's ladder. A screenshot of text stays legible further down it than a
-/// photograph stays pleasant.
+/// Longest side and JPEG quality, tried in order until the result fits. Same steps as the Mac.
 static const struct { UINT side; float quality; } ladder[] = {
     {2048, 0.6f}, {1600, 0.6f}, {1280, 0.5f}, {1024, 0.5f}, {800, 0.45f},
     {640, 0.4f},  {480, 0.4f},  {320, 0.35f}, {200, 0.3f},
 };
 
-/// Scales `source` to fit `side` and flattens it onto white, JPEG having no
-/// transparency.
+/// Scales to fit `side` and flattens onto white, since JPEG has no transparency.
 static IWICBitmapSource *scaled_onto_white(IWICImagingFactory *wic, IWICBitmapSource *source, UINT side) {
     UINT width = 0, height = 0;
     IWICBitmapSource_GetSize(source, &width, &height);
@@ -217,9 +207,8 @@ static UINT format(const wchar_t *name) {
     static UINT png, exclude, history, cloud;
     if (!png) {
         png = RegisterClipboardFormatW(L"PNG");
-        // How a password manager says "keep this out of clipboard history and
-        // cloud sync". The same wish applies to a keyboard. Some set the
-        // first; some only set the other two, to zero.
+        // Password managers use these to keep an item out of clipboard history
+        // and cloud sync. Some set the first one, others set the other two to zero.
         exclude = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
         history = RegisterClipboardFormatW(L"CanIncludeInClipboardHistory");
         cloud = RegisterClipboardFormatW(L"CanUploadToCloudClipboard");
@@ -231,7 +220,6 @@ static UINT format(const wchar_t *name) {
 }
 
 static int open_clipboard(HWND owner, int tries) {
-    // Another program may hold the clipboard for a moment.
     for (int i = 0; i < tries; i++) {
         if (OpenClipboard(owner)) return 1;
         Sleep(10);
@@ -239,7 +227,6 @@ static int open_clipboard(HWND owner, int tries) {
     return 0;
 }
 
-/// A copy of the open clipboard's data in one format, or NULL.
 static uint8_t *copy_format(UINT kind, uint32_t *length) {
     if (!kind || !IsClipboardFormatAvailable(kind)) return NULL;
     HANDLE handle = GetClipboardData(kind);
@@ -260,7 +247,7 @@ static int is_private(void) {
     for (int i = 0; i < 2; i++) {
         uint32_t length = 0;
         uint8_t *value = copy_format(kinds[i], &length);
-        // A DWORD: zero is "no, it may not".
+        // A DWORD, where zero means not allowed.
         int no = value && length >= 4 && !(value[0] | value[1] | value[2] | value[3]);
         free(value);
         if (no) return 1;
@@ -268,8 +255,7 @@ static int is_private(void) {
     return 0;
 }
 
-/// A PNG's own length, from its chunks: the clipboard's copy can carry
-/// padding after IEND.
+/// The PNG's real length from its chunks, since the clipboard copy can have padding after IEND.
 static uint32_t png_length(const uint8_t *png, uint32_t length) {
     uint32_t at = 8;
     while (at + 12 <= length) {
@@ -280,7 +266,6 @@ static uint32_t png_length(const uint8_t *png, uint32_t length) {
     return length;
 }
 
-/// A CF_DIB as a PNG, by way of a BMP file around it.
 static int dib_to_png(const uint8_t *dib, uint32_t length, uint8_t **out, uint32_t *out_length) {
     if (length < sizeof(BITMAPINFOHEADER)) return 0;
     const BITMAPINFOHEADER *info = (const BITMAPINFOHEADER *)dib;
@@ -334,7 +319,6 @@ int32_t m0110_clip_read(m0110_clip *clip) {
         HANDLE handle = GetClipboardData(CF_UNICODETEXT);
         const wchar_t *text = handle ? (const wchar_t *)GlobalLock(handle) : NULL;
         if (text) {
-            // UTF-8, with Windows's CRLF line endings made LF.
             int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);
             char *utf8 = size > 0 ? (char *)malloc((size_t)size) : NULL;
             if (utf8 && WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, size, NULL, NULL) > 0) {
@@ -361,14 +345,12 @@ int32_t m0110_clip_read(m0110_clip *clip) {
             kind = M0110_CLIP_PNG;
         } else {
             free(png);
-            // Windows makes this out of whichever bitmap format was put
-            // there, so it covers them all.
+            // Windows makes CF_DIB from any bitmap format, so this covers them all.
             dib = copy_format(CF_DIB, &dib_length);
         }
     }
     CloseClipboard();
-    // Converted with the clipboard closed: it is not to be held longer than
-    // the reading takes.
+    // Convert after closing, so the clipboard is not held longer than needed.
     if (dib) {
         if (dib_to_png(dib, dib_length, &clip->data, &clip->length)) kind = M0110_CLIP_PNG;
         free(dib);
@@ -413,9 +395,9 @@ int32_t m0110_clip_write_text(void *owner, const uint8_t *utf8, uint32_t length)
     int wide = MultiByteToWideChar(CP_UTF8, 0, text, (int)at + 1, NULL, 0);
     wchar_t *unicode = wide > 0 ? (wchar_t *)malloc((size_t)wide * sizeof(wchar_t)) : NULL;
     int ok = 0;
+    // Retry the clipboard for about a second, since a paste is waiting on this.
     if (unicode && MultiByteToWideChar(CP_UTF8, 0, text, (int)at + 1, unicode, wide) > 0 &&
         open_clipboard((HWND)owner, 100)) {
-        // About a second: a paste is waiting on this.
         ok = EmptyClipboard() && put(CF_UNICODETEXT, unicode, (size_t)wide * sizeof(wchar_t));
         CloseClipboard();
     }
@@ -439,7 +421,7 @@ int32_t m0110_clip_write_image(void *owner, const uint8_t *data, uint32_t length
         UINT w = 0, h = 0;
         if (bgra) IWICBitmapSource_GetSize(bgra, &w, &h);
         if (bgra && w && h) {
-            // The bitmap is what most programs paste: bottom-up, 32 bits.
+            // Most programs paste this bitmap. It is 32-bit and bottom-up.
             dib_size = sizeof(BITMAPINFOHEADER) + (size_t)w * h * 4;
             dib = (uint8_t *)malloc(dib_size);
             if (dib) {
@@ -460,8 +442,7 @@ int32_t m0110_clip_write_image(void *owner, const uint8_t *data, uint32_t length
                 }
                 free(top_down);
             }
-            // The PNG is for the programs that would otherwise lose the
-            // transparency. A JPEG that came across is passed on as one.
+            // The PNG is for programs that would otherwise lose transparency.
             if (ok && !encode(wic, bgra, 0, 0, &png, &png_size)) png = NULL;
         }
         if (bgra) IWICBitmapSource_Release(bgra);
@@ -496,8 +477,7 @@ void m0110_clip_free(m0110_clip *clip) {
 
 // ---- The keyboard on USB ----
 
-// Spelled out rather than taken from devpkey.h, which only defines storage for
-// it under initguid.h.
+// Defined here because devpkey.h only provides storage under initguid.h.
 static const DEVPROPKEY bus_reported_description = {
     {0x540b947e, 0x8b40, 0x45bc, {0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c, 0xbd, 0xa2}}, 4};
 
@@ -513,8 +493,7 @@ int32_t m0110_usb_present(uint16_t vendor, uint16_t product, const uint16_t *nam
         if (!SetupDiGetDeviceInstanceIdW(set, &info, id, MAX_DEVICE_ID_LEN, NULL)) continue;
         _wcsupr_s(id, MAX_DEVICE_ID_LEN);
         if (!wcsstr(id, pattern)) continue;
-        // The IDs are ZMK's defaults and shared by every ZMK keyboard, so the
-        // product name is what says this one is ours.
+        // Every ZMK keyboard shares these default IDs, so match the product name too.
         wchar_t description[256] = {0};
         DEVPROPTYPE type = 0;
         if (SetupDiGetDevicePropertyW(set, &info, &bus_reported_description, &type, (BYTE *)description,

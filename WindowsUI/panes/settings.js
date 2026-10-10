@@ -1,5 +1,4 @@
-// The Settings pane: the Mac's SettingsPane, with its Popup and Clipboard
-// tabs. Popup settings apply to the next popup; the Mac reads them at launch.
+// The Settings pane, matching SettingsPane on the Mac.
 
 import { fixed, h, panel, segments, slider, toggle } from '../ui.js';
 
@@ -26,8 +25,7 @@ function savedTab() {
 export function settingsPane(host, app) {
   let tab = savedTab();
   let rows = [];
-  /** Slider values while dragging, so the readout and the preview follow
-   *  the knob before the app has written them. */
+  /** Slider values while dragging, before the app has saved them. */
   const live = {};
   app.ui.previewSettings = live;
 
@@ -35,7 +33,7 @@ export function settingsPane(host, app) {
     rows = [];
     const tabs = segments([['Popup', 'Popup'], ['Clipboard', 'Clipboard']], tab, (next) => {
       tab = next;
-      try { localStorage.setItem('settingsTab', next); } catch { /* per-viewer only */ }
+      try { localStorage.setItem('settingsTab', next); } catch { /* not saved, which is fine */ }
       build();
       app.stage?.focus(tab === 'Popup' ? 'popup' : null);
       update(app);

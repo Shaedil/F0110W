@@ -2,12 +2,8 @@
 import PackageDescription
 
 #if os(Windows)
-// The Windows build is the HUD and a tray icon, drawn over a small Win32 layer
-// in C (Sources/CM0110Win), and the M0110 window: a WebView2 (Sources/CM0110Web)
-// showing the HTML interface in WindowsUI. It shares the files below with the
-// Mac app: what each event announces, presence, settings and the Studio RPC
-// client. The Mac's own window and the clipboard bridge are AppKit, SwiftUI and
-// SceneKit, and stay Mac-only. build.ps1 packages it.
+// The Windows build shares these files with the Mac app. Its C layers are
+// Sources/CM0110Win (Win32) and Sources/CM0110Web (WebView2).
 let shared = [
     "Announcer.swift",
     "Clipboard/ClipMessage.swift",
@@ -27,7 +23,7 @@ let shared = [
     "UI/M0110Layout.swift",
 ]
 
-// The WebView2 SDK, which tools/fetch-webview2.ps1 puts here.
+// tools/fetch-webview2.ps1 downloads the WebView2 SDK here.
 let webView2 = Context.packageDirectory + "/.deps/webview2/build/native"
 
 let package = Package(

@@ -4,51 +4,33 @@ import SwiftUI
 /// Apple logo sits in a recess in the bottom-left corner, where the bottom row
 /// leaves a unit empty.
 ///
-/// Geometry is in the same hundredths-of-a-key-unit space as `DisplayKey`, so
-/// the case and the key overlay cannot drift apart.
-///
-/// ## The bezel differs between the variants
-///
-/// The compact M0110's flat is thin along the top and bottom and about three
-/// times as wide down each side; drawn as an even margin the board comes out
-/// too square. The M0110A is a plain even frame. See `Bezel`.
-///
-/// ## A flat bezel
-///
-/// The bezel takes no gradient, chamfer or drop shadow. Shading it made the
-/// case read as a rendered object floating over the page; the real thing is a
-/// large matte surface with no visible falloff across it, and a flat fill
-/// leaves the black plate and the keycaps to do the work.
+/// Sizes are in hundredths of a key unit, the same as `DisplayKey`. The bezel is
+/// a flat fill with no shading, like the matte plastic of the real case.
 struct BoardCase: View {
-    /// Key-field width in unit-hundredths (1500 for the M0110, 1960 for the A).
+    /// Key-field width in hundredths of a key unit (1500 for the M0110, 1960 for the A).
     let unitsWide: Int32
-    /// The plate blocks the keys sit on, in unit-hundredths.
+    /// The plate blocks the keys sit on.
     let wells: [CGRect]
-    /// Rectangles bitten out of a plate block, where the bezel shows through.
-    /// The M0110's bottom row is inset at both ends, and on the real board those
-    /// two gaps are case. Nothing is drawn for them: they are holes in the
-    /// plate's outline, so the bezel behind shows.
+    /// Notches cut out of a plate block so the bezel shows through. The M0110's
+    /// bottom row is inset at both ends, and those gaps are case on the real board.
     var bezelPatches: [CGRect] = []
     /// Where the Apple logo goes, in key-field coordinates. Nil on the M0110A,
-    /// whose bottom row runs the full width and leaves no room for it.
+    /// whose bottom row runs the full width.
     var logoCell: CGRect?
-    /// Points per unit-hundredth.
+    /// Points per hundredth of a key unit.
     let scale: CGFloat
 
-    /// Bezel widths, in unit-hundredths. Per variant, because the two boards
-    /// are not the same shape.
+    /// Bezel widths per variant, in hundredths of a key unit.
     struct Bezel {
         let side: CGFloat
         let top: CGFloat
         let bottom: CGFloat
 
-        /// The compact M0110: thin along the top and bottom, two and a half
-        /// times as wide down each side.
+        /// The compact M0110 has much wider sides than top and bottom. An even
+        /// margin makes the board look too square.
         static let m0110 = Bezel(side: 125, top: 50, bottom: 50)
 
-        /// The M0110A: an even frame all the way round. The extra width down
-        /// the sides belongs to the compact board; the A is wide enough already
-        /// that repeating it would leave the case looking stretched.
+        /// The M0110A has an even frame. Wide sides would make it look stretched.
         static let m0110a = Bezel(side: 50, top: 50, bottom: 50)
     }
 
@@ -80,7 +62,6 @@ struct BoardCase: View {
         RoundedRectangle(cornerRadius: shellRadius, style: .continuous)
     }
 
-    /// One flat colour. See the note above.
     private var shell: some View {
         shellShape
             .fill(Theme.caseFlat)
@@ -89,42 +70,21 @@ struct BoardCase: View {
 
     // MARK: - Plate
 
-    /// Black showing between two neighbouring keycaps, in unit-hundredths.
-    ///
-    /// One constant drives every gap in the drawing. It used to be two: a
-    /// point-valued gap between caps and a unit-valued plate inset. Those are
-    /// different units, so they could not stay in step at any scale, and the
-    /// border around the block came out about four times the gaps inside it.
+    /// Gap between neighbouring keycaps, in hundredths of a key unit. Every gap
+    /// in the drawing is based on this.
     static let keyGap: CGFloat = 7
 
-    /// How far the plate extends past the key field on every side.
-    ///
-    /// Exactly half a gap. Each cap already holds back half a gap inside its
-    /// own cell, so half a gap of plate beyond the field makes the outer border
-    /// measure the same as the gap between two caps.
+    /// How far the plate extends past the key field. Each cap already leaves half
+    /// a gap inside its cell, so this makes the outer border match the gaps between caps.
     static var plateInset: CGFloat { keyGap / 2 }
 
-    /// Corner radius of the black, applied to every corner of its outline.
+    /// Corner radius for every corner of the plate outline.
     static let plateRadius: CGFloat = 13
 
-    /// The black plate the keys stand on, which is what shows in the gaps
-    /// between caps.
+    /// The black plate that shows in the gaps between caps.
     ///
-    /// Drawn as **one rounded polygon** rather than a rounded rectangle with
-    /// beige patches laid over its corners, because:
-    ///
-    ///  1. A notch in an edge creates three corners, two convex and one
-    ///     concave, and a rectangular patch can only round the concave one.
-    ///     The other two are T-junctions between the patch's edge and the
-    ///     plate's, and no corner radius on a *rectangle* can round them.
-    ///  2. Two shapes sharing a path are each antialiased on their own, and
-    ///     their partial coverages do not add back to one. Along a straight
-    ///     edge that is an invisible hairline; along a corner arc it reads as a
-    ///     dark crescent.
-    ///
-    /// As one path, every corner is just a corner, and
-    /// `addArc(tangent1End:tangent2End:radius:)` rounds convex and concave
-    /// alike.
+    /// Drawn as one rounded polygon so every notch corner gets rounded. Separate
+    /// overlapping shapes leave dark antialiasing seams along curved edges.
     private func plateView(_ well: CGRect) -> some View {
         let plate = well.insetBy(dx: -Self.plateInset, dy: -Self.plateInset)
         let points = outline(for: plate).map {
@@ -136,12 +96,8 @@ struct BoardCase: View {
             .fill(Theme.plate)
     }
 
-    /// The outline of one plate block, clockwise, in field coordinates.
-    ///
-    /// The only notches this board has are at the two bottom corners, where the
-    /// bottom row is inset at each end, so rather than general polygon
-    /// subtraction this handles exactly that case: a rectangle with up to one
-    /// bite out of each bottom corner.
+    /// The outline of one plate block, clockwise, in field coordinates. Only
+    /// handles a notch at each bottom corner, since this board has no others.
     private func outline(for plate: CGRect) -> [CGPoint] {
         let e: CGFloat = 0.5
         let bottom = bezelPatches.filter {
@@ -178,39 +134,20 @@ struct BoardCase: View {
 
     // MARK: - Emboss
 
-    /// The Apple logo in a rounded-square recess cut into the bezel.
-    ///
-    /// The recess is what gives the logo its contrast. Moulded flush onto the
-    /// case, in the case's own beige, the logo is a shape with nothing behind
-    /// it and all but disappears. Cutting a pocket puts a shaded floor behind
-    /// the relief, and the two edges of the pocket read as depth in the
-    /// surrounding plastic.
-    ///
-    /// Lighting is the inverse of a raised object's. With the light at the
-    /// lower left, a proud edge is bright on its lower-left face; the *inside*
-    /// of a pocket is the other way round, with its lower-left wall shading the
-    /// floor and its upper-right wall catching the light. Getting that
-    /// backwards makes a recess look like a sticker.
-    ///
-    /// The glyph, as a fraction of the pocket.
+    /// Size of the Apple logo as a fraction of its recess. The recess is there
+    /// because a flush logo in the case color disappears. Its lower-left wall is
+    /// in shadow and its upper-right wall is lit, the opposite of a raised edge.
     private static let glyphFill: CGFloat = 0.72
 
-    /// A square, with two of its edges alignments and two of them gaps.
-    ///
-    /// Left edge flush with the column of keys above it, bottom edge flush with
-    /// the bottom of the spacebar beside it. The top and right edges are the
-    /// free ones, and each clears its neighbouring key by `logoKeyGap`, which
-    /// is wider than the gap between two keycaps because the logo is case
-    /// rather than a key and should not read as one.
-    ///
-    /// This closes only because `M0110Layout.appleLogoCell` is square; see the
-    /// note on `bottomRowLeftInset`.
+    /// Gap between the logo recess and its neighbouring keys. It is wider than a
+    /// key gap so the logo doesn't look like a key. This only works because
+    /// `M0110Layout.appleLogoCell` is square.
     private static let logoKeyGap: CGFloat = keyGap * 2
 
     private func appleLogo(in cell: CGRect) -> some View {
         let half = Self.keyGap / 2
-        // Square, anchored to its two alignment edges, sized so its two gap
-        // edges each clear their neighbouring key by `logoKeyGap`.
+        // Left edge lines up with the keys above and bottom edge with the spacebar.
+        // The top and right edges clear their neighbours by `logoKeyGap`.
         let sideUnits = min(cell.width, cell.height) - Self.logoKeyGap
         let box = CGRect(x: cell.minX + half,
                          y: cell.maxY - half - sideUnits,
@@ -220,8 +157,8 @@ struct BoardCase: View {
         let pocket = RoundedRectangle(cornerRadius: max(2, 16 * scale), style: .continuous)
         let cut = LinearGradient(colors: [.black.opacity(0.28), .white.opacity(0.38)],
                                  startPoint: .bottomLeading, endPoint: .topTrailing)
-        // The logo itself, moulded proud of the pocket floor: a light copy
-        // toward the light, a dark copy away from it, the face on top.
+        // Raised logo: a light copy offset toward the light, a dark copy away
+        // from it, then the face on top.
         let relief = max(0.6, 1.4 * scale)
         return ZStack {
             pocket

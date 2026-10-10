@@ -1,8 +1,7 @@
 import Foundation
 
-// Writes WindowsUI/fixture.json: what the Windows app sends its page, built by
-// the same Swift (KeymapModel, M0110Layout, CapLegend, HIDKeycodes) from this
-// repo's keymap, so the page can be previewed in a browser on a Mac.
+// Writes WindowsUI/fixture.json, the same data the Windows app sends its page,
+// so the page can be previewed in a browser on a Mac.
 
 let kp: Int32 = 5, trans: Int32 = 1, bt: Int32 = 2, out: Int32 = 3, lt: Int32 = 4
 let unlock: Int32 = 6, boot: Int32 = 7

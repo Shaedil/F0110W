@@ -3,9 +3,7 @@ import XCTest
 
 @testable import M0110HUD
 
-// The Windows clipboard courier against the keyboard's frames, as
-// helper/PROTOCOL.md describes them, with a clipboard and a clock of the
-// test's own.
+// Tests the Windows clipboard courier with the frames from helper/PROTOCOL.md.
 
 private final class FakeClipboard: ClipboardAccess {
     private(set) var sequence: UInt32 = 1
@@ -35,7 +33,6 @@ private final class FakeClipboard: ClipboardAccess {
     }
 }
 
-/// Runs scheduled work when told to, in time order.
 private final class Clock {
     private var now: TimeInterval = 0
     private var next: UInt32 = 1
@@ -89,7 +86,6 @@ final class WinClipCourierTests: XCTestCase {
         courier.start()
     }
 
-    /// A clip as the keyboard delivers it, in frames.
     private func deliver(_ payload: [UInt8], opaque: Bool = false) -> UInt32 {
         for frame in ClipWire.transfer(payload, flags: opaque ? ClipWire.opaque : 0, frameCap: 64) {
             courier.receive([UInt8](frame))
@@ -203,7 +199,7 @@ final class WinClipCourierTests: XCTestCase {
         XCTAssertEqual(frames[1], [UInt8](ClipWire.hold(ClipWire.holdOff)))
         XCTAssertEqual(clips.last?.payload, Array("newer".utf8))
 
-        // The INLINE turns up anyway: acknowledged, not placed.
+        // A late INLINE is acknowledged but not placed on the clipboard.
         let crc = deliver(ClipMessage.inline(kind: .text, id: id, content: Array("old".utf8)).encoded, opaque: true)
         XCTAssertTrue(clipboard.written.isEmpty)
         XCTAssertEqual(frames.last, [UInt8](ClipWire.ack(crc: crc)))

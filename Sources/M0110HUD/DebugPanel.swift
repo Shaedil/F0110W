@@ -1,14 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Drives the HUD by hand, for iterating on its look without the keyboard.
-///
-/// The link events go through the same `AppDelegate` handlers that
-/// `BluetoothMonitor` calls, so the low-battery latch, the milestones and the
-/// suppress/disconnect switches all behave as they do for real. Everything the
-/// panel holds is saved as it changes and the last HUD is shown again at
-/// launch, so a rebuild from tools/hud-dev.sh lands back where it left off with
-/// the change already on screen.
+/// Drives the HUD by hand, for working on its look without the keyboard. Events go through
+/// the same `AppDelegate` handlers `BluetoothMonitor` calls, so they behave as they do for real.
+/// State is saved and the last HUD is shown again at launch, so a rebuild from
+/// tools/hud-dev.sh shows the change right away.
 @MainActor
 final class DebugModel: ObservableObject {
     enum Link: String { case down, up }
@@ -21,7 +17,7 @@ final class DebugModel: ObservableObject {
     @Published private(set) var link: Link
     @Published var battery: Double { didSet { save("battery", battery) } }
     @Published private(set) var log: [String] = []
-    /// Mirrors of the app's persisted latch, refreshed after every event.
+    /// Copies of the app's saved alert state, refreshed after every event.
     @Published private(set) var alertArmed = true
     @Published private(set) var milestone: Int?
     @Published private(set) var tourStep: Int
@@ -56,12 +52,10 @@ final class DebugModel: ObservableObject {
 
     // MARK: Animation
 
-    /// The state whose animation is being edited.
     @Published var editingKind: HUDKind = .disconnected
     @Published private(set) var styles: [HUDKind: HUDStyle]
 
-    /// A binding into one field of the edited state's style. Every change is
-    /// pushed to the HUD and shown at once, so options can be flicked through.
+    /// Each change goes to the HUD and shows right away, so options are quick to compare.
     func style<T>(_ field: WritableKeyPath<HUDStyle, T>) -> Binding<T> {
         Binding(
             get: { [self] in styles[editingKind]![keyPath: field] },
@@ -80,8 +74,7 @@ final class DebugModel: ObservableObject {
         preview(editingKind)
     }
 
-    /// Show a state the way it arrives for real: from off screen, so the
-    /// entrance plays too.
+    /// Shows the state from off screen so the entrance animation plays too.
     func preview(_ kind: HUDKind) {
         app.hud.tearDown()
         show(kind, withBattery: kind != .disconnected)
@@ -181,8 +174,7 @@ final class DebugModel: ObservableObject {
         app.hud.pinned = pinned
         app.hud.styles = styles
         app.hud.onShow = { [weak self] kind, name, battery in self?.didShow(kind, name, battery) }
-        // Stands in for the firmware command: a click brings the keyboard
-        // back the way a real switch would be reported.
+        // Stands in for the firmware command and reports the switch like the keyboard would.
         app.hud.onMoveBack = { [weak self] in
             guard let self else { return }
             append("· Move back clicked")
@@ -194,7 +186,6 @@ final class DebugModel: ObservableObject {
         syncLatch()
     }
 
-    /// Put the last HUD back on screen, so a relaunch shows the change at once.
     func replay() {
         guard let kind = store.string(forKey: "debug.lastKind").flatMap(HUDKind.init(rawValue:)) else { return }
         let level = store.object(forKey: "debug.lastBattery") as? Int
@@ -205,12 +196,10 @@ final class DebugModel: ObservableObject {
 
     // MARK: Clock and profiles
 
-    /// How far the panel's clock runs ahead of the real one, so "first connect
-    /// of the day" can be reached without waiting for tomorrow.
+    /// Added to the real clock, to test the day's first connect without waiting a day.
     @Published private(set) var clockOffset: TimeInterval
     var now: Date { Date().addingTimeInterval(clockOffset) }
 
-    /// Which profile is this computer, and which one the keyboard is on.
     @Published var ownProfile: Int { didSet { save("ownProfile", ownProfile) } }
     @Published private(set) var keyboardProfile: Int?
 
@@ -255,8 +244,7 @@ final class DebugModel: ObservableObject {
         event(atLaunch ? "connect (already up at launch)" : "connect\(withBattery ? " @ \(level)%" : ", battery pending")") {
             setLink(.up)
             app.handleConnect(name: name, battery: withBattery ? level : nil, isInitial: atLaunch, now: now)
-            // The keyboard reports its profiles on connect, which only sets
-            // the scene; it is typing here, so this computer is the active one.
+            // On connect the keyboard is typing here, so this computer's profile is active.
             keyboardProfile = ownProfile
             app.handleProfileSwitch(name: name, active: ownProfile, own: ownProfile)
         }
@@ -296,8 +284,7 @@ final class DebugModel: ObservableObject {
 
     // MARK: Tour
 
-    /// A walk through a day: one transition per click, covering each edge
-    /// that changes what the HUD says.
+    /// A simulated day, one step per click, covering each change in what the HUD says.
     var tour: [(String, () -> Void)] {
         let other = (ownProfile + 1) % ProfileNames.count
         return [
@@ -379,8 +366,7 @@ final class DebugModel: ObservableObject {
     }
 
     private func applyAppearance() {
-        // The panel follows the app when nothing is forced on it, which is the
-        // same live path a system theme change takes.
+        // Nil follows the system, which uses the same live path as a system theme change.
         NSApp.appearance = switch appearance {
         case "light": NSAppearance(named: .aqua)
         case "dark": NSAppearance(named: .darkAqua)
@@ -639,8 +625,7 @@ struct DebugPanelView: View {
     }
 }
 
-/// The window around the panel. Its frame is autosaved, so it reopens where it
-/// was left across rebuilds.
+/// Its frame is autosaved, so it reopens in the same place across rebuilds.
 @MainActor
 final class DebugPanelController {
     private let window: NSWindow

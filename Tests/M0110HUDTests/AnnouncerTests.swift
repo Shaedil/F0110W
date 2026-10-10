@@ -20,7 +20,7 @@ final class AnnouncerTests: XCTestCase {
         return a
     }()
 
-    /// Noon on a fixed day, so hour offsets stay inside it.
+    /// Noon on a fixed day, so hour offsets stay on the same day.
     private let noon = Calendar.current.date(
         from: DateComponents(year: 2026, month: 10, day: 7, hour: 12))!
     private func at(hours: Double) -> Date { noon.addingTimeInterval(hours * 3600) }

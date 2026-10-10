@@ -2,24 +2,11 @@ import AppKit
 import CoreBluetooth
 import IOKit
 
-/// Carries this Mac's clipboard to the keyboard, and takes delivery of clips
-/// the keyboard is carrying from another computer.
-///
-/// A keyboard cannot read a clipboard, so the copy side needs someone to hand
-/// the text over: this. Each time the pasteboard changes, the new text is
-/// written to the firmware's clipboard service. The keyboard holds it, and
-/// after a switch to another computer either gives it to the bridge running
-/// there, which puts it on that pasteboard, or types it out if nothing is
-/// running there.
-///
-/// This class is the Bluetooth link: finding the keyboard, and getting frames
-/// to and from it. What goes in them, including how an image gets across, is
-/// `ClipCourier`'s business.
-///
-/// ## Threading
-///
-/// Everything runs on the main queue: CoreBluetooth is given it, the timers
-/// are scheduled on it, and `NSPasteboard` wants it.
+/// Bluetooth link to the keyboard's clipboard service. The keyboard cannot
+/// read a clipboard, so this writes each new copy to it. After a switch, the
+/// keyboard hands the clip to the bridge on the other computer, or types it
+/// out if none is running. `ClipCourier` decides what goes in the frames.
+/// CoreBluetooth, the timers and `NSPasteboard` all run on the main queue.
 final class ClipboardBridge: NSObject {
     /// Must match `CLIP_UUID` in the firmware's `config/clipboard/clipboard.c`.
     static let serviceUUID = CBUUID(string: "B02961DE-EEC8-443B-9EDE-2919A6354188")
@@ -27,8 +14,7 @@ final class ClipboardBridge: NSObject {
     static let txUUID = CBUUID(string: "B02961E0-EEC8-443B-9EDE-2919A6354188")
     private static let batteryServiceUUID = CBUUID(string: "180F")
 
-    /// `UserDefaults` key for the on/off switch. Read live, so the Settings
-    /// pane takes effect without a relaunch.
+    /// `UserDefaults` key for the on/off switch. Read live so a change in Settings applies at once.
     static let enabledKey = "clipboardSync"
 
     /// ZMK's default USB IDs, which this firmware keeps.
@@ -37,8 +23,8 @@ final class ClipboardBridge: NSObject {
 
     private static let tickInterval: TimeInterval = 2
     private static let pasteboardInterval: TimeInterval = 0.3
-    /// Ticks between HELLOs. The firmware stops waiting on a helper that
-    /// misses an acknowledgement; this is what gets it trusted again.
+    /// Ticks between HELLOs. The firmware stops trusting a helper that misses
+    /// an ack, and a HELLO restores it.
     private static let helloEveryTicks = 15
 
     private let deviceName: String
@@ -47,16 +33,13 @@ final class ClipboardBridge: NSObject {
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var rx: CBCharacteristic?
-    /// Notifications are on, so the keyboard's replies and deliveries arrive.
     private var subscribed = false
-    /// HELLO has been sent: the keyboard counts this Mac as having a helper.
+    /// HELLO was sent, so the keyboard counts this Mac as having a helper.
     private var announced = false
     private var retryAfter = Date.distantPast
-    /// The keyboard has no usable clipboard service, which is what older
-    /// firmware looks like. It is left completely alone until it reconnects,
-    /// which a reflash forces: probing it again on a timer opens a second GATT
-    /// connection to the keyboard every time, and the HUD has no business
-    /// doing that to firmware that cannot answer.
+    /// The keyboard has no usable clipboard service (older firmware). Leave it
+    /// alone until it reconnects, which a reflash forces. Probing on a timer
+    /// would open a second GATT connection every time.
     private var unsupported = false
     private var ticksSinceHello = 0
     private var lastLogged = ""
@@ -100,15 +83,14 @@ final class ClipboardBridge: NSObject {
         pasteboardTimer = watch
     }
 
-    /// Tell the keyboard this helper is going, so the next paste on this Mac
-    /// does not wait on an acknowledgement that will never come.
+    /// Tells the keyboard this helper is leaving, so the next paste here does
+    /// not wait for an ack that will never come.
     func shutdown() {
         tickTimer?.invalidate()
         pasteboardTimer?.invalidate()
         courier.stop()
         guard announced else { return }
-        // Nothing may be left behind the goodbye either: the app is about to
-        // exit, and half a clip would sit in the keyboard until it expired.
+        // Drop any queued clip too, or half a clip would sit in the keyboard until it expired.
         outbox.dropClip()
         send(ClipWire.bye)
         announced = false
@@ -116,8 +98,6 @@ final class ClipboardBridge: NSObject {
 
     // MARK: - Link
 
-    /// Logs a line unless it repeats the last one, so a condition that holds
-    /// across many ticks is reported when it starts rather than every time.
     private func logOnce(_ message: String) {
         guard message != lastLogged else { return }
         lastLogged = message
@@ -137,8 +117,8 @@ final class ClipboardBridge: NSObject {
         }
         guard subscribed, peripheral.state == .connected else { return }
 
-        // CoreBluetooth signals when it can take more writes, but a signal
-        // missed here would strand the queue for good.
+        // CoreBluetooth says when it can take more writes, but one missed
+        // signal would stall the queue forever.
         pump()
 
         if enabled, !announced {
@@ -153,12 +133,9 @@ final class ClipboardBridge: NSObject {
     }
 
     /// The keyboard is already connected to macOS for HID, so it is retrieved
-    /// rather than scanned for.
-    ///
-    /// The lookup returns peripherals known to have any of the services
-    /// named. The clipboard service is not known until it has been discovered
-    /// once, and macOS keeps the HID service to itself, so on a freshly
-    /// flashed keyboard it is the battery service that finds it.
+    /// instead of scanned for. The lookup matches by service. macOS hides the
+    /// HID service, and the clipboard service is unknown until discovered once,
+    /// so a freshly flashed keyboard is found by its battery service.
     private func search() {
         guard enabled, !unsupported, Date() >= retryAfter else { return }
 
@@ -200,8 +177,7 @@ final class ClipboardBridge: NSObject {
         drop()
     }
 
-    /// The keyboard went away and came back, so it may be running new
-    /// firmware. Whatever was concluded about its services no longer holds.
+    /// The keyboard may have new firmware now, so forget what was learned about it.
     func keyboardReconnected() {
         unsupported = false
         retryAfter = .distantPast
@@ -227,9 +203,8 @@ final class ClipboardBridge: NSObject {
         pump()
     }
 
-    /// Writes are without response, so a clip crosses in a handful of
-    /// connection events instead of one round trip per frame. CoreBluetooth
-    /// says when it can take more.
+    /// Writes go without response, so a clip takes a few connection events
+    /// instead of a round trip per frame.
     private func pump() {
         guard let peripheral, let rx, peripheral.state == .connected else { return }
         while peripheral.canSendWriteWithoutResponse, let frame = outbox.next() {
@@ -237,19 +212,15 @@ final class ClipboardBridge: NSObject {
         }
     }
 
-    /// Queues a clip. A newer clip replaces whatever of the last one is still
-    /// queued.
     private func sendClip(_ payload: [UInt8], flags: UInt8) {
         let cap = peripheral?.maximumWriteValueLength(for: .withoutResponse) ?? 20
         outbox.sendClip(ClipWire.transfer(payload, flags: flags, frameCap: cap))
         pump()
     }
 
-    /// Whether the keyboard is also plugged into this Mac.
-    ///
-    /// The firmware needs to know, because it cannot tell on its own that its
-    /// USB port and one of its Bluetooth profiles are the same computer. If it
-    /// guessed wrong it would type this Mac's own clipboard back at it.
+    /// Whether the keyboard is also plugged into this Mac by USB. The firmware
+    /// cannot tell on its own that its USB port and a Bluetooth profile are the
+    /// same computer, and would type this Mac's own clipboard back at it.
     private func keyboardIsOnUSB() -> Bool {
         guard let matching = IOServiceMatching("IOUSBHostDevice") as NSMutableDictionary? else {
             return false
@@ -262,8 +233,7 @@ final class ClipboardBridge: NSObject {
         else { return false }
         defer { IOObjectRelease(iterator) }
 
-        // The IDs are ZMK's defaults and shared by every ZMK keyboard, so the
-        // product name is what says this one is ours.
+        // Every ZMK keyboard shares these IDs, so match on the product name too.
         while case let service = IOIteratorNext(iterator), service != 0 {
             defer { IOObjectRelease(service) }
             let name = IORegistryEntryCreateCFProperty(
@@ -303,9 +273,8 @@ extension ClipboardBridge: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        // `drop` cancels the connection itself and has already let go of the
-        // peripheral by the time that lands here; only an unexpected loss
-        // should reset the retry clock.
+        // `drop` clears `peripheral` before its own disconnect lands here, so
+        // only an unexpected loss resets the retry clock.
         guard peripheral === self.peripheral else { return }
         log("clipboard: link down")
         drop()
@@ -344,8 +313,7 @@ extension ClipboardBridge: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
-            // The service needs an encrypted link, so this is where a keyboard
-            // that is connected but not paired shows up.
+            // The service needs an encrypted link, so an unpaired keyboard fails here.
             log("clipboard: could not subscribe (\(error.localizedDescription))")
             markUnsupported()
             return

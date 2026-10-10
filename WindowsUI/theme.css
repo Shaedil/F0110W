@@ -1,6 +1,5 @@
-/* The Mac window's Theme.swift, token for token. The ground is the same
-   near-black in both modes; panels stay dark in light mode too, and only the
-   sidebar turns white. */
+/* Tokens copied from the Mac's Theme.swift. The background and panels stay
+   dark in light mode. Only the sidebar turns white. */
 
 :root {
   color-scheme: dark;
@@ -42,16 +41,13 @@
   --spacebar-top: #b6b7ad;
   --spacebar-skirt: #8e8f87;
 
-  /* prismorphism's glass, for the content panels: white at a few percent over
-     the ground, so a panel reads a step lighter than what is behind it and
-     lets the ambient glow through. The same in both modes, because the
-     ground is near-black in both. */
+  /* Panel glass: a few percent of white, so panels look a bit lighter than the
+     background and still let the glow through. */
   --glass: rgba(255, 255, 255, 0.045);
   --glass-stroke: rgba(255, 255, 255, 0.10);
 
-  /* The sky's triad, which prism.js sets each minute; the noon prism until
-     it does. Tints for glows, rims, shines and washes; marks for the few
-     things that carry a value. */
+  /* Noon colours until prism.js sets them. Tints are for glows and rims, marks
+     are for things that show a value. */
   --prism-t1: 255, 30, 140;
   --prism-t2: 26, 229, 229;
   --prism-t3: 255, 232, 59;
@@ -61,8 +57,6 @@
   --prism-glow: 0.96;
   --sun-x: 50%;
   --sun-y: 22%;
-  /* PrismTokens, several times prismorphism's web strengths, for a desktop
-     window at arm's length. The corner-to-corner ones are below. */
   --prism-shine: linear-gradient(to right, rgba(var(--prism-t1), 0) 5%, rgb(var(--prism-t1)) 20%,
                                  rgb(var(--prism-t2)) 50%, rgb(var(--prism-t3)) 80%, rgba(var(--prism-t3), 0) 95%);
   --prism-marks: linear-gradient(to right, rgb(var(--prism-m1)), rgb(var(--prism-m2)), rgb(var(--prism-m3)));
@@ -74,11 +68,8 @@
   --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
 }
 
-/* The triad corner to corner, top left to bottom right along the box's own
-   diagonal, as SwiftUI runs it: a wide box goes mostly left to right, the
-   tall sidebar mostly top to bottom. CSS's "to bottom right" would do the
-   reverse, so prism.js gives each such box its diagonal's angle as --diag.
-   Declared on every element, so var(--diag) is each box's own. */
+/* Declared on every element so var(--diag) uses each box's own angle. prism.js
+   sets --diag so the gradient follows the box's diagonal, like SwiftUI. */
 * {
   --prism-wash: linear-gradient(var(--diag, 135deg), rgba(var(--prism-t1), 0.08), rgba(var(--prism-t2), 0.08),
                                 rgba(var(--prism-t3), 0.08));
@@ -134,12 +125,8 @@ html, body {
   cursor: default;
 }
 
-/* The ground: near-black with prismorphism's sun-tracking ambient in it,
-   pm-ambient-chronos. Three soft glows of the triad, the strongest centred
-   where the sun is, so it climbs the window through the morning and sets at
-   the far edge, and all of them dim, though not out, at night. The Mac
-   draws the sun's glow first, so it is the bottom layer: CSS lists layers
-   top first. */
+/* The strongest glow follows the sun. The Mac draws it first, and CSS lists
+   layers top first, so it goes last here. */
 body {
   background:
     radial-gradient(ellipse 80% 70% at 50% 60%,
@@ -153,8 +140,7 @@ body {
 
 button { font: inherit; color: inherit; }
 
-/* A rim one pixel wide through `--rim`, drawn inside the box's own edge:
-   prismorphism's pm-prismatic-border-rounded. */
+/* A 1px rim in `--rim`, drawn inside the box's edge. */
 .prism-rim::after,
 .pill.prominent::after,
 .segments button.active::after {
@@ -170,16 +156,13 @@ button { font: inherit; color: inherit; }
   mask-composite: exclude;
 }
 
-/* Type scale: Theme.sectionTitle, body, small, toolbar. */
 .section-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .body { font-size: 12px; }
 .small { font-size: 11px; }
 .dim { color: var(--text-dim); }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
-/* Panel: glass with the triad washed across it, a faint stipple (frosted
-   glass, but glass from 1984), a hairline, and the triad's shine along the
-   top edge: prismorphism's pm-glass pm-prismatic-shine. */
+/* ::after is the coloured shine on the top edge. ::before is a faint dot pattern. */
 .panel {
   position: relative;
   padding: 16px;
@@ -208,7 +191,6 @@ button { font: inherit; color: inherit; }
   background-size: 2px 2px;
 }
 
-/* PillButtonStyle. */
 .pill {
   display: inline-flex;
   align-items: center;
@@ -226,13 +208,10 @@ button { font: inherit; color: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Prominent: a triad wash under a triad rim, prismorphism's tinted glass
-   button with the triad standing in for the brand accent. */
 .pill.prominent { position: relative; background: var(--prism-selected); color: var(--text); border-color: transparent; }
 .pill:active:not(:disabled) { opacity: 0.7; }
 .pill:disabled { opacity: 0.4; }
 
-/* SegmentPills. */
 .segments {
   display: inline-flex;
   gap: 3px;
@@ -254,7 +233,6 @@ button { font: inherit; color: inherit; }
 .segments button { position: relative; }
 .segments button.active { background: var(--prism-selected); color: var(--text); }
 
-/* ThemeSwitch. */
 .switch {
   position: relative;
   flex: none;
@@ -285,7 +263,6 @@ button { font: inherit; color: inherit; }
 }
 .switch.on::after { transform: translateX(14px); background: #fff; }
 
-/* ThemeSlider. */
 .slider { position: relative; height: 13px; touch-action: none; }
 .slider .track {
   position: absolute;
@@ -303,8 +280,6 @@ button { font: inherit; color: inherit; }
   top: 4.5px;
   height: 4px;
   border-radius: 2px;
-  /* The whole triad across whatever is filled, as prismorphism's progress
-     bars draw it. */
   background: var(--prism-marks);
 }
 .slider .knob {
@@ -318,7 +293,6 @@ button { font: inherit; color: inherit; }
   border: 1px solid rgba(0, 0, 0, 0.3);
 }
 
-/* ThemeStepper. */
 .stepper { display: inline-flex; gap: 4px; }
 .stepper button {
   width: 20px;
@@ -334,7 +308,7 @@ button { font: inherit; color: inherit; }
 }
 .stepper button:disabled { opacity: 0.4; }
 
-/* A native text field, as the Mac's Bluetooth pane uses unthemed. */
+/* Plain text field. The Mac's Bluetooth pane does not theme it either. */
 .field {
   width: 220px;
   padding: 4px 7px;

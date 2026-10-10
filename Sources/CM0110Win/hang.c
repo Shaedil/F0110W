@@ -1,11 +1,6 @@
-// What the app was doing when it stopped answering.
-//
-// The app thread runs the tray, the HUD and the window, so when it stops
-// answering everything stops with it. A watchdog thread asks it a trivial
-// question every half second; when the answer is two seconds late, the
-// watchdog records where the thread is stuck, as a stack with names from the
-// .pdb shipped beside the executable, and the last things the app logged,
-// in %LOCALAPPDATA%\M0110HUD\hang.log. It costs nothing until something hangs.
+// Hang watchdog. A thread pings the app thread every 0.5 s. If a reply is 2 s
+// late, it writes the stuck stack (named from the .pdb next to the exe) and the
+// recent log lines to %LOCALAPPDATA%\M0110HUD\hang.log.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #endif
@@ -42,8 +37,7 @@ void m0110_trace(const char *line) {
 
 static HANDLE app_thread;
 static HWND watched;
-/// Open only while a report is written, and shared, so the log can be read
-/// while the app runs.
+/// Open only while writing, and shared, so the log can be read while the app runs.
 static FILE *report;
 
 static FILE *open_report(void) {
@@ -53,14 +47,13 @@ static FILE *open_report(void) {
     wcscat_s(path, MAX_PATH, L"\\M0110HUD");
     CreateDirectoryW(path, NULL);
     wcscat_s(path, MAX_PATH, L"\\hang.log");
-    // Kept to the last few hangs: start over past a megabyte.
+    // Start over past 1 MB, so the file keeps only the last few hangs.
     WIN32_FILE_ATTRIBUTE_DATA info;
     int fresh = GetFileAttributesExW(path, GetFileExInfoStandard, &info) && info.nFileSizeLow > 1024 * 1024;
     return _wfsopen(path, fresh ? L"w" : L"a", _SH_DENYNO);
 }
 
-/// The suspended thread's return addresses, by unwinding its x64 stack.
-/// Nothing here allocates or takes a lock the app thread could be holding.
+/// Unwinds the suspended x64 thread. Must not allocate or take locks, since that thread may hold them.
 static int capture(DWORD64 *frames, int capacity) {
     int count = 0;
 #if defined(_M_X64) || defined(__x86_64__)
@@ -119,8 +112,7 @@ static void write_stack(DWORD64 *frames, int count) {
 }
 
 static void write_trace(void) {
-    // A thread hung while logging would hold this; then the lines are lost,
-    // not the report.
+    // A thread that hung while logging may hold this lock. Then skip the lines but still write the report.
     for (int tries = 0; !TryAcquireSRWLockShared(&trace_lock); tries++) {
         if (tries == 20) {
             fprintf(report, "  (recent log unavailable)\n");
@@ -174,10 +166,10 @@ static DWORD WINAPI watchdog(void *unused) {
             stuck_since = recorded_at = 0;
             continue;
         }
-        if (GetLastError() != ERROR_TIMEOUT) return 0; // The window is gone: the app is quitting.
+        if (GetLastError() != ERROR_TIMEOUT) return 0; // The window is gone, so the app is quitting.
         if (!stuck_since) stuck_since = asked;
         ULONGLONG now = GetTickCount64();
-        // Once on catching it, then every ten seconds while it lasts.
+        // Record once, then every 10 s while the hang lasts.
         if (!recorded_at || now - recorded_at >= 10000) {
             record(now - stuck_since, !recorded_at);
             recorded_at = now;

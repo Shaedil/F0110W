@@ -15,7 +15,7 @@ private func hex(_ string: String) -> [UInt8] {
     return bytes
 }
 
-/// The values the vectors in helper/PROTOCOL.md are made with.
+/// The ID and key used to build the test vectors in helper/PROTOCOL.md.
 private let vectorID: [UInt8] = Array(0...7)
 private let vectorKey: [UInt8] = Array(0x10...0x2F)
 
@@ -47,8 +47,7 @@ final class ClipMessageTests: XCTestCase {
         let v6 = try XCTUnwrap(ClipAddress([UInt8](repeating: 0xFD, count: 16)))
         let want = ClipDatagram.want(id: vectorID, port: 1, addresses: [v4, v6, v4])
 
-        // Room for the first and not the second; the third would fit and is
-        // still not slipped in past it out of order.
+        // Only the first address fits. The third would fit too, but order is kept.
         XCTAssertEqual(ClipDatagram(want.encoded(room: 22)),
                        .want(id: vectorID, port: 1, addresses: [v4]))
         XCTAssertEqual(ClipDatagram(want.encoded(room: 12)),
@@ -79,7 +78,6 @@ final class ClipMessageTests: XCTestCase {
         XCTAssertNil(ClipMessage([1, 2, 3]))
         XCTAssertNil(ClipMessage([9, 1] + vectorID))
         XCTAssertNil(ClipMessage([1, 99] + vectorID + vectorKey + [0, 0, 0]))
-        // Cut off in the middle of an address, and with an unknown family.
         XCTAssertNil(ClipMessage(Array(offer.dropLast())))
         XCTAssertNil(ClipMessage(Array(offer.dropLast(5)) + [7, 1, 2, 3, 4]))
         XCTAssertNil(ClipDatagram([1] + vectorID))
@@ -105,7 +103,7 @@ final class ClipOutboxTests: XCTestCase {
         XCTAssertEqual(outbox.next(), Data([1]))
         XCTAssertEqual(outbox.next(), Data([10]))
 
-        // Queued once the clip is under way: next out, in the order queued.
+        // Frames queued during a clip still go out before the rest of it.
         outbox.send(Data([2]))
         outbox.send(Data([3]))
         XCTAssertFalse(outbox.isEmpty)
@@ -159,7 +157,6 @@ final class ClipStreamTests: XCTestCase {
     }
 
     func testWhatIsSealedOpens() {
-        // Long enough for three records.
         let content = Data((0..<150_000).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
         let stream = [UInt8](ClipStream.seal(content, id: vectorID, key: vectorKey))
         var records: [[UInt8]] = []
@@ -183,9 +180,8 @@ final class ClipStreamTests: XCTestCase {
         relabelled[0] = 1
 
         XCTAssertNil(open([record0, flipped]))
-        // Passing a record off as the final one, to cut the content short.
+        // A record relabeled as the last one, which would cut the content short.
         XCTAssertNil(open([relabelled]))
-        // Out of order, replayed, and under another key.
         XCTAssertNil(open([record1, record0]))
         XCTAssertNil(open([record0, record0]))
         XCTAssertNil(open([record0, record1], key: Array(0x11...0x30)))
@@ -199,7 +195,6 @@ final class ClipStreamTests: XCTestCase {
     }
 }
 
-/// Spins the main run loop until `condition` holds.
 private func waitFor(_ what: String, timeout: TimeInterval = 5, file: StaticString = #filePath,
                   line: UInt = #line, until condition: () -> Bool) {
     let deadline = Date().addingTimeInterval(timeout)
@@ -214,16 +209,13 @@ private func settle(_ interval: TimeInterval) {
 }
 
 private let loopback = ClipAddress([127, 0, 0, 1])!
-/// TEST-NET-1: routed nowhere, so a connection to it never comes up.
+/// TEST-NET-1 is not routed, so a connection to it never comes up.
 private let nowhere = ClipAddress([192, 0, 2, 1])!
 
-/// A listener that takes connections and says nothing: a helper that has
-/// hung, or a network that swallows everything after the handshake.
+/// Accepts connections and never replies, like a helper that has hung.
 private final class SilentListener {
     private let listener: NWListener
     private var connections: [NWConnection] = []
-    /// Close a connection once this many bytes have come in on it, without
-    /// a word in reply.
     private let closeAfter: Int?
 
     private(set) var accepted = 0
@@ -288,10 +280,9 @@ final class ClipChannelTests: XCTestCase {
         }
         waitFor("the fetch to be given up on", timeout: 3) { fetched != nil }
         XCTAssertEqual(fetched, .some(nil))
-        // And the connection is not left open behind it.
         waitFor("the connection to close") { source.closedByPeer == 1 }
 
-        // Handing over to a peer that never reads to the end is the same.
+        // A push to a peer that never reads the whole stream also gives up.
         var taken: Bool?
         receiver.push(id: vectorID, key: vectorKey, content: Data(count: 200), to: [loopback],
                       port: source.port!) { taken = $0 }
@@ -313,7 +304,6 @@ final class ClipChannelTests: XCTestCase {
         settle(0.3)
         XCTAssertFalse(called)
 
-        // Called off before anything has connected.
         let early = receiver.fetch(id: vectorID, key: vectorKey, from: [nowhere], port: 9) { _ in
             called = true
         }
@@ -324,8 +314,7 @@ final class ClipChannelTests: XCTestCase {
 
     func testPushIsNotTakenUnlessTheReceiverSaysSo() throws {
         let content = Data(count: 1000)
-        // Reads the whole stream and closes, as a receiver that could not
-        // open it, or did not want it, does.
+        // The receiver reads the whole stream and closes without accepting it.
         let stream = 14 + ClipStream.headerLength + content.count + ClipStream.tagLength
         let receiver = try silent(closeAfter: stream)
         var taken: Bool?
@@ -472,7 +461,6 @@ final class ClipChannelTests: XCTestCase {
         XCTAssertNil(received)
         XCTAssertEqual(wrongKey, false)
 
-        // A different copy from the one being waited for, key or no key.
         var wrongID: Bool?
         source.push(id: Array(1...8), key: vectorKey, content: Data("x".utf8), to: [loopback],
                     port: receiver.port!) { wrongID = $0 }
@@ -502,14 +490,14 @@ final class ClipChannelTests: XCTestCase {
         let own = ClipChannel.localAddresses()
         XCTAssertTrue(own.allSatisfy(ClipChannel.reachable))
         XCTAssertLessThanOrEqual(own.count, ClipMessage.maxAddresses)
-        // IPv4 first.
+        // IPv4 addresses come first.
         XCTAssertEqual(own.map(\.isIPv4), own.map(\.isIPv4).sorted { $0 && !$1 })
     }
 }
 
-/// The keyboard as the helpers see it: one clip held, handed to the helper on
-/// the selected computer, RELAY passed to the other end, HOLD and ACK noted.
-/// The rules are the firmware's, in config/clipboard/clipboard.c.
+/// Fake keyboard that follows the firmware rules in config/clipboard/clipboard.c.
+/// It holds one clip, delivers it to the selected profile, passes RELAY frames
+/// on, and records HOLD and ACK frames.
 private final class FakeKeyboard {
     struct Clip {
         let bytes: [UInt8]
@@ -528,16 +516,15 @@ private final class FakeKeyboard {
     private(set) var selected = 0
     private var couriers: [Int: ClipCourier] = [:]
     private var incoming: [Int: ClipAssembler] = [:]
-    /// Where the clip in hand, or the one arriving, came from.
+    /// Profile the current or incoming clip came from.
     private var origin: Int?
-    /// The helper that last sent word to the origin.
+    /// The last profile that sent a RELAY to the origin.
     private var requester: Int?
 
     private(set) var holds: [Int: [UInt8]] = [:]
     private(set) var acks: [Int: [UInt32]] = [:]
     private(set) var relays: [Int: [[UInt8]]] = [:]
     private(set) var clears = 0
-    /// Every clip stored, in order: its flags and length.
     private(set) var stored: [(flags: UInt8, length: Int, origin: Int)] = []
 
     private func cap(_ profile: Int) -> Int { frameCaps[profile] ?? 62 }
@@ -567,12 +554,10 @@ private final class FakeKeyboard {
         deliver()
     }
 
-    /// The helper on `profile` is gone, and the keyboard knows it.
     func detach(_ profile: Int) {
         couriers[profile] = nil
     }
 
-    /// Puts a clip in the keyboard as if the helper on `origin` had sent it.
     func hold(_ bytes: [UInt8], flags: UInt8, from origin: Int) {
         requester = origin == self.origin ? requester : nil
         self.origin = origin
@@ -581,8 +566,7 @@ private final class FakeKeyboard {
         deliver()
     }
 
-    /// Frames of a clip for the helper on `profile`, as far as `frames` of
-    /// them: a delivery the keyboard breaks off.
+    /// Sends only the first `frames` frames of a clip, as if delivery was cut off.
     func deliverPart(_ bytes: [UInt8], to profile: Int, frames: Int) {
         for frame in ClipWire.transfer(bytes, flags: 0, frameCap: cap(profile)).prefix(frames) {
             toHelper(profile, [UInt8](frame))
@@ -678,8 +662,6 @@ final class ClipCourierTests: XCTestCase {
         keyboard = FakeKeyboard()
     }
 
-    /// A computer with a helper, on `profile`, that tells the other helper it
-    /// can be reached at `addresses`.
     private func computer(_ profile: Int, reachableAt addresses: [ClipAddress]) -> Computer {
         let pasteboard = NSPasteboard(name: .init("m0110-test-\(UUID().uuidString)"))
         let channel = ClipChannel()
@@ -701,7 +683,7 @@ final class ClipCourierTests: XCTestCase {
                         log: { lines })
     }
 
-    /// Noise, so that it does not compress and has to be scaled down to fit
+    /// Random noise does not compress, so the image must be scaled down to fit
     /// through the keyboard.
     private func noisePNG(side: Int) -> Data {
         let rep = NSBitmapImageRep(
@@ -743,7 +725,7 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the acknowledgement") { self.keyboard.acks[1] == [self.keyboard.clip!.crc] }
         XCTAssertNil(keyboard.holds[1])
 
-        // What was put there is not sent back as a copy made there.
+        // A clip received from the keyboard is not sent back as a new copy.
         b.courier.checkPasteboard()
         settle(0.2)
         XCTAssertEqual(keyboard.clip?.origin, 0)
@@ -767,16 +749,13 @@ final class ClipCourierTests: XCTestCase {
         keyboard.select(1)
         waitFor("the image") { b.pasteboard.data(forType: .png) == png }
         waitFor("the acknowledgement") { self.keyboard.acks[1] == [offerCRC] }
-        // Pastes were held back from the moment the offer arrived.
         XCTAssertEqual(keyboard.holds[1]?.first, ClipWire.holdSoon)
         XCTAssertNil(keyboard.relays[0])
         XCTAssertFalse(b.courier.busy)
 
-        // The form AppKit trades in is there for a program that wants it.
         XCTAssertNotNil(NSImage(pasteboard: b.pasteboard))
         XCTAssertNotNil(b.pasteboard.data(forType: .tiff))
 
-        // And it is not sent back.
         b.courier.checkPasteboard()
         settle(0.2)
         XCTAssertEqual(keyboard.clip?.origin, 0)
@@ -797,8 +776,8 @@ final class ClipCourierTests: XCTestCase {
     }
 
     func testSourceConnectsBackWhenItCannotBeReached() {
-        // The computer copied on says it is somewhere it is not, as one
-        // behind a firewall in effect does; the other can be connected to.
+        // The source advertises an address nobody can reach, like a machine
+        // behind a firewall. The receiver can be reached.
         let a = computer(0, reachableAt: [nowhere])
         let b = computer(1, reachableAt: [loopback])
         let png = noisePNG(side: 300)
@@ -812,12 +791,9 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the acknowledgement") { self.keyboard.acks[1] == [offerCRC] }
 
         XCTAssertEqual(keyboard.relays[0]?.count, 1)
-        // Nothing but the offer went through the keyboard.
         XCTAssertEqual(keyboard.stored.count, 1)
         XCTAssertFalse(b.courier.busy)
 
-        // Having answered one request, the source answers the next: this
-        // time nobody is waiting to be connected to, so through the keyboard.
         a.courier.receive(keyboard.relays[0]![0])
         waitFor("a second answer", timeout: 15) { self.keyboard.stored.count == 2 }
     }
@@ -834,7 +810,6 @@ final class ClipCourierTests: XCTestCase {
         keyboard.select(1)
         waitFor("the image", timeout: 15) { b.pasteboard.data(forType: ClipImage.jpegType) != nil }
 
-        // Scaled down to what the keyboard takes, and still a picture.
         let inline = try XCTUnwrap(keyboard.stored.last)
         XCTAssertEqual(keyboard.stored.count, 2)
         XCTAssertNotEqual(inline.flags & ClipWire.opaque, 0)
@@ -846,7 +821,7 @@ final class ClipCourierTests: XCTestCase {
         XCTAssertNotNil(b.pasteboard.data(forType: .png))
 
         waitFor("the acknowledgement") { self.keyboard.acks[1] == [self.keyboard.clip!.crc] }
-        // Worth holding a paste for at first, and not once it turned slow.
+        // Pastes are held at first, then released once the transfer turns slow.
         let holds = try XCTUnwrap(keyboard.holds[1])
         XCTAssertEqual(holds.first, ClipWire.holdSoon)
         XCTAssertEqual(holds.last, 0)
@@ -855,8 +830,8 @@ final class ClipCourierTests: XCTestCase {
 
     func testWantIsRetriedBareWhenItDoesNotFitTheOtherLink() throws {
         let v6 = try XCTUnwrap(ClipAddress([UInt8](repeating: 0xFD, count: 16)))
-        // The link to the computer copied on takes 20 bytes a frame, which a
-        // WANT naming an IPv6 address is over.
+        // 20-byte frames on the source's link are too small for a WANT that
+        // carries an IPv6 address.
         keyboard.frameCaps[0] = 20
         let a = computer(0, reachableAt: [nowhere])
         let b = computer(1, reachableAt: [v6])
@@ -873,8 +848,8 @@ final class ClipCourierTests: XCTestCase {
     func testReceiverGivesUpWhenTheContentCannotBeHad() throws {
         let a = computer(0, reachableAt: [nowhere])
         let b = computer(1, reachableAt: [nowhere])
-        // The keyboard would hold this much, but it is more than is worth
-        // sending through it, and text cannot be cut down.
+        // Fits in the keyboard but is too big to send through it, and text
+        // cannot be scaled down like an image.
         let text = String(repeating: "y", count: 50_000)
         XCTAssertLessThan(text.count, keyboard.maxOpaque)
 
@@ -904,7 +879,7 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the offer") { self.keyboard.clip != nil }
         let offerCRC = keyboard.clip!.crc
 
-        // The computer copied on goes away; its offer is still in the keyboard.
+        // The source goes away, but its offer stays in the keyboard.
         a.courier.stop()
         a.courier.send = { _ in }
         a.courier.sendClip = { _, _ in }
@@ -920,8 +895,7 @@ final class ClipCourierTests: XCTestCase {
         let a = computer(0, reachableAt: [nowhere])
         let b = computer(1, reachableAt: [nowhere])
 
-        // Nothing will come of this fetch for a while: the content does not
-        // fit through the keyboard, and the source is kept from saying so.
+        // Too big for the keyboard, and the source is muted, so the fetch stalls.
         copy(text: String(repeating: "z", count: 100_000), on: a)
         waitFor("the offer") { self.keyboard.clip != nil }
         a.courier.send = { _ in }
@@ -939,14 +913,12 @@ final class ClipCourierTests: XCTestCase {
         XCTAssertFalse(b.courier.busy)
         XCTAssertNil(keyboard.acks[1])
 
-        // No more is said about the old one.
         let holds = keyboard.holds[1]?.count
         settle(1)
         XCTAssertEqual(keyboard.holds[1]?.count, holds)
     }
 
-    /// An OFFER in the keyboard, from profile 0, of a copy that is to be
-    /// fetched from `port` on this machine. Returns its id.
+    /// Puts an OFFER from profile 0 in the keyboard for a copy served on `port`.
     private func offer(at port: UInt16, kind: ClipContent.Kind = .png) -> [UInt8] {
         let id = (0..<8).map { _ in UInt8.random(in: .min ... .max) }
         let message = ClipMessage.offer(kind: kind, id: id, key: vectorKey, port: port,
@@ -968,7 +940,6 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the offer") { self.keyboard.clip != nil }
         let offerCRC = keyboard.clip!.crc
 
-        // The helper it was copied with has gone, and the keyboard knows.
         a.courier.stop()
         keyboard.detach(0)
 
@@ -977,7 +948,7 @@ final class ClipCourierTests: XCTestCase {
         keyboard.select(1)
         waitFor("the receiver to give up") { self.keyboard.acks[1] == [offerCRC] }
 
-        // After asking twice, not after waiting out the slow way.
+        // Gives up after two requests, without waiting for the slow timeout.
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
         XCTAssertEqual(keyboard.holds[1]?.last, ClipWire.holdOff)
         XCTAssertFalse(b.courier.busy)
@@ -989,8 +960,8 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the offer") { self.keyboard.clip != nil }
         let offerCRC = keyboard.clip!.crc
 
-        // The app on the first computer is restarted: same profile, a helper
-        // that knows nothing of the copy the keyboard still holds.
+        // Restart the app on profile 0. The new helper does not know about the
+        // copy the keyboard still holds.
         a.courier.stop()
         a.channel.stop()
         let again = computer(0, reachableAt: [nowhere])
@@ -1014,14 +985,12 @@ final class ClipCourierTests: XCTestCase {
         keyboard.select(1)
         waitFor("the request", timeout: 8) { self.keyboard.relays[0] != nil }
 
-        // The same request again while the first is still being answered.
         a.courier.receive(keyboard.relays[0]![0])
         a.courier.receive(keyboard.relays[0]![0])
         waitFor("the image", timeout: 15) { b.pasteboard.data(forType: ClipImage.jpegType) != nil }
         settle(1)
         XCTAssertEqual(keyboard.stored.count, 2)
 
-        // Once it has been answered, a later one is answered too.
         a.courier.receive(keyboard.relays[0]![0])
         waitFor("a second answer", timeout: 15) { self.keyboard.stored.count == 3 }
     }
@@ -1036,7 +1005,6 @@ final class ClipCourierTests: XCTestCase {
         let offerCRC = keyboard.clip!.crc
         keyboard.select(1)
 
-        // Connected, and then nothing. It is not waited on for ever.
         waitFor("the connection") { source.accepted == 1 }
         XCTAssertTrue(b.courier.busy)
         waitFor("the receiver to give up", timeout: 6) { self.keyboard.acks[1] == [offerCRC] }
@@ -1055,11 +1023,10 @@ final class ClipCourierTests: XCTestCase {
 
         let holds = keyboard.holds[1] ?? []
         XCTAssertGreaterThanOrEqual(holds.count, 4)
-        // Worth waiting for at first; not once it has gone on this long.
+        // The first hold makes pastes wait. After this long, they stop waiting.
         XCTAssertEqual(holds.first, ClipWire.holdSoon)
         XCTAssertEqual(holds.last, 0)
 
-        // Stopping ends it: no more holds, and the connection is let go.
         b.courier.stop()
         XCTAssertFalse(b.courier.busy)
         XCTAssertNil(b.channel.expecting)
@@ -1079,7 +1046,6 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the connection") { source.accepted == 1 }
         XCTAssertTrue(b.courier.busy)
 
-        // Something newer is copied on the first computer and handed over.
         let text = Array("newer words".utf8)
         keyboard.hold(text, flags: 0, from: 0)
         waitFor("the text") { b.pasteboard.string(forType: .string) == "newer words" }
@@ -1098,7 +1064,7 @@ final class ClipCourierTests: XCTestCase {
 
         copy(text: String(repeating: "q", count: 100_000), on: a)
         waitFor("the offer") { self.keyboard.clip != nil }
-        // The source is kept from answering, so the fetch stays open.
+        // Mute the source so the fetch stays open.
         a.courier.send = { _ in }
         keyboard.select(1)
         waitFor("the request", timeout: 8) { self.keyboard.relays[0] != nil }
@@ -1137,8 +1103,7 @@ final class ClipCourierTests: XCTestCase {
         copy(text: "already here", on: b)
         waitFor("that clip") { self.keyboard.clip?.origin == 1 }
 
-        // From a helper newer than this one, perhaps. A paste here must not
-        // be kept waiting on it.
+        // Maybe from a newer helper. A paste here must not wait on it.
         keyboard.hold(garbage, flags: ClipWire.opaque, from: 0)
         keyboard.select(1)
         waitFor("the acknowledgement") { self.keyboard.acks[1] == [ClipWire.crc32(garbage)] }
@@ -1153,8 +1118,8 @@ final class ClipCourierTests: XCTestCase {
         copy(text: "already here", on: b)
         waitFor("that clip") { self.keyboard.clip?.origin == 1 }
 
-        // Fetched over the network, and not an image at all. The keyboard is
-        // told there is nothing to wait for; the pasteboard is left alone.
+        // Fetched over the network but not a real image. The hold is released
+        // and the pasteboard is left alone.
         a.channel.start()
         waitFor("the listener") { a.channel.port != nil }
         let id = Array(1...8).map(UInt8.init)
@@ -1169,7 +1134,6 @@ final class ClipCourierTests: XCTestCase {
         XCTAssertNil(b.pasteboard.data(forType: .png))
         XCTAssertFalse(b.courier.busy)
 
-        // The same through the keyboard.
         let inline = ClipMessage.inline(kind: .jpeg, id: id, content: [1, 2, 3]).encoded
         keyboard.hold(inline, flags: ClipWire.opaque, from: 0)
         waitFor("its acknowledgement") { self.keyboard.acks[1]?.last == ClipWire.crc32(inline) }
@@ -1205,23 +1169,19 @@ final class ClipCourierTests: XCTestCase {
         keyboard.select(1)
         waitFor("the request", timeout: 8) { self.keyboard.relays[0] != nil }
 
-        // Before the image has started on its way through the keyboard,
-        // something is copied on the computer that asked for it.
         copy(text: "typed here instead", on: b)
         waitFor("word to the source") { self.keyboard.relays[0]?.count == 2 }
         XCTAssertEqual(keyboard.relays[0]?.last, [ClipWire.Frame.relay.rawValue, 3] + id)
         waitFor("the new clip") { self.keyboard.clip?.origin == 1 }
 
-        // The source does not go on to send the image, which in the keyboard
-        // would replace the newer copy and be handed straight back.
+        // The source must not send the image now. It would replace the newer
+        // copy in the keyboard and get delivered straight back.
         settle(3)
         XCTAssertEqual(keyboard.clip?.origin, 1)
         XCTAssertEqual(keyboard.stored.count, 2)
         XCTAssertEqual(b.pasteboard.string(forType: .string), "typed here instead")
         XCTAssertNil(a.channel.offering)
 
-        // And if it had been too late to stop, it is not put on the
-        // pasteboard over the newer copy.
         let late = ClipMessage.inline(kind: .text, id: id, content: Array("stale".utf8)).encoded
         keyboard.hold(late, flags: ClipWire.opaque, from: 0)
         waitFor("the acknowledgement") { self.keyboard.acks[1] == [ClipWire.crc32(late)] }
@@ -1231,9 +1191,8 @@ final class ClipCourierTests: XCTestCase {
     func testDeliveryTheKeyboardBreaksOffDoesNotSilenceTheHelper() {
         let b = computer(1, reachableAt: [loopback])
 
-        // BEGIN and some DATA, and then the keyboard is switched away. No END
-        // will come. A helper that thought itself busy for ever would never
-        // say HELLO again, and never be delivered to again.
+        // BEGIN and some DATA arrive but no END. A helper stuck as busy would
+        // never send HELLO again.
         keyboard.deliverPart(Array(String(repeating: "t", count: 500).utf8), to: 1, frames: 3)
         waitFor("the delivery to start") { b.courier.busy }
         settle(0.7)
@@ -1243,8 +1202,8 @@ final class ClipCourierTests: XCTestCase {
     func testDeliveryDoesNotOverwriteACopyNotYetSeen() {
         let b = computer(1, reachableAt: [loopback])
 
-        // Copied here a moment ago; the pasteboard has not been looked at
-        // since. Then a clip from the other computer lands.
+        // A local copy the courier has not seen yet, then a clip arrives from
+        // the other computer.
         b.pasteboard.clearContents()
         b.pasteboard.setString("fresh local copy", forType: .string)
         keyboard.hold(Array("older, from elsewhere".utf8), flags: 0, from: 0)
@@ -1276,7 +1235,6 @@ final class ClipCourierTests: XCTestCase {
         let a = computer(0, reachableAt: [loopback])
         let png = noisePNG(side: 50)
 
-        // From a document: the words.
         a.pasteboard.clearContents()
         a.pasteboard.setData(png, forType: .png)
         a.pasteboard.setString("cells A1:B2", forType: .string)
@@ -1284,7 +1242,7 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the clip") { self.keyboard.clip != nil }
         XCTAssertEqual(keyboard.clip?.bytes, Array("cells A1:B2".utf8))
 
-        // From a browser: the picture, not its address.
+        // From a browser: send the picture, not its URL.
         a.pasteboard.clearContents()
         a.pasteboard.setData(png, forType: .png)
         a.pasteboard.setString("https://example.com/cat.png", forType: .string)
@@ -1293,7 +1251,6 @@ final class ClipCourierTests: XCTestCase {
         waitFor("the offer") { self.keyboard.stored.count == 2 }
         XCTAssertNotEqual(keyboard.stored.last!.flags & ClipWire.opaque, 0)
 
-        // A concealed item: nothing, and the keyboard drops what it had.
         a.pasteboard.clearContents()
         a.pasteboard.setString("hunter2", forType: .string)
         a.pasteboard.setString("", forType: .init("org.nspasteboard.ConcealedType"))

@@ -1,20 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// The M0110 drawn top-down as one piece of vector art, with no editor
-/// behaviour attached: the same `BoardCase` and the same `Keycap` the Keys pane
-/// uses, so there is one drawing of this keyboard in the app rather than a
-/// detailed one for the editor and a cartoon for everywhere else.
-///
-/// The caps are blank. This view has no keymap behind it, and at the size it
-/// gets used, a HUD glyph or a texture on a spinning solid, lettering resolves
-/// to grey noise and reads worse than a clean cap anyway.
+/// The M0110 drawn top-down with the same `BoardCase` and `Keycap` the Keys pane uses.
+/// Caps are blank because legends turn into grey noise at the sizes this is shown.
 struct BoardArtView: View {
-    /// Points per unit-hundredth.
+    /// Points per hundredth of a key unit.
     let scale: CGFloat
 
     private static let well = CGRect(x: 0, y: 0, width: 1500, height: 500)
-    /// Same two gaps `KeyboardController.boardBezelPatches` describes.
     private static let bezelPatches = M0110Layout.bezelPatches
 
     static func size(scale: CGFloat) -> CGSize {
@@ -38,7 +31,6 @@ struct BoardArtView: View {
     }
 
     private func caps(originX: CGFloat, originY: CGFloat) -> some View {
-        // Same gap the editor leaves between caps.
         let gap = BoardCase.keyGap * scale
         return ForEach(Array(M0110Layout.ansi.enumerated()), id: \.offset) { _, key in
             Keycap(legend: .blank,
@@ -54,7 +46,7 @@ struct BoardArtView: View {
     }
 }
 
-/// Rasterised board art, for anything that needs the drawing as an image.
+/// Board art rendered to cached images.
 @MainActor
 enum BoardArt {
     private struct CacheKey: Hashable {
@@ -66,16 +58,10 @@ enum BoardArt {
     private enum Face: Hashable { case top, underside, back }
     private static var cache: [CacheKey: NSImage] = [:]
 
-    /// The board's top face at roughly `pixelsWide` across.
-    ///
-    /// Cached, because the one caller that matters asks for it on the main
-    /// thread at the moment the keyboard connects, which is the worst possible
-    /// time to rasterise sixty keycaps. The art has no state, so the same
-    /// appearance always yields the same image and a second HUD costs nothing.
-    ///
-    /// `colorScheme` has to be passed explicitly: SwiftUI resolves the dynamic
-    /// palette from the environment, and an offscreen render has no window to
-    /// inherit one from. `Snapshot` sets it for the same reason.
+    /// The board's top face at about `pixelsWide` across. Cached because the main
+    /// caller asks for it on the main thread right when the keyboard connects.
+    /// `colorScheme` must be passed in since an offscreen render has no window to
+    /// take it from.
     static func topFace(pixelsWide: CGFloat, colorScheme: ColorScheme) -> NSImage? {
         let key = CacheKey(pixelsWide: Int(pixelsWide), isDark: colorScheme == .dark,
                            face: .top)
@@ -100,12 +86,8 @@ enum BoardArt {
         return image
     }
 
-    /// The board's underside, cached on the same terms as the top.
-    ///
-    /// Much cheaper to draw than the top face — a handful of shapes against
-    /// sixty keycaps — but it goes through the same cache because it is wanted
-    /// at the same moment, and a roll shows it within a second of the HUD
-    /// appearing.
+    /// The board's underside. Cached like the top face, since the HUD shows it
+    /// within a second of appearing.
     static func bottomFace(pixelsWide: CGFloat, colorScheme: ColorScheme) -> NSImage? {
         let key = CacheKey(pixelsWide: Int(pixelsWide), isDark: colorScheme == .dark,
                            face: .underside)
@@ -124,7 +106,6 @@ enum BoardArt {
         return image
     }
 
-    /// The board's back face, cached on the same terms.
     static func backFace(pixelsWide: CGFloat, colorScheme: ColorScheme) -> NSImage? {
         let key = CacheKey(pixelsWide: Int(pixelsWide), isDark: colorScheme == .dark,
                            face: .back)
@@ -145,8 +126,7 @@ enum BoardArt {
         return image
     }
 
-    /// Rasterise ahead of the first HUD, so the cost is not paid at connect
-    /// time. Cheap to call twice; the second one is a cache hit.
+    /// Renders every face before the first HUD so the cost isn't paid at connect time.
     static func warm(pixelsWide: CGFloat, colorScheme: ColorScheme) {
         _ = topFace(pixelsWide: pixelsWide, colorScheme: colorScheme)
         _ = bottomFace(pixelsWide: pixelsWide, colorScheme: colorScheme)

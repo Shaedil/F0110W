@@ -1,25 +1,20 @@
 import Foundation
 
-/// Synchronous ZMK Studio RPC client over a CDC ACM serial port.
-///
-/// Envelope shapes come from `modules/msgs/zmk-studio-messages/proto/zmk/`:
+/// Synchronous ZMK Studio RPC client. Per `modules/msgs/zmk-studio-messages/proto/zmk/`,
 /// requests are `zmk.studio.Request{request_id, oneof subsystem}` and responses
 /// are `zmk.studio.Response{request_response|notification}`.
 final class StudioClient {
     private let transport: StudioTransport
     private var nextRequestID: UInt32 = 1
-    /// Set by the transport: a GATT link needs far longer than a serial port.
+    /// Set by the transport, since a GATT link needs far longer than serial.
     private var timeout: TimeInterval { transport.responseTimeout }
 
-    /// How this client is connected, for logs and for the UI.
     var label: String { transport.label }
 
-    /// Called, on whichever thread is using the client, when the firmware
-    /// announces a lock change. It does so for `&studio_unlock`, for the idle
-    /// timeout and for a dropped link, none of which this app asks about.
+    /// Called on the client's thread when the firmware reports a lock change
+    /// (from `&studio_unlock`, the idle timeout, or a dropped link).
     var onLockStateChanged: ((LockState) -> Void)?
 
-    /// Response payload for one subsystem, still protobuf-encoded.
     private enum Subsystem: Int {
         case meta = 2, core = 3, behaviors = 4, keymap = 5
     }
@@ -46,17 +41,15 @@ final class StudioClient {
         w.message(subsystem.rawValue, body)
         try transport.send(w.bytes)
 
-        // Notifications can interleave, so keep reading until our id comes back.
-        // The transport's timeout means "this long without any data", so each
-        // read gets the full allowance; the cap here only stops an endless
-        // stream of notifications from pinning the caller forever.
+        // Skip notifications until this request's id comes back. The cap stops an
+        // endless stream of notifications from blocking the caller forever.
         let deadline = Date().addingTimeInterval(timeout * 5)
         while Date() < deadline {
             let frame = try transport.receiveFrame(timeout: timeout)
             guard let response = try parseResponse(frame) else { continue }  // notification
             guard response.id == id else { continue }
-            // The firmware answers on the meta subsystem when it refuses a call,
-            // most often because Studio is locked.
+            // The firmware replies on meta when it refuses a call, usually
+            // because Studio is locked.
             if response.subsystem == Subsystem.meta.rawValue {
                 throw Self.metaError(response.payload)
             }
@@ -85,21 +78,17 @@ final class StudioClient {
         return .rpc("the firmware refused the request")
     }
 
-    /// Handle any notifications that have already arrived, without sending a
-    /// request. Every request resets the firmware's idle-lock timer, so asking
-    /// for the lock state on a schedule would keep Studio unlocked for as long
-    /// as the app runs; reading what the firmware volunteers does not.
+    /// Handles notifications that already arrived, without sending a request.
+    /// Every request resets the firmware's idle-lock timer, so polling the lock
+    /// state would keep Studio unlocked as long as the app runs.
     func readNotifications() throws {
-        // Only the transport failing is an error. A frame that will not parse
-        // is skipped, as is a late reply to a request that already timed out.
+        // Only transport errors throw. Bad frames and late replies are skipped.
         while let frame = try transport.receiveFrameIfAvailable() {
             _ = try? parseResponse(frame)
         }
     }
 
-    /// Returns nil for notifications, which carry no request id, after acting
-    /// on them. `subsystem` is the field number the reply arrived on, so meta
-    /// errors can be told apart from a real subsystem payload.
+    /// Returns nil for notifications after handling them. `subsystem` is the reply's field number.
     private func parseResponse(_ frame: [UInt8]) throws -> (id: UInt32, subsystem: Int, payload: [UInt8])? {
         var r = ProtobufReader(frame)
         while !r.isAtEnd {
@@ -143,7 +132,6 @@ final class StudioClient {
         return LockState(rawValue: UInt32(truncatingIfNeeded: raw)) ?? .locked
     }
 
-    /// Unwrap a subsystem response to the payload of one expected field number.
     private static func field(_ number: Int, in payload: [UInt8]) throws -> ProtobufValue {
         var r = ProtobufReader(payload)
         while !r.isAtEnd {
@@ -169,7 +157,6 @@ final class StudioClient {
         var asNumber: UInt64 { if case .number(let n) = self { return n } else { return 0 } }
     }
 
-    /// Generic entry point so other subsystems (behaviors) can reuse the envelope.
     func request(subsystem: Int, body: [UInt8]) throws -> [UInt8] {
         guard let sub = Subsystem(rawValue: subsystem) else {
             throw StudioError.rpc("unknown subsystem \(subsystem)")
@@ -210,8 +197,8 @@ final class StudioClient {
         return try PhysicalLayouts.decode(Self.field(6, in: response.payload).asBytes)
     }
 
-    /// Writes one binding. The keyboard must be unlocked first (press the key
-    /// bound to `&studio_unlock`), otherwise this reports a locked error.
+    /// Writes one binding. Studio must be unlocked first (the `&studio_unlock`
+    /// key), or this throws a locked error.
     func setBinding(layerID: UInt32, keyPosition: Int32, binding: BehaviorBinding) throws {
         var request = ProtobufWriter()
         request.uint32(1, layerID)
@@ -253,18 +240,10 @@ final class StudioClient {
         _ = try send(subsystem: .keymap, body: w.bytes)
     }
 
-    /// Find a keyboard that answers `get_device_info` over the Studio RPC
-    /// protocol.
-    ///
-    /// Each CDC ACM port is tried first and Bluetooth second, on cost: probing
-    /// a serial port is instant and local, while the Bluetooth route connects
-    /// to the peripheral and negotiates a subscription before it can answer
-    /// anything. ZMK exposes a logging console alongside the RPC endpoint, so
-    /// the wrong port never replies.
-    ///
-    /// Only one of them can work at a time regardless, since the firmware binds
-    /// its RPC to whichever endpoint the keyboard is currently outputting to,
-    /// so the second is tried only when the first found nothing.
+    /// Finds a keyboard that answers `get_device_info`. Serial ports go first
+    /// because probing one is instant, while Bluetooth has to connect and
+    /// subscribe. The log console port never replies. The firmware serves RPC
+    /// only on the current output endpoint, so at most one transport works.
     static func discover(deviceName: String,
                          log: @escaping (String) -> Void = { _ in }) -> (client: StudioClient, info: DeviceInfo)? {
         var transports: [StudioTransport] = SerialTransport.candidatePorts().map {

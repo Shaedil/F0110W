@@ -1,15 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Renders the interface offscreen to a PNG. Lets the design be reviewed without
-/// the keyboard attached, unlocked, or the screen free for a capture.
+/// Renders the interface offscreen to a PNG, for review without the keyboard.
 @MainActor
 enum Snapshot {
     static func render(to path: String, pane: String?, appearance: String? = nil,
                        time: String? = nil,
                        width: CGFloat = 1340, height: CGFloat = 820) -> Int32 {
-        // Force the app appearance so both themes can be rendered on demand;
-        // otherwise the snapshot follows the system setting.
+        // Force the appearance so either theme can be rendered.
         switch appearance {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         case "dark":  NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -19,8 +17,8 @@ enum Snapshot {
         let controller = KeyboardController()
         controller.loadPreviewFixture()
 
-        // SwiftUI resolves dynamic colours from `colorScheme`, not from
-        // NSApp.appearance, so the scheme has to be set on the view itself.
+        // SwiftUI reads dynamic colors from `colorScheme` and ignores
+        // NSApp.appearance, so set the scheme on the view too.
         let scheme: ColorScheme? = switch appearance {
         case "light": .light
         case "dark": .dark
@@ -33,10 +31,8 @@ enum Snapshot {
             .environment(\.skyTime, time.flatMap(today))
             .environment(\.colorScheme, scheme ?? (NSApp.effectiveAppearance
                 .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light))
-            // Top-leading rather than centred. Snapshots drop the scroll view,
-            // so a pane taller than the window renders taller than the frame,
-            // and a centred frame then clips the top, which is where the window
-            // controls and the sidebar's header live.
+            // Top-leading, because snapshots drop the scroll view and a
+            // centered frame would clip the top of a tall pane.
             .frame(width: width, height: height, alignment: .topLeading)
 
         let renderer = ImageRenderer(content: root)

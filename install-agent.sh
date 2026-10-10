@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # Installs (or removes) a LaunchAgent so the HUD starts at login.
-#
-# Usage:
-#   ./install-agent.sh            install and start
-#   ./install-agent.sh --uninstall
+#   ./install-agent.sh [--uninstall]
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 LABEL="com.shaedil.m0110hud"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
-# The installed copy, not the build directory: build.sh keeps this in step, and
-# an agent pointing into a working tree breaks the moment that tree moves.
+# Use the installed copy, because an agent that points into a working tree
+# breaks when the tree moves.
 APP="/Applications/M0110HUD.app"
 BIN="${APP}/Contents/MacOS/M0110HUD"
 
@@ -29,7 +26,6 @@ fi
 
 mkdir -p "$(dirname "$PLIST")"
 
-# Written with a quoted heredoc plus explicit substitution so the path is exact.
 {
     printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
     printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
@@ -54,9 +50,8 @@ mkdir -p "$(dirname "$PLIST")"
 
 # bootout first so a re-run picks up path or argument changes.
 launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
-# A label sitting in launchd's per-user disabled list makes bootstrap fail with
-# "Input/output error" and nothing else, so clear that state first.  Enabling an
-# already-enabled label does nothing.
+# If the label is in launchd's disabled list, bootstrap fails with only
+# "Input/output error", so enable it first.
 launchctl enable "gui/$(id -u)/${LABEL}" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 

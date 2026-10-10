@@ -68,27 +68,25 @@ TICKET = bytes(range(8))
 KEY = bytes(range(0x10, 0x30))
 
 
-# ---- Stand-ins ----
+# ---- Fakes ----
 
 
 class FakeClipboard:
-    """A clipboard in memory, with the change counter Windows has, and its quirks on request."""
+    """In-memory clipboard with a Windows-style change counter and optional quirks."""
 
     def __init__(self) -> None:
         self.clip = Clip(None)
         self.count = 0
-        # Who put it there, as Windows would say; None for a system that cannot.
+        # Owner as Windows reports it. None for a system that cannot say.
         self.owner: object = None
-        # Reads that find another program holding the clipboard open.
+        # Number of reads that fail as if another program has the clipboard open.
         self.held = 0
-        # Reading has a promised format rendered, which moves the counter.
+        # Each read bumps the counter, like Windows rendering a promised format.
         self.renders = False
-        # How long a write takes.
         self.slow = 0.0
         self.reads = 0
 
     def copy(self, clip: Clip, owner: object = None) -> None:
-        """The user copies something on this computer."""
         self.clip = clip
         self.count += 1
         if owner is not None:
@@ -119,18 +117,14 @@ class FakeClipboard:
 
 
 class FakeClient:
-    """What bleak gives a helper: a way to write to the keyboard and to hear from it."""
-
     def __init__(self, keyboard: FakeKeyboard, profile: int) -> None:
         self.keyboard = keyboard
         self.profile = profile
         self.is_connected = True
         self.callback = None
         self.services = self
-        # The session behind the characteristics has gone, as on Windows
-        # just after the link drops.
+        # The GATT session is gone, as on Windows just after the link drops.
         self.broken = False
-        # How long a write takes to go out.
         self.lag = 0.0
 
     def get_characteristic(self, _uuid):
@@ -151,13 +145,7 @@ class FakeClient:
 
 
 class FakeKeyboard:
-    """The firmware's rules, as far as a helper can see them.
-
-    It holds one clip and where it came from, hands it frame by frame to the
-    helper on the selected profile, passes RELAY datagrams between the two
-    ends of the clip, keeps track of who has asked for pastes to be held, and
-    takes nothing longer than the link carries. See config/clipboard/clipboard.c.
-    """
+    """The firmware's clipboard rules as a helper sees them. See config/clipboard/clipboard.c."""
 
     def __init__(
         self, version: int = 2, max_len: int = 16384, max_opaque: int = 61440, cap: int = 62, pace: float = 0.0
@@ -166,10 +154,8 @@ class FakeKeyboard:
         self.max_len = max_len
         self.max_opaque = max_opaque
         self.cap = cap
-        # Time between the frames of a delivery.
         self.pace = pace
         self.clients: dict[int, FakeClient] = {}
-        # Profile to the version its helper said HELLO with.
         self.helpers: dict[int, int] = {}
         self.selected = 0
 
@@ -177,19 +163,18 @@ class FakeKeyboard:
         self.origin = 0
         self.rx: dict | None = None
         self.generation = 0
-        # The profile that last sent word to the computer the clip came from.
+        # Profile that last sent a RELAY to the clip's origin.
         self.requester: int | None = None
         self.relay_slot: dict | None = None
-        # Who is being held for: profile, whether soon, and until when.
+        # (profile, soon, until) for the current paste hold.
         self.hold: tuple[int, bool, float] | None = None
         self.delivery: tuple[asyncio.Task, int, int] | None = None
 
-        # Everything the helpers wrote and when, for the tests to look through.
         self.written: list[tuple[int, bytes]] = []
         self.times: list[float] = []
         # HOLD frames that were acted on.
         self.honoured: list[tuple[int, int]] = []
-        # Writes longer than the link takes: a helper's bug, wherever it is.
+        # Writes longer than the link allows. Any entry is a helper bug.
         self.oversize: list[bytes] = []
         self.restarts = 0
 
@@ -225,7 +210,6 @@ class FakeKeyboard:
         return self.helpers.get(profile, 0) >= (2 if opaque else 1)
 
     def held(self, profile: int) -> bool:
-        """Whether pastes on `profile` are being kept back right now."""
         return bool(self.hold and self.hold[0] == profile and asyncio.get_running_loop().time() < self.hold[2])
 
     def helper_gone(self, profile: int) -> None:
@@ -236,7 +220,6 @@ class FakeKeyboard:
             self.relay_slot = None
 
     def evaluate(self) -> None:
-        """Starts handing the clip to the helper on the selected profile, if it is owed it."""
         clip, to = self.clip, self.selected
         if not clip or to == self.origin or not self.understands(to, clip["opaque"]) or to in clip["delivered"]:
             return
@@ -249,7 +232,6 @@ class FakeKeyboard:
 
     async def deliver(self, generation: int, to: int, clip: dict) -> None:
         for frame in helper.transfer(clip["bytes"], OPAQUE if clip["opaque"] else 0, self.cap):
-            # Abandoned without a word if it is no longer wanted.
             if generation != self.generation or self.selected != to or to not in self.helpers:
                 return
             self.notify(to, frame)
@@ -261,7 +243,7 @@ class FakeKeyboard:
             return
         sender, to, frame = slot["from"], slot["to"], slot["frame"]
         if to is None and (self.clip or self.rx) and sender == self.origin:
-            # An answer, wherever the keyboard has been switched to since.
+            # A reply from the origin goes to the requester, wherever the keyboard is now.
             if self.requester is not None:
                 to = self.requester
             elif self.selected != sender:
@@ -288,9 +270,7 @@ class FakeKeyboard:
             else:
                 status = bytes([STATUS, 1]) + self.max_len.to_bytes(2, "little")
             self.notify(profile, status)
-            # A helper that has just started has not seen what its
-            # predecessor was sent, so a clip it has yet to acknowledge is
-            # offered again from the start.
+            # A HELLO restarts any delivery that helper has not ACKed.
             owed = self.clip and profile not in self.clip["delivered"]
             if owed and self.delivery and self.delivery[1:] == (self.generation, profile):
                 self.delivery[0].cancel()
@@ -299,8 +279,7 @@ class FakeKeyboard:
         elif kind == BYE:
             self.helper_gone(profile)
         elif kind == BEGIN and len(frame) >= 8:
-            # A clip that replaces one from the same computer may be its
-            # answer to whoever asked after the last.
+            # A new clip from the origin may be its answer to the requester, so keep it.
             requester = self.requester if profile == self.origin else None
             self.wipe()
             self.origin = profile
@@ -340,13 +319,10 @@ class FakeKeyboard:
                 if self.hold and self.hold[0] == profile:
                     self.hold = None
             elif current and current["opaque"] and profile != self.origin and self.understands(profile, True):
-                # Only for an opaque clip from another computer.
                 self.hold = (profile, bool(flags & HOLD_SOON), now + 4 * helper.HOLD_SECONDS)
                 self.honoured.append((profile, flags))
         elif kind == RELAY and self.version >= 2 and len(frame) <= helper.RELAY_MAX:
-            # Only the latest is kept. Word for the computer the clip came
-            # from is addressed now: the sender's next frame may begin a
-            # clip of its own.
+            # Keep only the latest RELAY. Route it now, before the sender starts a clip of its own.
             self.relay_slot = {"from": profile, "to": None, "frame": frame}
             if (self.clip or self.rx) and profile != self.origin:
                 self.relay_slot["to"] = self.origin
@@ -365,7 +341,7 @@ async def hangs(_address: str, _port: int):
 
 
 class World:
-    """A keyboard, and a helper on each of two computers: profile 0 and profile 1."""
+    """A fake keyboard with one helper on profile 0 and one on profile 1."""
 
     def __init__(self, keyboard: FakeKeyboard | None = None, dials=(None, None)) -> None:
         self.keyboard = keyboard or FakeKeyboard()
@@ -411,7 +387,6 @@ async def until(condition, timeout: float = 5.0) -> None:
 
 
 def picture(width: int, height: int, noisy: bool = False) -> bytes:
-    """A PNG: a gradient, or with `noisy` something that does not compress."""
     from PIL import Image
 
     image = Image.new("RGB", (width, height))
@@ -442,19 +417,18 @@ def order(keyboard: FakeKeyboard, profile: int) -> list[bytes]:
 
 
 def after_last(keyboard: FakeKeyboard, profile: int, kind: int) -> list[bytes]:
-    """What `profile` wrote after its last frame of `kind`."""
     own = order(keyboard, profile)
     last = max(index for index, frame in enumerate(own) if frame[0] == kind)
     return own[last + 1 :]
 
 
 def longest_wait_for_a_hold(keyboard: FakeKeyboard, profile: int) -> float:
-    """The longest the keyboard went without a HOLD between the first one and the ACK that ended it."""
+    """Longest gap between HOLDs, from the first HOLD to the ACK."""
     marks = keyboard.when(profile, HOLD) + keyboard.when(profile, ACK)[:1]
     return max(later - earlier for earlier, later in zip(marks, marks[1:]))
 
 
-# ---- The format ----
+# ---- Wire format ----
 
 
 def test_vectors() -> None:
@@ -472,7 +446,7 @@ def test_vectors() -> None:
     assert want.hex() == "010001020304050607409c01040a000007"
     assert helper.parse_want(want) == (TICKET, 40000, ["10.0.0.7"])
 
-    # Two records, which takes a record size smaller than the content.
+    # Shrink RECORD_MAX to get two records.
     whole = helper.RECORD_MAX
     helper.RECORD_MAX = 7
     try:
@@ -491,23 +465,20 @@ def test_vectors() -> None:
 
 def test_messages() -> None:
     six = ["10.0.0.%d" % n for n in range(1, 9)]
-    # Never more than six, and never more than fit.
     assert len(Offer.parse(Offer(KIND_TEXT, TICKET, KEY, 1, six).encode()).addresses) == 6
     assert Offer.parse(Offer(KIND_TEXT, TICKET, KEY, 1, six).encode(45 + 11)).addresses == six[:2]
     assert Offer(KIND_TEXT, TICKET, KEY, 1, six).encode(44) is None
     assert Offer.parse(Offer(KIND_TEXT, TICKET, KEY, 1, []).encode()).addresses == []
-    # The largest OFFER there can be fits the least a keyboard may hold.
     widest = Offer(KIND_PNG, TICKET, KEY, 1, ["fd00::%d" % n for n in range(1, 8)]).encode()
     assert len(widest) == 45 + 6 * 17 <= helper.MIN_OPAQUE
 
-    # A WANT cut to what a 20-byte frame leaves room for, and one with nothing.
+    # A WANT trimmed to fit a 20-byte frame, and one with no addresses.
     mixed = ["192.168.1.2", "192.168.1.3", "fd00::1"]
     assert helper.parse_want(helper.encode_want(TICKET, 9, mixed, 19))[2] == ["192.168.1.2"]
     assert helper.parse_want(helper.encode_want(TICKET, 9, mixed, 63))[2] == mixed
     bare = helper.encode_want(TICKET, 9, [], 19)
     assert len(bare) == 12 and helper.parse_want(bare) == (TICKET, 9, [])
 
-    # Truncated, mistyped and overrunning messages are refused.
     good = Offer(KIND_PNG, TICKET, KEY, 1, ["10.0.0.1"]).encode()
     assert Offer.parse(good[:-1]) is None
     assert Offer.parse(good[:44]) is None
@@ -521,7 +492,7 @@ def test_messages() -> None:
     assert helper.encode_inline(KIND_TEXT, TICKET, b"x" * 91, 100) is None
     assert len(helper.encode_inline(KIND_TEXT, TICKET, b"x" * 90, 100)) == 100
 
-    # Half a surrogate pair, which a Windows clipboard can hold, has no UTF-8.
+    # A lone surrogate, which a Windows clipboard can hold, becomes a question mark.
     assert helper.text_bytes("a\ud83db\r\nc") == b"a?b\nc"
     assert Clip("a\ud83db").fingerprint() == Clip("a?b").fingerprint()
     assert Clip("x").fingerprint() != Clip(None, image=b"x", form="png").fingerprint()
@@ -552,16 +523,13 @@ def test_images() -> None:
     assert kind == KIND_JPEG and ticket == TICKET
     shrunk = Image.open(io.BytesIO(content))
     assert shrunk.format == "JPEG" and shrunk.size[0] <= 700
-    # Same shape, near enough.
     assert abs(shrunk.size[0] / shrunk.size[1] - 700 / 500) < 0.05
 
-    # One that fits goes as it is.
     small = picture(40, 30)
     assert helper.parse_inline(helper.encode_inline(KIND_PNG, TICKET, small, 40000)) == (KIND_PNG, TICKET, small)
-    # Not an image at all.
     assert helper.encode_inline(KIND_PNG, TICKET, b"not a picture" * 5000, 40000) is None
 
-    # Transparency goes onto white, and a Windows bitmap survives the round trip.
+    # Transparent pixels become white, and the DIB round trip works.
     clear = Image.new("RGBA", (4, 4), (255, 0, 0, 0))
     out = io.BytesIO()
     clear.save(out, "PNG")
@@ -570,12 +538,11 @@ def test_images() -> None:
     assert back.size == (4, 4) and back.convert("RGB").getpixel((1, 1)) == (255, 255, 255)
     assert helper.trim_png(small + b"\0\0\0") == small
 
-    # A camera's picture, lying on its side with a tag that says so, is
-    # turned the right way up wherever it is decoded.
+    # A JPEG with an EXIF rotation tag comes out upright from both to_png and shrink.
     wide = Image.new("RGB", (60, 20), (10, 200, 30))
     wide.paste((255, 0, 0), (0, 0, 20, 20))
     exif = Image.Exif()
-    exif[0x0112] = 6  # the top is on the right: turn a quarter clockwise
+    exif[0x0112] = 6  # EXIF orientation 6: rotate 90 degrees clockwise to display
     out = io.BytesIO()
     wide.save(out, "JPEG", exif=exif, quality=95)
     sideways = out.getvalue()
@@ -584,14 +551,13 @@ def test_images() -> None:
         Image.open(io.BytesIO(helper.shrink(sideways, 40000))),
     ):
         assert upright.size == (20, 60)
-        # What was the left end is the top.
         red, green, blue = upright.convert("RGB").getpixel((10, 5))
         assert red > 200 and green < 90 and blue < 90, (red, green, blue)
         red, green, blue = upright.convert("RGB").getpixel((10, 50))
         assert red < 90 and green > 150, (red, green, blue)
     assert Image.open(io.BytesIO(helper.to_png(KIND_JPEG, sideways))).format == "PNG"
 
-    # Sixteen-bit grey keeps its greys instead of going white.
+    # 16-bit grey stays grey instead of turning white.
     grey = Image.new("I;16", (8, 8))
     grey.putdata([20000] * 64)
     out = io.BytesIO()
@@ -600,7 +566,6 @@ def test_images() -> None:
         level = Image.open(io.BytesIO(made)).convert("L").getpixel((4, 4))
         assert 70 <= level <= 86, level
 
-    # A CMYK JPEG, as a print shop makes them, becomes a PNG without raising.
     ink = Image.new("CMYK", (10, 10), (0, 255, 255, 0))
     out = io.BytesIO()
     ink.save(out, "JPEG")
@@ -629,17 +594,15 @@ def test_addresses() -> None:
             {"ifname": "eth1", "flags": ["BROADCAST"], "addr_info": [{"family": "inet", "local": "10.9.9.9"}]},
         ]
     )
-    # Every interface that is up, not only the one the default route uses.
+    # Includes every interface that is up, besides the default route's.
     assert helper.usable(helper.parse_interfaces(listing)) == ["192.168.1.9", "10.0.0.9", "fd00::9"]
     print("  this computer's addresses:", helper.local_addresses())
 
 
-# ---- The stream ----
+# ---- Stream ----
 
 
 class Sink:
-    """A writer that keeps what it is given."""
-
     def __init__(self) -> None:
         self.data = b""
 
@@ -662,7 +625,7 @@ async def fails(records: list[bytes], **how) -> bool:
     try:
         await read_records(records, sink=sink, **how)
     except TransferError:
-        # Nothing that failed is ever said to have been taken.
+        # A failed stream must never send TAKEN.
         return sink.data == b""
     return False
 
@@ -673,31 +636,28 @@ async def test_stream() -> None:
     assert len(records) == 4
     sink = Sink()
     assert await read_records(records, sink=sink) == content
-    # Said only once the final record has opened.
     assert sink.data == helper.TAKEN
     assert await read_records(list(helper.seal(KEY, TICKET, b""))) == b""
 
     assert await fails(records, key=bytes(32))
     assert await fails(records, ticket=bytes(8))
-    # Cut off before the final record, and in the middle of one.
     assert await fails(records[:-1])
     assert await fails([records[0][:100]])
-    # Tampered with, reordered, and a final record passed off as not final.
+    # Tampered, reordered, and a final record with its last flag cleared.
     spoiled = bytearray(records[1])
     spoiled[40] ^= 1
     assert await fails([records[0], bytes(spoiled)] + records[2:])
     assert await fails([records[1], records[0]] + records[2:])
     assert await fails(records[:-1] + [b"\0" + records[-1][1:]])
-    # A record claiming more than a record may hold.
+    # A record header claiming more than RECORD_MAX.
     assert await fails([bytes([0]) + (helper.RECORD_MAX + 17).to_bytes(4, "little") + bytes(100)])
 
-    # A `last` byte that is neither of the two it may be, however well sealed.
+    # A `last` byte other than 0 or 1, even if correctly sealed.
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
     odd = ChaCha20Poly1305(KEY).encrypt(bytes(12), b"odd", TICKET + bytes([2]))
     assert await fails([bytes([2]) + len(odd).to_bytes(4, "little") + odd])
 
-    # More than anyone should be sending.
     limit = helper.MAX_CONTENT
     helper.MAX_CONTENT = 150000
     try:
@@ -717,24 +677,21 @@ async def test_network() -> None:
         offer = Offer(KIND_PNG, source.offering.ticket, source.offering.key, source.port, ["127.0.0.1"])
         assert await receiver.get(offer) == content
 
-        # The first address that answers is the one used.
         both = Offer(KIND_PNG, offer.ticket, offer.key, source.port, ["127.0.0.1", "::1"])
         assert await receiver.get(both) == content
 
-        # Not the copy on offer, the wrong key, nobody listening.
         assert await receiver.get(Offer(KIND_PNG, bytes(8), offer.key, source.port, ["127.0.0.1"])) is None
         assert await receiver.get(Offer(KIND_PNG, offer.ticket, bytes(32), source.port, ["127.0.0.1"])) is None
         assert await receiver.get(Offer(KIND_PNG, offer.ticket, offer.key, 1, ["127.0.0.1"])) is None
         assert await receiver.get(Offer(KIND_PNG, offer.ticket, offer.key, source.port, [])) is None
 
-        # The other way round: the source connects and hands it over, and
-        # knows it was taken.
+        # PUT: the source connects to the receiver and learns the copy was taken.
         brought: list[bytes] = []
         receiver.awaiting = (offer.ticket, offer.key, brought.append)
         assert await source.put(["127.0.0.1"], receiver.port, source.offering) is True
         assert brought == [content]
 
-        # A copy nobody asked for is not taken, and the source can tell.
+        # A PUT nobody asked for is refused, and the source can tell.
         brought.clear()
         receiver.awaiting = (bytes(8), offer.key, brought.append)
         assert await source.put(["127.0.0.1"], receiver.port, source.offering) is False
@@ -748,15 +705,14 @@ async def test_network() -> None:
 
 
 async def test_taken_or_not() -> None:
-    """What the source makes of every way a stream can end."""
+    """How the sender judges each way a stream can end."""
     content = bytes(3_000_000)
     offering = Offering(KIND_PNG, lambda: content, TICKET, KEY)
     endpoint = Endpoint()
     seen = []
 
     async def serve(behaviour) -> tuple:
-        # With little room to receive into, as on a link that is the slow
-        # part, so that what has been written has mostly been read.
+        # Small receive buffer, so data written has mostly been read, as on a slow link.
         import socket
 
         listener = socket.create_server(("127.0.0.1", 0))
@@ -765,7 +721,6 @@ async def test_taken_or_not() -> None:
         return server, listener.getsockname()[1]
 
     async def reads_and_leaves(reader, writer) -> None:
-        # Everything is read, and the connection closed, without a word.
         try:
             await reader.readexactly(14)
             await helper.read_content(reader, None, KEY, TICKET)
@@ -788,8 +743,6 @@ async def test_taken_or_not() -> None:
         await asyncio.sleep(3600)
 
     class Slowly:
-        """A reader that takes its time over every piece."""
-
         def __init__(self, reader) -> None:
             self.reader = reader
 
@@ -817,16 +770,14 @@ async def test_taken_or_not() -> None:
             assert await endpoint.put(["127.0.0.1"], port, offering) is taken, behaviour.__name__
             took = time.monotonic() - started
             if behaviour is never_reads:
-                # Given up on for making no progress, not waited on for ever.
+                # Gives up after IDLE_SECONDS without progress.
                 assert 0.25 <= took < 3, took
             if behaviour is reads_slowly:
-                # Slow is not stalled: the whole of it took longer than any
-                # one wait is allowed to.
+                # A slow reader still succeeds, even though the total time is past IDLE_SECONDS.
                 assert took > helper.IDLE_SECONDS, took
             server.close()
 
-        # The same from the other side: a source that stops part way through
-        # is given up on, and one that is merely slow is not.
+        # Receiving side: a sender that stalls is given up on, and a slow one is not.
         records = list(helper.seal(KEY, TICKET, content[:400_000]))
 
         async def stalls(reader, writer) -> None:
@@ -871,8 +822,7 @@ async def test_connecting() -> None:
     async def refused(_address: str, _port: int):
         raise ConnectionRefusedError()
 
-    # Nothing answering is given up on after the time allowed, and what was
-    # still being tried is called off.
+    # No answer: give up after CONNECT_SECONDS and cancel the pending attempts.
     endpoint = Endpoint(dial=slow)
     started = time.monotonic()
     assert await endpoint.connect(["10.0.0.1", "10.0.0.2"], 9) is None
@@ -880,12 +830,10 @@ async def test_connecting() -> None:
     await asyncio.sleep(0)
     assert len(dialled) == 2 and all(task.cancelled() for task in dialled)
 
-    # A refusal does not take that long.
     started = time.monotonic()
     assert await Endpoint(dial=refused).connect(["10.0.0.1"], 9) is None
     assert time.monotonic() - started < helper.CONNECT_SECONDS / 2
 
-    # Cancelled part way through, it leaves no attempt running behind it.
     dialled.clear()
     connecting = asyncio.ensure_future(endpoint.connect(["10.0.0.1", "10.0.0.2"], 9))
     await asyncio.sleep(0.05)
@@ -894,7 +842,6 @@ async def test_connecting() -> None:
     await asyncio.sleep(0)
     assert connecting.cancelled() and len(dialled) == 2 and all(task.cancelled() for task in dialled)
 
-    # Of two that answer, one is kept and the other closed.
     closed = []
 
     class Writer:
@@ -909,7 +856,7 @@ async def test_connecting() -> None:
     assert link is not None and len(closed) == 1 and closed[0] is not link[1]
 
 
-# ---- From one computer to the other ----
+# ---- End to end ----
 
 
 async def test_text_still_goes_through_the_keyboard() -> None:
@@ -920,19 +867,17 @@ async def test_text_still_goes_through_the_keyboard() -> None:
         assert acks(world.keyboard, 1) == [world.keyboard.clip["crc"]]
         assert not opaque_begins(world.keyboard, 0) and not holds(world.keyboard, 1)
 
-        # What a helper put on the clipboard itself is not sent back.
+        # A clip the helper placed itself is not sent back.
         await asyncio.sleep(0.2)
         assert world.keyboard.origin == 0 and not world.keyboard.frames(1, BEGIN)
 
-        # A concealed item is not carried, whatever it holds, and takes what
-        # was there with it.
+        # A private item is not sent, and it clears the keyboard's clip.
         world.boards[0].copy(Clip("hunter2", private=True))
         await until(lambda: world.keyboard.clip is None)
         await asyncio.sleep(0.1)
         assert world.keyboard.frames(0, CLEAR) and len(world.keyboard.frames(0, BEGIN)) == 1
         assert world.boards[1].clip.text == "just words\nand more"
 
-        # Half a surrogate pair goes as a question mark, and nothing falls over.
         world.boards[0].copy(Clip("broken \ud83d pair"))
         await until(lambda: world.keyboard.clip and world.keyboard.clip["bytes"] == b"broken ? pair")
 
@@ -941,21 +886,17 @@ async def test_hello() -> None:
     idle = helper.DELIVERY_IDLE_SECONDS
     helper.DELIVERY_IDLE_SECONDS = 0.3
     try:
-        # A link slow enough that a delivery outlasts several HELLOs' worth
-        # of time.
+        # A slow link, so a delivery spans several HELLO intervals.
         async with World(FakeKeyboard(pace=0.002)) as world:
-            # With nothing going on, the helper keeps saying it is there.
             said = len(world.keyboard.frames(1, HELLO))
             await asyncio.sleep(helper.HELLO_SECONDS * 3)
             assert len(world.keyboard.frames(1, HELLO)) >= said + 2
 
-            # Not while a clip is on its way to it: the keyboard would start
-            # the delivery again, every time.
+            # No HELLO during a delivery, since it would make the keyboard restart it.
             text = "long enough to take a while " * 500
             world.boards[0].copy(Clip(text))
             await until(lambda: world.keyboard.clip)
-            # Started just after it has said one, so that the next is not due
-            # until the delivery is well under way.
+            # Start right after a HELLO, so the next one falls mid-delivery.
             said = len(world.keyboard.frames(1, HELLO))
             await until(lambda: len(world.keyboard.frames(1, HELLO)) > said)
             world.keyboard.restarts = 0
@@ -963,13 +904,11 @@ async def test_hello() -> None:
             world.keyboard.select(1)
             await until(lambda: world.boards[1].clip.text == text, timeout=15)
             ended = world.keyboard.when(1, ACK)[0]
-            # It took long enough for several to have been due.
             assert ended - began > helper.HELLO_SECONDS * 3, ended - began
             assert not [at for at in world.keyboard.when(1, HELLO) if began < at < ended]
             assert world.keyboard.restarts == 0
 
-            # A delivery the keyboard gives up on part way, without a word,
-            # does not silence the helper for good.
+            # A delivery the keyboard drops silently does not stop the HELLOs for good.
             world.keyboard.select(0)
             world.boards[0].copy(Clip("another long one " * 800))
             await until(lambda: world.keyboard.clip and world.keyboard.clip["bytes"].startswith(b"another"))
@@ -987,7 +926,7 @@ async def test_hello() -> None:
 
 
 async def test_a_narrow_link() -> None:
-    # The least a Bluetooth link carries: 20 bytes a write.
+    # Smallest BLE write: 20 bytes.
     async with World(FakeKeyboard(cap=20), dials=(None, blocked)) as world:
         image = picture(120, 80)
         world.boards[0].copy(Clip(None, image=image, form="png"))
@@ -995,14 +934,12 @@ async def test_a_narrow_link() -> None:
         world.keyboard.select(1)
         await until(lambda: world.boards[1].clip.image == image)
         assert all(len(frame) <= 20 for _sender, frame in world.keyboard.written)
-        # The WANT was cut down to the one address there was room for.
         want = world.keyboard.frames(1, RELAY)[0]
         assert len(want) <= 20 and helper.parse_want(want[1:])[2] == ["127.0.0.1"]
 
     async with World(FakeKeyboard(cap=62)) as world:
         world.boards[0].copy(Clip("x" * 5000))
         await until(lambda: world.keyboard.clip)
-        # And a wider one is filled.
         assert max(len(frame) for frame in world.keyboard.frames(0, DATA)) == 62
 
 
@@ -1021,16 +958,14 @@ async def test_fetched_over_the_network() -> None:
         await until(lambda: acks(world.keyboard, 1))
         assert world.boards[1].clip.form == "png"
         assert acks(world.keyboard, 1) == [crc]
-        # The keyboard was asked to keep pastes back first, and not after.
+        # HOLD comes first and never after the ACK.
         assert holds(world.keyboard, 1)[0] == HOLD_SOON and world.keyboard.honoured[0] == (1, HOLD_SOON)
         await asyncio.sleep(0.2)
         assert not any(frame[0] == HOLD for frame in after_last(world.keyboard, 1, ACK))
         assert not world.keyboard.held(1)
         assert not world.keyboard.frames(1, RELAY)
-        # And the image was not offered back.
         assert not world.keyboard.frames(1, BEGIN) and world.bridges[1].fetch is None
 
-        # Only the latest copy stays on offer.
         world.keyboard.select(0)
         assert world.bridges[0].endpoint.offering is not None
         world.boards[0].copy(Clip("short"))
@@ -1045,8 +980,7 @@ async def test_fetched_over_the_network() -> None:
         world.keyboard.select(1)
         await until(lambda: world.boards[1].clip.text == text)
 
-        # A JPEG is offered as one, and a bitmap as the PNG it becomes. On
-        # the clipboard at the other end both are PNGs.
+        # A JPEG is offered as JPEG and a DIB as PNG. Both arrive as PNG.
         from PIL import Image
 
         jpeg = io.BytesIO()
@@ -1074,7 +1008,7 @@ async def test_a_long_download() -> None:
         await until(lambda: world.keyboard.clip)
         crc = world.keyboard.clip["crc"]
 
-        # The source answers at once and then takes its time over the content.
+        # The source accepts at once but is slow to produce the content.
         def eventually() -> bytes:
             time.sleep(1.0)
             return image
@@ -1084,17 +1018,16 @@ async def test_a_long_download() -> None:
         await until(lambda: world.boards[1].clip.image == image)
         await until(lambda: acks(world.keyboard, 1))
 
-        # It came by the first way, with no asking for another.
+        # It came by GET, with no WANT.
         assert acks(world.keyboard, 1) == [crc] and not world.keyboard.frames(1, RELAY)
-        # A paste was held for it only for as long as the quick ways would
-        # have had: after that the keyboard was told not to wait.
+        # HOLD_SOON only for as long as the fast routes get, then plain HOLD.
         held = holds(world.keyboard, 1)
         marks = world.keyboard.when(1, HOLD)
         quick = helper.CONNECT_SECONDS + helper.PUT_WAIT_SECONDS
         assert held[0] == HOLD_SOON and held[-1] == 0 and held == sorted(held, reverse=True)
         turned = marks[held.index(0)] - marks[0]
         assert quick - 0.02 <= turned <= quick + helper.HOLD_SECONDS + 0.05, turned
-        # And it never went longer without a HOLD than the keyboard waits for one.
+        # HOLD never lapsed long enough for the keyboard to time out.
         assert longest_wait_for_a_hold(world.keyboard, 1) < 4 * helper.HOLD_SECONDS
 
 
@@ -1102,8 +1035,7 @@ async def test_holds_run_through_a_slow_clipboard() -> None:
     image = picture(64, 64)
     for dials in ((None, None), (blocked, blocked)):
         async with World(dials=dials) as world:
-            # A clipboard that takes longer over a write than the keyboard
-            # waits to hear HOLD again.
+            # A clipboard write that outlasts the keyboard's HOLD timeout.
             world.boards[1].slow = 10 * helper.HOLD_SECONDS
             world.boards[0].copy(Clip(None, image=image, form="png"))
             await until(lambda: world.keyboard.clip)
@@ -1113,8 +1045,7 @@ async def test_holds_run_through_a_slow_clipboard() -> None:
             assert world.boards[1].clip.image == image
             assert len(holds(world.keyboard, 1)) >= 8
             assert longest_wait_for_a_hold(world.keyboard, 1) < 4 * helper.HOLD_SECONDS
-            # Nor did it say HELLO while the write dragged on, which would
-            # have had the keyboard start the delivery over.
+            # No HELLO during the slow write, which would restart the delivery.
             own = order(world.keyboard, 1)
             first_hold = next(index for index, frame in enumerate(own) if frame[0] == HOLD)
             last_ack = max(index for index, frame in enumerate(own) if frame[0] == ACK)
@@ -1127,7 +1058,7 @@ async def test_holds_run_through_a_slow_clipboard() -> None:
 
 async def test_brought_when_it_cannot_be_fetched() -> None:
     image = picture(320, 200)
-    # The receiver cannot connect to the source; the source can to the receiver.
+    # Only the source can connect, so it PUTs the copy.
     async with World(dials=(None, blocked)) as world:
         world.boards[0].copy(Clip(None, image=image, form="png"))
         await until(lambda: world.keyboard.clip)
@@ -1142,14 +1073,11 @@ async def test_brought_when_it_cannot_be_fetched() -> None:
         ticket, port, addresses = helper.parse_want(wants[0][1:])
         assert ticket == Offer.parse(world.keyboard.clip["bytes"]).ticket
         assert port == world.bridges[1].endpoint.port and addresses == ["127.0.0.1"]
-        # Nothing had to come through the keyboard.
         await asyncio.sleep(0.2)
         assert len(opaque_begins(world.keyboard, 0)) == 1
         assert set(holds(world.keyboard, 1)) == {HOLD_SOON}
 
-    # Something at the receiver's address accepts the connection, reads all
-    # it is sent, and never says it took it. The source does not take that
-    # for success, and sends the copy the other way.
+    # A listener that reads but never sends TAKEN, so the source falls back to an INLINE.
     idle = helper.IDLE_SECONDS
     helper.IDLE_SECONDS = 0.3
     try:
@@ -1177,9 +1105,7 @@ async def test_through_the_keyboard() -> None:
 
     image = picture(700, 500, noisy=True)
     async with World(dials=(blocked, blocked)) as world:
-        # Through a real keyboard this takes seconds. Here the source is
-        # held up instead, for long enough that the receiver stops expecting
-        # it to come quickly.
+        # Delay the source so the receiver stops expecting a fast transfer.
         answer = world.bridges[0].answer
 
         async def slowly(*arguments) -> None:
@@ -1195,23 +1121,20 @@ async def test_through_the_keyboard() -> None:
         await until(lambda: world.boards[1].clip.image is not None, timeout=20)
         await until(lambda: acks(world.keyboard, 1))
 
-        # What arrived is the picture, smaller, and it fitted.
         assert Image.open(io.BytesIO(world.boards[1].clip.image)).size[0] < 700
         inline = world.keyboard.clip
         assert inline["opaque"] and inline["crc"] != offer_crc and len(inline["bytes"]) <= helper.INLINE_BUDGET
         assert inline["bytes"][0] == helper.INLINE and inline["bytes"][1] == KIND_JPEG
-        # It is that clip which is acknowledged, not the offer.
         assert acks(world.keyboard, 1) == [inline["crc"]]
 
-        # Pastes were kept back while it might still come quickly, then
-        # turned away while it trickled through, and left alone afterwards.
+        # HOLD_SOON while it might come fast, then plain HOLD, then nothing after the ACK.
         held = holds(world.keyboard, 1)
         assert held[0] == HOLD_SOON and held[-1] == 0 and HOLD_OFF not in held
         assert held == sorted(held, reverse=True)
         assert longest_wait_for_a_hold(world.keyboard, 1) < 4 * helper.HOLD_SECONDS
         await asyncio.sleep(0.2)
         assert not any(frame[0] == HOLD for frame in after_last(world.keyboard, 1, ACK))
-        # No HELLO while it was going on, which would have restarted the delivery.
+        # No HELLO meanwhile, which would restart the delivery.
         own = order(world.keyboard, 1)
         first_hold = next(index for index, frame in enumerate(own) if frame[0] == HOLD)
         last_ack = max(index for index, frame in enumerate(own) if frame[0] == ACK)
@@ -1219,7 +1142,6 @@ async def test_through_the_keyboard() -> None:
         assert world.keyboard.restarts == 0
         assert not world.keyboard.frames(1, BEGIN)
 
-        # Text that fits comes through whole.
         text = "wide " * 5000
         world.keyboard.select(0)
         world.boards[0].copy(Clip(text))
@@ -1244,7 +1166,7 @@ async def test_one_answer_at_a_time() -> None:
         ticket = Offer.parse(world.keyboard.clip["bytes"]).ticket
         world.keyboard.select(1)
 
-        # The receiver asks, and asks again before the first has been dealt with.
+        # A second WANT arrives before the first is answered.
         want = helper.encode_want(ticket, 9, [], 63)
         await world.bridges[0].on_relay(want)
         await world.bridges[0].on_relay(want)
@@ -1253,13 +1175,12 @@ async def test_one_answer_at_a_time() -> None:
         assert len(answered) == 1
         assert len(opaque_begins(world.keyboard, 0)) == 2
 
-        # Once it has, a later one is answered afresh.
         await world.bridges[0].on_relay(want)
         await until(lambda: len(answered) == 2)
 
 
 async def test_gives_up_when_it_cannot_be_had() -> None:
-    # Too long to come through the keyboard, with no other way across.
+    # Too long for an INLINE, and the network is blocked.
     text = "x" * 50000
     async with World(dials=(blocked, blocked)) as world:
         world.keyboard.select(1)
@@ -1274,15 +1195,14 @@ async def test_gives_up_when_it_cannot_be_had() -> None:
         gone = world.keyboard.frames(0, RELAY)
         assert len(gone) == 1 and gone[0][1] == GONE
         assert holds(world.keyboard, 1)[-1] == HOLD_OFF
-        # The offer is acknowledged, so the keyboard stops waiting on it.
+        # The OFFER is still ACKed so the keyboard stops waiting.
         assert acks(world.keyboard, 1) == [crc]
         tail = after_last(world.keyboard, 1, HOLD)
         assert [frame[0] for frame in tail if frame[0] != HELLO] == [ACK]
         assert world.boards[1].clip.text == "what was here before"
         assert world.bridges[1].fetch is None and not world.keyboard.held(1)
 
-    # The helper it came from has gone: the WANT has nowhere to go, and
-    # neither has the shorter one sent after it.
+    # The source helper is gone, so the WANT and its shorter retry both fail.
     async with World(dials=(blocked, blocked)) as world:
         world.boards[0].copy(Clip(None, image=picture(64, 64), form="png"))
         await until(lambda: world.keyboard.clip)
@@ -1294,7 +1214,7 @@ async def test_gives_up_when_it_cannot_be_had() -> None:
         assert [len(addresses) for _t, _p, addresses in wants] == [1, 0]
         assert holds(world.keyboard, 1)[-1] == HOLD_OFF and acks(world.keyboard, 1) == [crc]
 
-    # A copy that has since been replaced on the source: it says so.
+    # The source no longer has the copy and replies GONE.
     async with World(dials=(blocked, blocked)) as world:
         world.boards[0].copy(Clip(None, image=picture(64, 64), form="png"))
         await until(lambda: world.keyboard.clip)
@@ -1323,7 +1243,7 @@ async def test_nothing_comes() -> None:
             await until(lambda: acks(world.keyboard, 1))
             held = holds(world.keyboard, 1)
             assert held[0] == HOLD_SOON and 0 in held and held[-1] == HOLD_OFF
-            # Kept up for the whole of the wait, not said once and left.
+            # HOLD repeats for the whole wait.
             assert held.count(HOLD_SOON) >= 3 and held.count(0) >= 3
             assert acks(world.keyboard, 1) == [crc]
     finally:
@@ -1331,8 +1251,7 @@ async def test_nothing_comes() -> None:
 
 
 async def test_local_copy_abandons_the_fetch() -> None:
-    # The fetch is left hanging on a connection that never completes: nothing
-    # has been asked of the source yet.
+    # The GET hangs, so no WANT has been sent yet.
     async with World(dials=(None, hangs)) as world:
         world.boards[0].copy(Clip(None, image=picture(64, 64), form="png"))
         await until(lambda: world.keyboard.clip)
@@ -1350,8 +1269,7 @@ async def test_local_copy_abandons_the_fetch() -> None:
         assert not any(frame[0] in (HOLD, RELAY) for frame in after_last(world.keyboard, 1, END))
         assert world.boards[1].clip.text == "copied here instead"
 
-    # It has been asked for, and the source is getting it ready to send
-    # through the keyboard. Sent now, it would replace the newer copy there.
+    # The source is preparing an INLINE that would replace the newer copy.
     async with World(dials=(blocked, blocked)) as world:
         answer = world.bridges[0].answer
         answering = []
@@ -1377,7 +1295,6 @@ async def test_local_copy_abandons_the_fetch() -> None:
         tail = own[-3:]
         assert tail[0] == bytes([RELAY, CANCEL]) + ticket
         assert tail[1] == bytes([HOLD, HOLD_OFF]) and tail[2][0] == BEGIN
-        # The source stopped offering it and sent nothing more for it.
         assert world.bridges[0].endpoint.offering is None
         assert len(opaque_begins(world.keyboard, 0)) == 1
         assert world.keyboard.origin == 1 and world.keyboard.clip["bytes"] == b"copied here instead"
@@ -1387,7 +1304,7 @@ async def test_local_copy_abandons_the_fetch() -> None:
 
 async def test_an_inline_no_longer_wanted() -> None:
     async with World(dials=(blocked, blocked)) as world:
-        # A source that does not heed CANCEL, or had already sent.
+        # A source that ignores CANCEL, or had already sent.
         heeds = world.bridges[0].on_relay
 
         async def unheeding(datagram: bytes) -> None:
@@ -1412,12 +1329,11 @@ async def test_an_inline_no_longer_wanted() -> None:
         inline = world.keyboard.clip["crc"]
         await until(lambda: inline in acks(world.keyboard, 1))
 
-        # Acknowledged, so that no paste waits on it, and not put on the clipboard.
+        # ACKed so no paste waits, but not placed.
         await asyncio.sleep(0.2)
         assert world.boards[1].clip.text == "copied here instead" and world.boards[1].clip.image is None
         assert world.bridges[1].fetch is None and not world.keyboard.held(1)
 
-        # The next thing copied over there is wanted as usual.
         image = picture(32, 32)
         world.bridges[0].answer = answer
         world.keyboard.select(0)
@@ -1434,13 +1350,12 @@ async def test_a_newer_clip_replaces_the_fetch() -> None:
         world.keyboard.select(1)
         await until(lambda: world.bridges[1].fetch is not None)
 
-        # Something else is copied on the source while the fetch is running.
         world.boards[0].copy(Clip("newer"))
         await until(lambda: world.boards[1].clip.text == "newer")
         await until(lambda: acks(world.keyboard, 1))
         assert world.bridges[1].fetch is None
         assert acks(world.keyboard, 1) == [zlib.crc32(b"newer")]
-        # Dropped without a word: what replaced it says all there is to say.
+        # The fetch is dropped with no HOLD_OFF or RELAY.
         assert HOLD_OFF not in holds(world.keyboard, 1) and not world.keyboard.frames(1, RELAY)
         await asyncio.sleep(0.2)
         assert not any(frame[0] == HOLD for frame in after_last(world.keyboard, 1, ACK))
@@ -1456,21 +1371,19 @@ async def test_opaque_clips_out_of_the_blue() -> None:
         assert acks(world.keyboard, 1) == [zlib.crc32(message)]
         assert not holds(world.keyboard, 1)
 
-        # A message of a kind this helper does not know is acknowledged, so
-        # that no paste is kept waiting on it, and otherwise left alone.
+        # An unknown message type is ACKed and otherwise ignored.
         unknown = bytes([0x7F]) + bytes(60)
         await world.bridges[0].send_clip(unknown, OPAQUE)
         await until(lambda: zlib.crc32(unknown) in acks(world.keyboard, 1))
         assert world.boards[1].clip.text == "straight through"
 
-        # A clip that lands before this helper has had its first look at the
-        # clipboard is not mistaken for older than what is on it.
+        # A clip that arrives before the first clipboard check is still placed.
         early = Bridge(world.keyboard.clients[1], FakeClipboard(), "M0110", world.bridges[1].endpoint)
         early.clipboard.copy(Clip("from before the helper started"))
         assert await early.place(KIND_TEXT, b"early", 7, "{}") == helper.PLACED
         assert early.clipboard.clip.text == "early"
 
-        # So is one that is not an image at all, though it says it is.
+        # An INLINE that claims to be a PNG but is not is ignored.
         broken = bytes([helper.INLINE, KIND_PNG]) + TICKET + b"not a picture"
         await world.bridges[0].send_clip(broken, OPAQUE)
         await asyncio.sleep(0.3)
@@ -1487,8 +1400,7 @@ async def test_a_newer_copy_overtakes_one_being_sent() -> None:
         await until(lambda: world.boards[1].clip.text == "second")
         assert world.keyboard.clip["bytes"] == b"second"
 
-        # The same when it is the clipboard that says so: a long one being
-        # sent is dropped for the short one copied after it.
+        # Same through the clipboard: a long send stops when a short copy follows.
         world.keyboard.select(0)
         world.keyboard.clients[0].lag = 0.002
         world.boards[0].copy(Clip("b" * 16000))
@@ -1500,7 +1412,6 @@ async def test_a_newer_copy_overtakes_one_being_sent() -> None:
         assert len(begins) == 4
         long_one = [frame for frame in own[begins[2] : begins[3]] if frame[0] == DATA]
         assert 0 < len(long_one) < 16000 // 59
-        # Nothing of it followed the copy that replaced it.
         assert [frame[0] for frame in own[begins[3] :] if frame[0] in (BEGIN, DATA, END)] == [BEGIN, DATA, END]
 
 
@@ -1512,8 +1423,7 @@ async def test_older_firmware_carries_text_only() -> None:
         world.boards[0].copy(Clip("short enough"))
         await until(lambda: world.boards[1].clip.text == "short enough")
 
-        # An image, and text past what it holds, are not carried at all, and
-        # the keyboard is told to drop what it had.
+        # Images and too-long text are not sent, and the keyboard gets a CLEAR.
         world.boards[0].copy(Clip(None, image=picture(64, 64), form="png"))
         await until(lambda: world.keyboard.clip is None)
         world.boards[0].copy(Clip("still text"))
@@ -1525,8 +1435,7 @@ async def test_older_firmware_carries_text_only() -> None:
         assert not world.keyboard.frames(0, RELAY) and not world.keyboard.frames(0, HOLD)
         assert world.bridges[0].endpoint.offering is None
 
-    # Firmware that knows opaque clips but has no room for an OFFER with
-    # every address in it, and firmware that has just enough.
+    # An OFFER is only made when max_opaque is at least MIN_OPAQUE.
     for room, offers in ((0, False), (helper.MIN_OPAQUE - 1, False), (helper.MIN_OPAQUE, True)):
         async with World(FakeKeyboard(max_opaque=room)) as world:
             world.boards[0].copy(Clip("kept"))
@@ -1536,7 +1445,7 @@ async def test_older_firmware_carries_text_only() -> None:
             assert bool(opaque_begins(world.keyboard, 0)) is offers, room
 
 
-# ---- The clipboard's own ways ----
+# ---- Clipboard quirks ----
 
 
 async def test_the_same_thing_is_not_sent_twice() -> None:
@@ -1550,13 +1459,12 @@ async def test_the_same_thing_is_not_sent_twice() -> None:
         board.copy(Clip("once"))
         await until(lambda: sent() == 1)
 
-        # The number moves, as it does when a promised format is rendered.
-        # Same owner, same content: not a copy.
+        # A counter bump with the same owner and content (delayed rendering) is not a copy.
         board.count += 1
         await asyncio.sleep(0.15)
         assert sent() == 1 and world.bridges[0].seen == board.count
 
-        # Reading is itself what moves it, on some clipboards.
+        # On some clipboards the read itself bumps the counter.
         board.renders = True
         board.copy(Clip("twice"))
         await until(lambda: sent() == 2)
@@ -1568,22 +1476,19 @@ async def test_the_same_thing_is_not_sent_twice() -> None:
         board.copy(Clip("twice"), owner=78)
         await until(lambda: sent() == 3)
 
-        # And so is the same program copying them again when the keyboard
-        # saw the shortcut go by.
+        # So is a re-copy by the same program after a POKE.
         board.copy(Clip("twice"))
         world.keyboard.notify(0, bytes([helper.POKE]))
         await until(lambda: sent() == 4)
 
-        # A clipboard that could not be looked at is not an empty one: the
-        # keyboard keeps what it has, and the copy is picked up when it can be.
+        # A clipboard that cannot be opened is not treated as empty, so no CLEAR.
         clears = len(world.keyboard.frames(0, CLEAR))
         board.held = 3
         board.copy(Clip("held up"))
         await until(lambda: world.keyboard.clip and world.keyboard.clip["bytes"] == b"held up")
         assert len(world.keyboard.frames(0, CLEAR)) == clears and board.held == 0
 
-    # On a system that cannot say whose a copy is, a clip this helper put
-    # there itself is still known for what it is, however late its marker moves.
+    # With no owner info, a clip the helper placed is still recognized when the marker moves late.
     async with World() as world:
         world.boards[0].copy(Clip("over the wire"))
         world.keyboard.select(1)
@@ -1593,8 +1498,7 @@ async def test_the_same_thing_is_not_sent_twice() -> None:
         await asyncio.sleep(0.15)
         assert not world.keyboard.frames(1, BEGIN) and world.keyboard.origin == 0
 
-        # Something copied on the receiving computer just before a delivery
-        # lands is the newer of the two, and is not written over.
+        # A local copy made just before a delivery lands is newer and is not overwritten.
         world.keyboard.select(0)
         world.boards[0].copy(Clip("from afar"))
         await until(lambda: world.keyboard.clip and world.keyboard.clip["bytes"] == b"from afar")
@@ -1615,7 +1519,7 @@ async def test_the_same_thing_is_not_sent_twice() -> None:
 
 
 def test_linux_clipboard() -> None:
-    """How the Linux clipboard decides things, with the tools it runs played by a table."""
+    """LinuxClipboard logic, with its command-line tools faked by a table."""
 
     class Played(LinuxClipboard):
         def __init__(self, tool: str, answers: dict, watching: bool = False, **how) -> None:
@@ -1636,7 +1540,6 @@ def test_linux_clipboard() -> None:
 
     wayland = {"WAYLAND_DISPLAY": "wayland-0"}
 
-    # Which tool, by what the session offers.
     assert Played("wl", {}, watching=True, environ=wayland).watching
     without = Played("wl", {}, environ=wayland)
     assert without.tool == "wl" and without.poke_only and not without.watching
@@ -1646,23 +1549,20 @@ def test_linux_clipboard() -> None:
     assert Played("xclip", {}, environ={"DISPLAY": ":0"}).tool == "xclip"
     assert Played("xsel", {}, environ={}).tool == "xsel"
 
-    # Watched: the count of changes is the marker, and nothing is run to get it.
+    # With wl-paste --watch, the change count is the marker and nothing is run.
     watched = Played("wl", {}, watching=True, environ=wayland)
     first = watched.marker()
     watched.changes += 1
     assert watched.marker() != first and not watched.ran
 
-    # Not watched and no xclip: the clipboard is left alone until the
-    # keyboard says a copy was made.
+    # No watch and no xclip: only check after a copy shortcut.
     without.answers = {"TARGETS": b"text/plain\n", "text/plain": b"words"}
     idle = without.marker()
     assert without.marker(False) == idle and not without.ran
     assert without.marker(True) != idle and without.ran
     assert without.read().text == "words"
 
-    # Text is asked for by the first acceptable name the owner gives it, and
-    # not at all of an owner that offers none: xclip would hand over its
-    # image as if it were text.
+    # Text is only requested under a listed name, since xclip returns its image for any target.
     board = Played("xclip", {"TARGETS": b"TARGETS\nSTRING\ntext/plain\n", "text/plain": b"plain", "STRING": b"old"}, environ={})
     assert board.read().text == "plain" and "UTF8_STRING" not in board.ran
     board = Played("xclip", {"TARGETS": b"TARGETS\nimage/png\n", "UTF8_STRING": b"\x89PNG", "image/png": b"\x89PNG"}, environ={})
@@ -1673,8 +1573,7 @@ def test_linux_clipboard() -> None:
     board = Played("xclip", {"TARGETS": b"x-kde-passwordManagerHint\nUTF8_STRING\n", "UTF8_STRING": b"secret"}, environ={})
     assert board.read().private and board.read().text is None and board.marker()[0] is True
 
-    # An image whose owner gives the selection a timestamp is told apart by
-    # that, and read once per copy.
+    # With a TIMESTAMP, an image is read once per copy.
     stamp = [b"\x01\x00\x00\x00"]
     reads = []
 
@@ -1695,8 +1594,7 @@ def test_linux_clipboard() -> None:
     stamp[0] = b"\x02\x00\x00\x00"
     assert board.marker() != first and len(reads) == 1
 
-    # One that gives none is never asked for one, and has its image read
-    # again only every so often, or when a copy was just made.
+    # Without TIMESTAMP, the image is re-read on a timer or after a copy shortcut.
     reads.clear()
     board = Played("xclip", {"TARGETS": b"TARGETS\nimage/png\n", "image/png": image, "TIMESTAMP": b"\x89PNG one"}, environ={})
     first = board.marker()
@@ -1707,8 +1605,7 @@ def test_linux_clipboard() -> None:
     board.marker()
     assert len(reads) == 3
 
-    # A timestamp that keeps changing under an image that does not is not
-    # believed for long.
+    # A timestamp that changes while the image does not is soon distrusted.
     board = Played(
         "xclip",
         {"TARGETS": b"TIMESTAMP\nTARGETS\nimage/png\n", "TIMESTAMP": lambda: stamp[0], "image/png": b"\x89PNG same"},
@@ -1740,21 +1637,19 @@ def test_finding_the_keyboard() -> None:
         "/org/bluez/hci1/dev_C8_D1_D8_BD_10_0A/service0010": {"org.bluez.GattService1": {"UUID": "x"}},
     }
 
-    # By name: the one that is connected, on whichever adapter it is.
     address, name, details = helper.bluez_device(objects, "M0110", None)
     assert address == "C8:D1:D8:BD:10:0A" and name == "M0110"
     assert details["path"] == "/org/bluez/hci1/dev_C8_D1_D8_BD_10_0A"
     assert details["props"]["Connected"] is True and details["props"]["Alias"] == "M0110"
 
-    # By address, however it is written, even if the name has been changed.
+    # By address (case-insensitive), even if the name differs.
     address, _name, details = helper.bluez_device(objects, "something else", "aa:bb:cc:dd:ee:02")
     assert address == "AA:BB:CC:DD:EE:02" and details["path"].endswith("EE_02")
     assert helper.bluez_device(objects, "M0111", None) is None
     assert helper.bluez_device(objects, "M0110", "00:00:00:00:00:00") is None
     assert helper.bluez_device({}, "M0110", None) is None
 
-    # What bleak is handed is a device, not an address: given an address it
-    # scans for the keyboard first, and a keyboard in use is not advertising.
+    # bleak gets a BLEDevice so it does not scan for a keyboard that is not advertising.
     from bleak.backends.device import BLEDevice
 
     made = helper.ble_device(address, "M0110", details)
@@ -1762,8 +1657,7 @@ def test_finding_the_keyboard() -> None:
     assert helper.ble_device("C8:D1:D8:BD:10:0A", "M0110", None).details is None
 
     if sys.platform.startswith("linux"):
-        # bleak's own client takes it as found: the path and properties are
-        # in hand, which is what it checks before deciding whether to scan.
+        # bleak's BlueZ client sees the path and props and skips the scan.
         from bleak import BleakClient
 
         backend = BleakClient(helper.ble_device(*helper.bluez_device(objects, "M0110", None)))._backend
@@ -1773,7 +1667,7 @@ def test_finding_the_keyboard() -> None:
 
 
 async def test_letting_go() -> None:
-    """Leaving the keyboard connected when the helper is done with it."""
+    """release() leaves the keyboard connected."""
     if sys.platform == "win32":
         return
     done = []
@@ -1808,13 +1702,11 @@ async def test_letting_go() -> None:
     backend = Backend()
     monitor = backend._disconnect_monitor_event
     assert await helper.release(Client(backend)) is True
-    # Everything bleak's own disconnect does, except telling BlueZ to drop
-    # the link, which would stop the keyboard typing.
+    # All of bleak's disconnect steps except Device1.Disconnect, which would stop typing.
     assert done == ["notifications off", "cleaned up", "bus closed", "bus gone"]
     assert monitor.is_set() and backend._bus is None and backend._is_connected is False
 
-    # A bleak that has changed underneath: not done, said so, and still no
-    # disconnect.
+    # Changed bleak internals: returns False and still does not disconnect.
     done.clear()
     assert await helper.release(Client(object())) is False
     assert "DISCONNECTED" not in done
@@ -1822,7 +1714,7 @@ async def test_letting_go() -> None:
     if sys.platform.startswith("linux"):
         from bleak import BleakClient
 
-        # A real client that never connected has nothing to let go of.
+        # A real client that never connected. Also checks the private attributes still exist.
         details = {"path": "/org/bluez/hci0/dev_C8_D1_D8_BD_10_0A", "props": {"Alias": "M0110"}}
         client = BleakClient(helper.ble_device("C8:D1:D8:BD:10:0A", "M0110", details))
         assert await helper.release(client) is True
@@ -1836,8 +1728,7 @@ async def test_nothing_ends_the_helper() -> None:
 
     endpoint = Endpoint(addresses=lambda: ["127.0.0.1"])
 
-    # The session behind the link goes, as it does on Windows a moment
-    # before the link is seen to have dropped, and then the link itself.
+    # The GATT session breaks first (as on Windows), then the link drops.
     keyboard = FakeKeyboard()
     board = FakeClipboard()
     client = keyboard.attach(0)
@@ -1847,12 +1738,11 @@ async def test_nothing_ends_the_helper() -> None:
     client.broken = True
     board.copy(Clip("x" * 3000))
     await until(lambda: keyboard.frames(0, DATA))
-    # With no session to ask, frames fall back to the size every link takes.
+    # With no session, frames fall back to the 20-byte minimum.
     assert all(len(frame) <= 20 for frame in keyboard.frames(0, DATA))
     client.is_connected = False
     await asyncio.wait_for(running, 3)
 
-    # Frames with nothing in them, cut short, or of no known kind.
     keyboard = FakeKeyboard()
     client = keyboard.attach(0)
     running = asyncio.ensure_future(helper.session(client, FakeClipboard(), "M0110", endpoint))
@@ -1864,8 +1754,7 @@ async def test_nothing_ends_the_helper() -> None:
     client.is_connected = False
     await asyncio.wait_for(running, 3)
 
-    # Whatever a frame does to the code that handles it, the session ends
-    # quietly, having said goodbye if it still could.
+    # An exception in frame handling ends the session cleanly, with a BYE.
     async def explodes(_bridge, _frame: bytes) -> None:
         raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
 
@@ -1879,7 +1768,7 @@ async def test_nothing_ends_the_helper() -> None:
         Bridge.handle = handle
     assert keyboard.frames(0, BYE)
 
-    # A write that fails because the link has gone ends the session the same way.
+    # A write that fails because the link is gone ends the session too.
     keyboard = FakeKeyboard()
     client = keyboard.attach(0)
     board = FakeClipboard()
@@ -1890,7 +1779,7 @@ async def test_nothing_ends_the_helper() -> None:
     board.copy(Clip("into the void"))
     await asyncio.wait_for(running, 3)
 
-    # And whatever ends an attempt at a session, another follows.
+    # Whatever error ends an attempt, serve() tries again.
     attempts = []
     failures = (
         AssertionError(),
@@ -1919,7 +1808,7 @@ async def test_nothing_ends_the_helper() -> None:
 
 
 async def test_joining_and_leaving() -> None:
-    """What `attempt` does around a session, with bleak's client played by a stand-in."""
+    """attempt() around a session, with a fake bleak client."""
     released = []
 
     async def release(client) -> bool:
@@ -1966,12 +1855,11 @@ async def test_joining_and_leaving() -> None:
 
     helper.session = session
     try:
-        # It is the device that is handed over, never the bare address.
+        # The client gets the BLEDevice, never a bare address.
         await helper.attempt(args, None, None, {}, find, Joining)
         assert made[-1].device is device and looked == [("M0110", None)]
         assert sessions == [made[-1]] and released[-1][:2] == (made[-1], True)
 
-        # Nothing found: nothing joined, nothing to let go of.
         async def nothing(name: str, address):
             return None
 
@@ -1979,7 +1867,7 @@ async def test_joining_and_leaving() -> None:
         await helper.attempt(args, None, None, {}, nothing, Joining)
         assert len(made) == before
 
-        # Firmware without the service: let go of at once, not after the wait.
+        # No clipboard service: release right away, then wait.
         def without(device, **options):
             client = Joining(device, **options)
             client.has_service = False
@@ -1990,8 +1878,7 @@ async def test_joining_and_leaving() -> None:
         assert released[-1][0] is made[-1] and released[-1][2] - started < 0.2
         assert asyncio.get_running_loop().time() - started >= 0.3 and len(sessions) == 1
 
-        # A join that fails is still let go of, and the failure is passed on
-        # for the loop around it to log.
+        # A failed connect is still released, and the error is raised for serve() to log.
         def failing(device, **options):
             client = Joining(device, **options)
             client.fails = OSError("no")
@@ -2004,9 +1891,7 @@ async def test_joining_and_leaving() -> None:
             pass
         assert released[-1][:2] == (made[-1], False)
 
-        # Told to stop in the middle of joining: the join is left to finish,
-        # since bleak cancelled part way would disconnect the keyboard, and
-        # only then is the link let go of.
+        # Cancelled mid-connect: let the connect finish, then release.
         def slow(device, **options):
             client = Joining(device, **options)
             client.takes = 0.3
@@ -2022,7 +1907,7 @@ async def test_joining_and_leaving() -> None:
         helper.release, helper.session, helper.UNSUPPORTED_SECONDS = real_release, real_session, wait
 
 
-# ---- Against the other implementation ----
+# ---- Interop with M0110HUD ----
 
 
 async def interop(arguments: list[str]) -> None:
@@ -2051,7 +1936,7 @@ async def interop(arguments: list[str]) -> None:
         print(endpoint.port, flush=True)
         content = await brought.get()
         print(hashlib.sha256(content).hexdigest(), len(content), flush=True)
-        # Long enough for the byte that says it was taken to be on its way.
+        # Give the TAKEN byte time to go out.
         await asyncio.sleep(0.2)
 
     elif mode == "interop-put":
@@ -2111,7 +1996,7 @@ def main() -> None:
     parser.add_argument("only", nargs="*", help="names of the tests to run; all of them if none")
     wanted = parser.parse_args().only
 
-    # Everything that only waits is made to wait less.
+    # Shorten every wait so the tests run fast.
     helper.POLL_SECONDS = 0.02
     helper.POKE_SECONDS = 0.01
     helper.HOLD_SECONDS = 0.05

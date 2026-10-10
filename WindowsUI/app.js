@@ -1,6 +1,4 @@
-// The window's shell: the sidebar, the pane on show, and the window size the
-// layout needs, which the app applies (the window is fixed-size, as the Mac's
-// is, and grows when the key picker opens).
+// The window has a fixed size like the Mac one, and grows when the key picker opens.
 
 import { listen, send } from './bridge.js';
 import { ditheredTitle, pixelIcon, racingStripes, rgb } from './art.js';
@@ -20,15 +18,12 @@ const PANES = [
   { id: 'settings', title: 'Settings', icon: 'settings', tint: '#e6735c', make: settingsPane },
 ];
 
-/** The Mac window's sizes, less its title bar. */
+/** The Mac window's sizes, minus its title bar. */
 const SIZE = { expanded: 1340, collapsed: 1110, board: 585, picker: 792 };
 
 const app = {
-  /** From the app: board geometry and the picker's groups, sent once. */
   fixed: null,
-  /** From the app: everything that changes. */
   state: null,
-  /** The window's own: which pane, the sidebar, and what each pane keeps. */
   ui: {
     pane: 'keys',
     sidebar: true,
@@ -36,23 +31,20 @@ const app = {
     keyboard3D: saved('keyboard3D', 'true') === 'true',
   },
   send,
-  /** Panes call this when something they show changes the window's size. */
   relayout() { requestLayout(); },
 };
 
-/** A remembered view choice, or `fallback`. Per viewer, and lost without
- *  harm. */
 function saved(key, fallback) {
   try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
 }
-app.remember = (key, value) => { try { localStorage.setItem(key, String(value)); } catch { /* per viewer */ } };
+app.remember = (key, value) => { try { localStorage.setItem(key, String(value)); } catch { /* not saved, which is fine */ } };
 
 let pane = null;
 let stage = null;
 const light = matchMedia('(prefers-color-scheme: light)');
 
 function iconTint(tint) {
-  // Theme.sidebarIcon: the tint as is in dark mode, darkened in light.
+  // Same as Theme.sidebarIcon on the Mac: the tint is darkened in light mode.
   if (!light.matches) return tint;
   return `rgb(${rgb(tint).map((c) => Math.round(c * 0.68)).join(',')})`;
 }
@@ -95,8 +87,7 @@ function setSidebar(visible) {
 }
 
 let lastSize = '';
-/** The tallest the picker has needed since it opened, so the window grows
- *  to fit its groups but does not bounce between them. */
+/** Tallest the picker has been since it opened, so the window does not jump. */
 let pickerHeight = 0;
 function requestLayout() {
   const width = app.ui.sidebar ? SIZE.expanded : SIZE.collapsed;
@@ -128,7 +119,7 @@ listen((message) => {
 document.getElementById('sidebar-hide').addEventListener('click', () => setSidebar(false));
 document.getElementById('sidebar-show').addEventListener('click', () => setSidebar(true));
 document.addEventListener('keydown', (event) => {
-  // ⌃⌘S on the Mac; Ctrl+Shift+S here.
+  // Ctrl+Shift+S here, Ctrl+Cmd+S on the Mac.
   if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 's') setSidebar(!app.ui.sidebar);
 });
 light.addEventListener('change', renderSidebar);
@@ -136,20 +127,18 @@ light.addEventListener('change', renderSidebar);
 try {
   app.board3d = new Board3D();
 } catch (error) {
-  // No WebGL: the flat drawing stands in.
   console.warn('3D board unavailable', error);
   app.board3d = null;
 }
 app.stage = stage = new Stage(document.getElementById('stage-column'), app);
-// Preview options, for the page opened in a browser: ?pane=battery&select=24.
+// Preview options when the page is opened in a browser, e.g. ?pane=battery&select=24.
 const preview = window.chrome?.webview ? new URLSearchParams() : new URLSearchParams(location.search);
 if (!window.chrome?.webview) window.m0110 = app;
 if (preview.has('select')) app.ui.selected = Number(preview.get('select'));
 if (preview.has('layer')) app.ui.layer = Number(preview.get('layer'));
 if (preview.get('sidebar') === '0') setSidebar(false);
 followDiagonals();
-// The sky, kept current each minute; ?sky=HH:MM pins it, to review any time
-// of day.
+// Updates the sky every minute. ?sky=HH:MM fixes the time for previews.
 followSky((prism) => {
   app.prism = prism;
   const p = PANES.find((x) => x.id === app.ui.pane);

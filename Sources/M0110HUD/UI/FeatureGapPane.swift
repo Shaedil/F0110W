@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// A feature this build has no hardware for. Shown honestly rather than as mock
-/// controls that would imply the keyboard can do something it cannot.
+/// A feature this build has no hardware for, shown as a note instead of fake controls.
 struct FeatureGapPane: View {
     let title: String
     let summary: String

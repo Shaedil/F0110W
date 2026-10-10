@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Draws the Windows HUD in every state, light and dark, plus the tray icon, to
-# a PNG, on a Mac. The HUD itself is software-rendered (HUDRaster.swift), so
-# this is the same drawing Windows shows, with Core Text standing in for GDI.
-#
+# Draws the Windows HUD and tray icon to a PNG on a Mac. HUDRaster.swift draws in
+# software, so it matches Windows except that Core Text replaces GDI.
 #   tools/win-hud-preview.sh [out.png] [scale]    scale 1.5 is 144 DPI
 set -euo pipefail
 

@@ -2,22 +2,19 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Images on the way to and from the pasteboard.
 enum ClipImage {
     static let jpegType = NSPasteboard.PasteboardType(UTType.jpeg.identifier)
 
-    /// What a copy made here holds: the image as the pasteboard had it, which
-    /// may still need converting before it can travel.
+    /// An image as read from the pasteboard. It may need converting before it is sent.
     struct Source {
         let data: Data
         let type: NSPasteboard.PasteboardType
 
-        /// The kind it travels as. TIFF, which is what AppKit itself puts on
-        /// the pasteboard, is not one of them and goes as PNG.
+        /// TIFF (AppKit's own pasteboard format) is sent as PNG.
         var kind: ClipContent.Kind { type == ClipImage.jpegType ? .jpeg : .png }
 
-        /// The bytes that travel. Converting is left until they are asked
-        /// for, since most copies are never pasted on another computer.
+        /// Converts only when called, since most copies are never pasted on
+        /// another computer.
         func content() -> ClipContent? {
             if type == .tiff {
                 guard let png = ClipImage.convert(data, to: .png) else { return nil }
@@ -27,7 +24,7 @@ enum ClipImage {
         }
     }
 
-    /// The forms of image that are read, in order of preference.
+    /// Image types read, in order of preference.
     private static let types: [NSPasteboard.PasteboardType] = [.png, jpegType, .tiff]
 
     /// Whether `pasteboard` holds an image, without reading it.
@@ -35,7 +32,6 @@ enum ClipImage {
         pasteboard.availableType(from: types) != nil
     }
 
-    /// The image on `pasteboard`, if it holds one.
     static func read(_ pasteboard: NSPasteboard) -> Source? {
         for type in types {
             if let data = pasteboard.data(forType: type), !data.isEmpty {
@@ -45,22 +41,19 @@ enum ClipImage {
         return nil
     }
 
-    /// Re-encodes image data. Used for the forms of a delivered image that
-    /// are only made if a program asks the pasteboard for them.
+    /// Re-encodes image data, for formats made only when an app asks for them.
     static func convert(_ data: Data, to type: NSBitmapImageRep.FileType) -> Data? {
         NSBitmapImageRep(data: data)?.representation(using: type, properties: [:])
     }
 
-    /// Longest side in pixels, and JPEG quality, tried in turn until the
-    /// result fits. A screenshot of text stays legible further down this list
-    /// than a photograph stays pleasant.
+    /// Steps of (longest side in pixels, JPEG quality), tried in order until one fits.
     private static let ladder: [(side: Int, quality: Double)] = [
         (2048, 0.6), (1600, 0.6), (1280, 0.5), (1024, 0.5), (800, 0.45), (640, 0.4), (480, 0.4),
         (320, 0.35), (200, 0.3),
     ]
 
-    /// `content` made to fit in `budget` bytes: as it is if it already does,
-    /// otherwise scaled down and re-encoded as JPEG. Nil if nothing fits.
+    /// `content` as is if it fits in `budget` bytes, otherwise a scaled-down
+    /// JPEG. Nil if nothing fits.
     static func shrink(_ content: ClipContent, toFit budget: Int) -> ClipContent? {
         if content.data.count <= budget { return content }
         guard let source = CGImageSourceCreateWithData(content.data as CFData, nil) else {
@@ -90,7 +83,7 @@ enum ClipImage {
         return nil
     }
 
-    /// JPEG has no transparency, and what shows through otherwise is black.
+    /// JPEG has no alpha, so transparent areas would turn black. Draws on white.
     private static func flattened(_ image: CGImage) -> CGImage? {
         guard let context = CGContext(
             data: nil, width: image.width, height: image.height, bitsPerComponent: 8,

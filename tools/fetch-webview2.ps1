@@ -1,6 +1,5 @@
-# Fetches the WebView2 SDK (headers and the static loader) into .deps\webview2,
-# where Package.swift looks for it. Run before `swift build` on Windows;
-# build.ps1 runs it for you.
+# Downloads the WebView2 SDK into .deps\webview2, where Package.swift looks for it.
+# Run before `swift build` on Windows (build.ps1 already does).
 $ErrorActionPreference = 'Stop'
 $Version = '1.0.2903.40'
 $Root = Split-Path $PSScriptRoot

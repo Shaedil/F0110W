@@ -2,12 +2,9 @@ import AppKit
 import SceneKit
 import SwiftUI
 
-/// One cap's top face as a texture: the same plastic, sheen and legend the
-/// drawn `Keycap` uses, so the 3D board and the 2D one are printed alike.
-///
-/// Laid out in points at `pointsPerMetre`, the cap's real size, and the legend
-/// sizes are the 2D board's unit-hundredth sizes converted at the case's key
-/// pitch, so a letter takes the same share of the cap in both.
+/// One cap's top face as a texture, printed like the 2D `Keycap`. Legend sizes
+/// are the 2D sizes converted at the case's key pitch, so a letter takes the
+/// same share of the cap in both.
 struct CapFace: View, Equatable {
     var legend: CapLegend = .blank
     var isSelected = false
@@ -38,8 +35,8 @@ struct CapFace: View, Equatable {
             legendView
                 .padding(6 * Self.unit)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // The outermost pixels are what the clamped texture stretches
-            // down the walls, so they carry the skirt colour.
+            // The clamped texture stretches its edge pixels down the walls, so
+            // the edge uses the skirt color.
             Rectangle().strokeBorder(skirt, lineWidth: 3)
             if !isEditable && !isSelected {
                 Theme.plate.opacity(0.38)
@@ -78,7 +75,6 @@ struct CapFace: View, Equatable {
 }
 
 extension BoardStage {
-    /// The case and plate in the 2D board's colours, and every cap blank.
     @MainActor func paintBlank() {
         applyPalette(case: NSColor(Theme.caseFlat), plate: NSColor(Theme.plate))
         for tag in capTags {
@@ -90,8 +86,7 @@ extension BoardStage {
     }
 }
 
-/// The Keyboard pane's board in 3D: the same keymap, printed on the modelled
-/// caps, and clicked to select a key the way the drawn board is.
+/// The Keyboard pane's 3D board. Clicking a cap selects it, as on the 2D board.
 struct KeyboardStageView: NSViewRepresentable {
     @ObservedObject var controller: KeyboardController
 
@@ -122,8 +117,8 @@ struct KeyboardStageView: NSViewRepresentable {
             view.scene = stage.scene
             view.pointOfView = stage.cameraNode
             stage.applyPalette(case: NSColor(Theme.caseFlat), plate: NSColor(Theme.plate))
-            // Coming back from a close-up, start where that pane's camera was
-            // and pull back out to the whole board, reassembling on the way.
+            // Coming back from another pane, start at its camera and pull out
+            // to the whole board.
             let from = BoardStage.lastShown ?? .editor
             BoardStage.lastShown = nil
             stage.setFocus(from, animated: false)

@@ -1,16 +1,7 @@
-// The prismatic triad of one moment, as the window draws it: the Mac's
-// Prism.swift, driven by chronos.js. The colours go to CSS as custom
-// properties on :root, each an "r, g, b" triple for rgba():
-//
-//   --prism-t1..3  tints, for glows, rims, shines and washes
-//   --prism-m1..3  marks, for the few things that carry a value
-//   --prism-glow   what glows are multiplied by
-//   --sun-x/-y     where the ambient glow centres
-//
-// Both sets keep the sky's hues but not its darkness. Night's triad sinks to
-// navy, which on a near-black window is no colour at all, so tints are held
-// to a middle lightness and marks to a light one, both with a floor of
-// saturation: night comes out indigo, teal and violet rather than grey.
+// Sets the window's time-of-day colours on :root, ported from the Mac's Prism.swift.
+// --prism-t1..3 (tints) and --prism-m1..3 (marks) are "r, g, b" triples for rgba().
+// Lightness and saturation are clamped so night colours stay visible on the
+// dark window instead of fading to navy.
 
 import { state, withLightness } from './chronos.js';
 
@@ -21,17 +12,12 @@ export class Prism {
     this.marks = sky.triad.map((c) => withLightness(c, 0.72, 1, 0.11));
   }
 
-  /** The sky over this PC's time zone at a moment. */
   static at(date) { return new Prism(state(date)); }
 
-  /** The original scales glows by the glow cap outright, which leaves a third
-   *  of the glow at night; this keeps night calmer than day but still
-   *  visibly prismatic. */
+  /** The Mac uses glowCap directly, which makes night too dim here. */
   get glowScale() { return 0.6 + 0.4 * this.state.glowCap; }
 
-  /** The original parks a set sun on the bottom corner, where most of its
-   *  glow falls outside the window; held in from the edges, it stays on
-   *  screen. */
+  /** Clamped so the glow stays on screen. The Mac puts a set sun in the bottom corner. */
   get sun() {
     return { x: Math.min(Math.max(this.state.sunX, 0.15), 0.85), y: Math.min(this.state.sunY, 0.72) };
   }
@@ -47,13 +33,11 @@ export class Prism {
   }
 }
 
-/** The boxes whose triad runs corner to corner. */
 const DIAGONAL = '.panel, #sidebar, .pill.prominent, .segments button.active';
 
-/** Gives each corner-to-corner box its own diagonal's angle as --diag, kept
- *  as it resizes and as boxes come and go. SwiftUI's topLeading to
- *  bottomTrailing gradient runs along that diagonal; CSS's "to bottom right"
- *  runs across the other one, which turns a wide box's triad top to bottom. */
+/** Sets --diag on each DIAGONAL box to the angle of its own diagonal. CSS's
+ *  "to bottom right" does not follow the diagonal on wide boxes, but SwiftUI's
+ *  topLeading to bottomTrailing gradient does. */
 export function followDiagonals(root = document.body) {
   const watched = new Set();
   const sizes = new ResizeObserver((entries) => {
@@ -62,8 +46,7 @@ export function followDiagonals(root = document.body) {
       const width = box?.inlineSize ?? entry.contentRect.width;
       const height = box?.blockSize ?? entry.contentRect.height;
       if (!width || !height) continue;
-      // CSS angles run clockwise from "to top"; this one points down the
-      // diagonal, at 135deg for a square.
+      // CSS angles go clockwise from "to top". A square gives 135deg.
       const angle = 180 - Math.atan(width / height) * 180 / Math.PI;
       entry.target.style.setProperty('--diag', `${angle.toFixed(2)}deg`);
     }
@@ -76,15 +59,14 @@ export function followDiagonals(root = document.body) {
       if (!watched.has(el)) { watched.add(el); sizes.observe(el); }
     }
   };
-  // Classes only: the --diag writes themselves change style, not class.
+  // Watch class changes only, since writing --diag changes the style attribute.
   new MutationObserver(scan).observe(root, { subtree: true, childList: true, attributes: true,
                                              attributeFilter: ['class'] });
   scan();
 }
 
-/** Keeps the sky current: once now, then each minute, the original's own
- *  cadence. `pinned` ("HH:MM") holds it to a time of day instead, as the
- *  Mac's --snapshot-time does. `changed` hears each new Prism. */
+/** Updates once a minute, like the Mac. `pinned` ("HH:MM") fixes the time
+ *  of day, like the Mac's --snapshot-time. */
 export function followSky(changed, pinned = null) {
   const now = () => {
     const date = new Date();

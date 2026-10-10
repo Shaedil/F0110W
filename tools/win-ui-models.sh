@@ -1,7 +1,6 @@
 #!/bin/sh
-# Re-exports the Windows window's 3D models from the Mac app's sources, with
-# Blender: the board from assets/M0110.blend and the hand from
-# Resources/Hand.usdz, both to glTF in WindowsUI/models.
+# Exports the Windows window's 3D models to WindowsUI/models with Blender, from
+# assets/M0110.blend and Resources/Hand.usdz.
 set -e
 cd "$(dirname "$0")/.."
 blender=${BLENDER:-/Applications/Blender.app/Contents/MacOS/Blender}

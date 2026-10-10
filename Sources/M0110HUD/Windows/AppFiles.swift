@@ -1,7 +1,6 @@
 import Foundation
 
-/// Where the Windows app keeps what the Mac keeps in UserDefaults:
-/// %LOCALAPPDATA%\M0110HUD.
+/// %LOCALAPPDATA%\M0110HUD, which holds what the Mac keeps in UserDefaults.
 enum AppFiles {
     static var directory: URL {
         let base = ProcessInfo.processInfo.environment["LOCALAPPDATA"]
@@ -14,8 +13,7 @@ enum AppFiles {
     static var settings: URL { directory.appendingPathComponent("settings.json") }
 }
 
-/// The announcer's memory, in a JSON file rewritten on every change. Changes
-/// are rare: a few a day.
+/// Announcer state in a JSON file, rewritten on every change (a few times a day).
 final class FileMemory: AnnouncerMemory {
     private struct State: Codable {
         var lowAlertArmed = true
@@ -68,21 +66,18 @@ final class FileMemory: AnnouncerMemory {
     }
 }
 
-/// settings.json: what the window's Bluetooth, Battery and Settings panes
-/// set, which the Mac keeps in UserDefaults. Every field is optional, so a
-/// hand-written file with only some of them still loads.
+/// settings.json. Every field is optional, so a partial hand-written file still loads.
 ///
 ///     { "profileNames": ["MacBook", "Windows PC"], "hudDuration": 5 }
 struct WinSettings: Codable, Equatable {
-    /// This PC's copy of the names the keyboard keeps; see ProfileNameStore.
+    /// Local copy of the names stored on the keyboard (see ProfileNameStore).
     var profileNames: [String]?
-    /// Renames made here the keyboard has not taken yet, by profile.
+    /// Renames not yet accepted by the keyboard, keyed by profile.
     var profileNamesPending: [String: String]?
-    /// Whether the names here have been offered to the keyboard once.
+    /// True once the local names have been offered to the keyboard.
     var profileNamesCarriedOver: Bool?
     var scale: Double?
-    /// From the right edge of the screen, and up from the taskbar: where the
-    /// Mac measures from the menu bar, Windows measures from the tray.
+    /// Measured from the right screen edge and up from the taskbar.
     var insetX: Double?
     var insetY: Double?
     var hudDuration: Double?
@@ -90,11 +85,8 @@ struct WinSettings: Codable, Equatable {
     var suppressInitial: Bool?
     var lowThreshold: Int?
     var rearmThreshold: Int?
-    /// Whether the clipboard is carried to and from the keyboard.
     var clipboardSync: Bool?
 
-    /// The Windows HUD's own resting place, a tray-corner margin, where the
-    /// Mac's defaults clear its menu bar icons.
     static let defaultInsetX = 12.0
     static let defaultInsetY = 12.0
 
@@ -109,7 +101,7 @@ struct WinSettings: Codable, Equatable {
         try encoder.encode(self).write(to: AppFiles.settings, options: .atomic)
     }
 
-    /// For UserDefaults.register, under Config's command-line flags.
+    /// For UserDefaults.register, so command-line flags still win.
     var defaults: [String: Any] {
         var d: [String: Any] = ["insetX": insetX ?? Self.defaultInsetX, "insetY": insetY ?? Self.defaultInsetY]
         if let scale { d["scale"] = scale }
@@ -121,7 +113,7 @@ struct WinSettings: Codable, Equatable {
         return d
     }
 
-    /// The name for a 0-based profile, or "Profile N" as on the Mac.
+    /// `index` is 0-based. Falls back to "Profile N".
     func profileName(_ index: Int) -> String {
         if let profileNames, index < profileNames.count {
             let name = profileNames[index].trimmingCharacters(in: .whitespaces)

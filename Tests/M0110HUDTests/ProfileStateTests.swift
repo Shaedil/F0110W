@@ -22,8 +22,6 @@ final class ProfileStateTests: XCTestCase {
         XCTAssertEqual(ProfileState(active: 2, own: 0).typingHere, false)
     }
 
-    /// Without the keyboard saying which profile is this computer, there is
-    /// nothing to show, rather than a guess.
     func testUnknownOwnSaysNothing() {
         let state = ProfileState(active: 0, own: nil)
         XCTAssertNil(state.typingHere)
@@ -38,7 +36,7 @@ final class ProfileStateTests: XCTestCase {
                        "Typing to this Mac (Home iMac)")
     }
 
-    /// An unnamed profile is not said twice as "Profile 2 (Profile 2)".
+    /// An unnamed profile is not shown twice, as in "Profile 2 (Profile 2)".
     func testSummaryAwayAddsTheNumberOnlyToANamedProfile() {
         XCTAssertEqual(ProfileState(active: 1, own: 0).summary(in: defaults),
                        "Typing to Profile 2")

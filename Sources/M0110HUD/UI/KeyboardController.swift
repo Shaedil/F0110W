@@ -1,16 +1,9 @@
 import Foundation
 import SwiftUI
 
-/// Observable state for the keyboard's live connection and keymap.
-///
-/// `StudioClient` is blocking, so every RPC runs on a private serial queue and
-/// results are published back on the main queue.
-/// Which physical M0110 variant is actually on the desk.
-///
-/// The shield's `m0110a_layout` is a superset covering every variant, so the
-/// firmware reports 79 positions regardless of the board in hand. The original
-/// M0110 has no numpad and no arrow cluster, so those slots exist in the keymap
-/// but have no keys to press.
+/// Which M0110 model is on the desk. The shield's `m0110a_layout` covers every
+/// model, so the firmware always reports 79 positions. The original M0110 has
+/// no numpad or arrows, so those slots have no physical key.
 enum KeyboardVariant: String, CaseIterable, Identifiable {
     case m0110 = "M0110"
     case m0110a = "M0110A"
@@ -25,6 +18,8 @@ enum KeyboardVariant: String, CaseIterable, Identifiable {
     }
 }
 
+/// `StudioClient` blocks, so every RPC runs on a private serial queue and
+/// results are published on the main queue.
 final class KeyboardController: ObservableObject {
     enum Connection: Equatable {
         case disconnected
@@ -57,9 +52,8 @@ final class KeyboardController: ObservableObject {
     @Published var selectedKey: Int?
     @Published var pendingEdits = 0
     @Published var behaviors: [Int32: BehaviorInfo] = [:]
-    /// The board on the desk. Not a choice: it is whatever the converter
-    /// detects, and the M0110 until it says otherwise. The firmware does not
-    /// yet ask the keyboard for its model, so for now that is always.
+    /// Should come from the converter. The firmware does not read the
+    /// keyboard's model yet, so this is always `.m0110` for now.
     @Published var variant: KeyboardVariant = .m0110 {
         didSet {
             if let selected = selectedKey, !isPresent(selected) { selectedKey = nil }
@@ -68,30 +62,23 @@ final class KeyboardController: ObservableObject {
     @Published var status: String?
 
     private var client: StudioClient?
-    /// Name to match the Bluetooth peripheral on, when discovery falls through
-    /// to the wireless route.
+    /// Bluetooth peripheral name to match when USB discovery finds nothing.
     var deviceName = "M0110"
     private let queue = DispatchQueue(label: "m0110hud.studio", qos: .userInitiated)
 
-    /// Lock state as last seen on the wire. Owned by `queue`; the published
-    /// `lockState` is its mirror. Kept separately because the reaction to an
-    /// unlock has to happen on the serial queue, where the published property
-    /// cannot be read safely.
+    /// Last lock state seen from the keyboard, owned by `queue`. `lockState` is
+    /// a main-queue copy that `queue` cannot read safely.
     private var lockOnWire: LockState = .locked
     private var lockPoll: DispatchSourceTimer?
 
-    /// Whether the app should be holding a link at all. Cleared by `disconnect`
-    /// so the retry loop stops rather than fighting a deliberate teardown.
+    /// Cleared by `disconnect` so the retry loop stops.
     private var wantsConnection = false
     private var reconnect: DispatchWorkItem?
     private var retryDelay: TimeInterval = firstRetryDelay
 
-    /// How often to check the lock. While locked the app asks, in case the
-    /// firmware's notification of an unlock is missed. While unlocked it only
-    /// reads what the firmware has sent: the keyboard re-locks after ten idle
-    /// minutes, any request would restart that clock, and without listening
-    /// the app went on showing an unlocked editor whose every write the
-    /// keyboard refused.
+    /// While locked, the poll asks for the lock state in case the unlock
+    /// notification is missed. While unlocked, it only reads notifications,
+    /// since any request would reset the keyboard's 10-minute idle re-lock timer.
     private static let lockPollInterval: TimeInterval = 1.5
 
     deinit { lockPoll?.cancel() }
@@ -112,12 +99,8 @@ final class KeyboardController: ObservableObject {
         queue.async { [weak self] in self?.attemptConnect() }
     }
 
-    /// One attempt, which reschedules itself if it fails. Must run on `queue`.
-    ///
-    /// The link is expected to come and go: a Bluetooth keyboard sleeps, wanders
-    /// out of range, and drops the connection every time its output endpoint
-    /// changes. Parking in a failed state and waiting to be told to retry made
-    /// that routine churn look like a fault the user had to clear by hand.
+    /// Tries once and reschedules itself on failure, since a Bluetooth link
+    /// drops often (sleep, range, output switch). Must run on `queue`.
     private func attemptConnect() {
         guard wantsConnection, client == nil else { return }
         guard let found = StudioClient.discover(
@@ -143,8 +126,7 @@ final class KeyboardController: ObservableObject {
         reloadEverything()
     }
 
-    /// Backs off so an absent keyboard is not hammered, but stays responsive
-    /// for the common case of a link that just blipped.
+    /// Retry backoff in seconds. It starts short because most drops are brief.
     private static let firstRetryDelay: TimeInterval = 2
     private static let maxRetryDelay: TimeInterval = 15
 
@@ -189,16 +171,13 @@ final class KeyboardController: ObservableObject {
             let lock = try client.lockState()
             noteLock(lock)
             guard lock == .unlocked else {
-                // Studio refuses reads as well as writes while locked, so there
-                // is nothing further to fetch. `noteLock` has started polling
-                // for the unlock; the pane explains the lock on its own.
+                // Studio refuses reads while locked. `noteLock` has started
+                // polling for the unlock.
                 publish { self.status = nil }
                 return
             }
-            // Keymap first. It is what the editor cannot work without, and the
-            // physical layouts, the largest reply the firmware sends, are the
-            // call most likely to fail. Fetching layouts first meant one failed
-            // call cost the legends too.
+            // Keymap first, so a failed layouts reply (the largest and most
+            // likely to fail) does not lose the legends.
             let km = try retrying { try client.keymap() }
             let table = (try? client.behaviorTable()) ?? [:]
             let reported = try? retrying { try client.physicalLayouts() }
@@ -212,8 +191,7 @@ final class KeyboardController: ObservableObject {
                 self.keymap = km
                 self.behaviors = table
                 if self.activeLayerIndex >= km.layers.count { self.activeLayerIndex = 0 }
-                // A firmware limit rather than a passing failure, so it is
-                // spelled out: see CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE in
+                // A firmware limit, see CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE in
                 // config/m0110.conf.
                 self.status = active == nil
                     ? "The keyboard could not send its physical layout: its Studio transmit "
@@ -223,14 +201,11 @@ final class KeyboardController: ObservableObject {
             }
         } catch let error as StudioError {
             if case .locked = error {
-                // The lock re-armed mid-reload.
                 noteLock(.locked)
                 publish { self.status = nil }
             } else if case .portUnavailable = error {
-                // Only a transport-level failure means the link itself is gone.
-                // Tearing down on any error would put a call that simply timed
-                // out into the reconnect loop, and reconnecting cannot fix a
-                // reply the firmware will not finish sending.
+                // Only a transport failure means the link is gone. Reconnecting
+                // will not fix a reply that timed out.
                 dropLink(because: error)
             } else {
                 publish { self.status = "Reload failed: \(error)" }
@@ -240,13 +215,8 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// Run a Studio call, retrying before giving up.
-    ///
-    /// Every failure mode worth retrying here is transient: a reply that
-    /// overran its window, or a link still settling after the connection
-    /// parameters were renegotiated. The alternative is an empty editor. A lock
-    /// is not transient, so it returns immediately rather than spending the
-    /// attempts on a call that cannot succeed.
+    /// Retries a Studio call, for replies that time out or a link still settling
+    /// after new connection parameters. A lock error is thrown right away.
     private func retrying<T>(attempts: Int = 3, _ work: () throws -> T) throws -> T {
         var lastError: Error?
         for attempt in 0..<attempts {
@@ -267,12 +237,8 @@ final class KeyboardController: ObservableObject {
         queue.async { [weak self] in self?.reloadEverything() }
     }
 
-    /// Re-read the lock, and fetch the keymap if it is open.
-    ///
-    /// Reloads whenever the keyboard is unlocked rather than only on the
-    /// transition: if an earlier reload failed, the app can be unlocked and
-    /// still showing nothing, and this is the button someone presses to fix
-    /// that.
+    /// Re-reads the lock and reloads every time the keyboard is unlocked. That
+    /// also recovers from an earlier reload that failed.
     func refreshLockState() {
         queue.async { [weak self] in
             guard let self, let client = self.client else { return }
@@ -284,21 +250,15 @@ final class KeyboardController: ObservableObject {
 
     // MARK: - Lock
 
-    /// Record a lock state read from the keyboard. Must run on `queue`.
-    ///
-    /// Deliberately does not reload: `reloadEverything` calls this, and the two
-    /// calling each other would recurse. Callers that want the keymap fetched
-    /// on an unlock ask for it themselves.
+    /// Does not reload, since `reloadEverything` calls this. Must run on `queue`.
     private func noteLock(_ lock: LockState) {
         lockOnWire = lock
         publish { self.lockState = lock }
         startLockPolling()
     }
 
-    /// The firmware said the lock changed. Must run on `queue`.
-    ///
-    /// Can arrive in the middle of another call's reply, so a reload it needs
-    /// is queued behind that call rather than started inside it.
+    /// Can arrive in the middle of another call's reply, so the reload is
+    /// queued after that call. Must run on `queue`.
     private func lockAnnounced(_ lock: LockState) {
         guard lock != lockOnWire else { return }
         noteLock(lock)
@@ -339,27 +299,16 @@ final class KeyboardController: ObservableObject {
             let lock = try client.lockState()
             guard lock != lockOnWire else { return }
             noteLock(lock)
-            // The whole point of the poll: the unlock happens at the keyboard,
-            // and until it does there is no keymap to draw. Seeing the state
-            // change without going back for the data leaves a board that is
-            // correctly labelled "unlocked" and completely blank.
+            // Fetch the keymap now, or the board stays blank after the unlock.
             if lock == .unlocked { reloadEverything() }
         } catch {
-            // The poll is the app's only regular traffic, so it is where a dead
-            // link shows up first. Swallowing the error, as `try?` did, left the
-            // app claiming to be connected while polling a link that had gone,
-            // with an empty board and nothing on screen to explain it. A
-            // dropped Bluetooth link is routine: sleep, range, or the keyboard
-            // switching its output endpoint.
+            // The poll is the only regular traffic, so a dead link shows up here first.
             dropLink(because: error)
         }
     }
 
-    /// Give up on the current client and let the user reconnect.
-    ///
-    /// `BLETransport` latches its failure and every later call throws the same
-    /// error, so there is nothing to salvage once one does. Must run on
-    /// `queue`.
+    /// `BLETransport` keeps throwing the same error after its first failure,
+    /// so the client cannot be reused. Must run on `queue`.
     private func dropLink(because error: Error) {
         stopLockPolling()
         client?.close()
@@ -374,9 +323,8 @@ final class KeyboardController: ObservableObject {
 
     // MARK: - Editing
 
-    /// Rebind one key to send `param`, a page-encoded HID usage. A keycode
-    /// behaviour is preserved, so a `&kp` stays a key press and only the
-    /// keycode moves; an empty `&trans`/`&none` slot becomes a `&kp`.
+    /// `param` is a page-encoded HID usage. The key keeps its behavior and only
+    /// the keycode changes, except `&trans`/`&none`, which become `&kp`.
     func rebind(keyPosition: Int, to param: UInt32) {
         guard let layer = activeLayer else { return }
         guard layer.bindings.indices.contains(keyPosition) else { return }
@@ -392,8 +340,7 @@ final class KeyboardController: ObservableObject {
         guard binding != previous else { return }
 
         let layerID = layer.id
-        // The layer the edit was made on, not whichever is showing when the
-        // reply lands.
+        // Captured now, since the user may switch layers before the reply.
         let layerIndex = activeLayerIndex
         queue.async { [weak self] in
             guard let self, let client = self.client else { return }
@@ -415,11 +362,8 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// Report a write the keyboard did not take. Must run on `queue`.
-    ///
-    /// A lock error means Studio re-locked without the app hearing of it, so
-    /// the lock is recorded: the editor stops offering writes and the poll
-    /// picks up the unlock.
+    /// A lock error means Studio re-locked without telling the app, so record
+    /// it and let the poll catch the unlock. Must run on `queue`.
     private func editFailed(_ error: Error) {
         if let studio = error as? StudioError, case .locked = studio {
             noteLock(.locked)
@@ -461,23 +405,19 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// The keys to draw, and which firmware position each one edits.
-    ///
-    /// For a US ANSI M0110 this is a hand-built table rather than the firmware's
-    /// geometry, because the reported layout is an all-variants superset with ISO
-    /// proportions. The M0110A case draws exactly what the firmware reports.
+    /// The keys to draw and the firmware position each one edits. The M0110
+    /// uses a hand-built ANSI table because the firmware's layout is an
+    /// all-models superset with ISO proportions.
     var displayKeys: [DisplayKey] {
         switch variant {
         case .m0110:
             return M0110Layout.ansi
         case .m0110a:
-            // Only fall back to the firmware's own geometry if it reports a
-            // layout we do not have a hand-shaped table for.
             return layout.keys.isEmpty ? [] : M0110Layout.m0110a
         }
     }
 
-    /// Board width in hundredths of a key unit, for sizing the canvas.
+    /// Board width in hundredths of a key unit.
     var displayWidth: Int32 {
         switch variant {
         case .m0110: return M0110Layout.unitsWide
@@ -485,10 +425,7 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// Whether this keymap position corresponds to a key that physically exists
-    /// on the selected variant. Derived from the geometry the firmware reports,
-    /// matching the shield's layout: the numpad block sits at x >= 1500, and the
-    /// arrow cluster is Up at (1325,300) plus Left/Right/Down on the bottom row.
+    /// Whether this keymap position has a physical key on the selected model.
     func isPresent(_ position: Int) -> Bool {
         switch variant {
         case .m0110: return M0110Layout.ansiPositions.contains(position)
@@ -497,11 +434,10 @@ final class KeyboardController: ObservableObject {
     }
 
 
-    /// Rows are always five deep, in hundredths of a key unit.
+    /// Five rows, in hundredths of a key unit.
     var displayHeight: Int32 { 500 }
 
-    /// Recessed key blocks in the drawn case: one for the M0110, plus the numpad
-    /// for the M0110A.
+    /// Recessed key wells in the case. The M0110A adds one for the numpad.
     var boardWells: [CGRect] {
         switch variant {
         case .m0110:
@@ -512,7 +448,6 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// Bezel widths for the selected variant.
     var boardBezel: BoardCase.Bezel {
         variant == .m0110 ? .m0110 : .m0110a
     }
@@ -525,29 +460,26 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// The M0110's bottom row is inset at the left, and that gap is where the
-    /// case carries the embossed Apple logo. The M0110A's bottom row is full
-    /// width, so it has none.
+    /// Gap left of the M0110's bottom row, where the case has the Apple logo.
     var boardLogoCell: CGRect? {
         variant == .m0110 ? M0110Layout.appleLogoCell : nil
     }
 
-    /// Keycap text for a slot, honouring what the binding's behaviour means.
     func label(forKeyAt position: Int) -> String {
         guard position != M0110Layout.unmapped else { return "\u{2014}" }
         guard let layer = activeLayer, layer.bindings.indices.contains(position) else { return "" }
         let binding = layer.bindings[position]
         guard let info = behaviors[binding.behaviorID] else {
-            // Unknown behaviour: fall back to the raw parameter rather than
-            // pretending it is a keycode.
+            // Unknown behavior: show the raw parameter instead of guessing it
+            // is a keycode.
             return binding.param1 == 0 ? "·" : "0x\(String(binding.param1, radix: 16))"
         }
         switch info.param1 {
         case .hidUsage:
             return HIDKeycodes.label(for: binding.param1)
         case .layerID:
-            // A layer-tap carries the layer in param1 and the tapped keycode in
-            // param2. The keycode is what the key types, so label with that.
+            // A layer-tap has the layer in param1 and the tapped keycode in
+            // param2. Label it with the keycode.
             if binding.param2 != 0 { return HIDKeycodes.label(for: binding.param2) }
             return "\(info.shortName)\(binding.param1)"
         case .none, .other:
@@ -555,11 +487,8 @@ final class KeyboardController: ObservableObject {
         }
     }
 
-    /// How a slot's cap is printed. Resolves the binding exactly as
-    /// `label(forKeyAt:)` does, but keeps the HID usage instead of collapsing
-    /// straight to a string, because the M0110's legend style (word, shifted
-    /// pair, or centred glyph) is a property of the usage rather than of the
-    /// text.
+    /// Same lookup as `label(forKeyAt:)`, but keeps the HID usage because the
+    /// cap's legend style depends on it.
     func legend(forKeyAt position: Int) -> CapLegend {
         guard position != M0110Layout.unmapped else { return .single("\u{2014}") }
         guard let layer = activeLayer, layer.bindings.indices.contains(position) else { return .blank }
@@ -571,15 +500,13 @@ final class KeyboardController: ObservableObject {
         case .hidUsage:
             return usageLegend(binding.param1)
         case .layerID where binding.param2 != 0:
-            // A layer-tap prints what it types, same as `label(forKeyAt:)`.
             return usageLegend(binding.param2)
         case .layerID, .none, .other:
             return CapLegend.forText(label(forKeyAt: position))
         }
     }
 
-    /// A parameter off the keyboard page has no printed legend to imitate, so it
-    /// falls back to whatever text the label logic produced.
+    /// Usages off the keyboard page have no real legend, so use the label text.
     private func usageLegend(_ param: UInt32) -> CapLegend {
         let (page, usage) = HIDKeycodes.decode(param)
         guard page == HIDKeycodes.keyboardPage else {
@@ -588,15 +515,13 @@ final class KeyboardController: ObservableObject {
         return CapLegend.forUsage(usage)
     }
 
-    /// Bindings whose behaviour takes a keycode can be remapped by keycode, and
-    /// so can empty `&trans`/`&none` slots, which become a `&kp`.
+    /// True for keycode behaviors and for `&trans`/`&none`, which become `&kp`.
     func acceptsKeycode(at position: Int) -> Bool {
         guard position != M0110Layout.unmapped else { return false }
         guard let layer = activeLayer, layer.bindings.indices.contains(position) else { return false }
         return layer.bindings[position].sending(0, behaviors: behaviors) != nil
     }
 
-    /// The keycode a slot sends now, or nil if its behaviour takes none.
     func keycode(at position: Int) -> UInt32? {
         guard position != M0110Layout.unmapped else { return nil }
         guard let layer = activeLayer, layer.bindings.indices.contains(position) else { return nil }

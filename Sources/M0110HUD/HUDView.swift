@@ -1,42 +1,35 @@
 import AppKit
 
-/// How the HUD arrives.
 enum HUDEntrance: String, CaseIterable {
     /// In from the right, fading up.
     case slide
     /// Down from under the menu bar, fading up.
     case drop
-    /// Fade up in place.
     case fade
 }
 
-/// How one state animates, so the states can be told apart by motion and not
-/// only by reading the status line.
+/// How one state animates, so states can be told apart by motion as well as text.
 struct HUDStyle: Equatable {
     var entrance: HUDEntrance
     var motion: BoardMotion
     var treatment: BoardTreatment
 
     static let defaults: [HUDKind: HUDStyle] = [
-        // Arriving for the day and leaving are the snap, forwards and
-        // backwards: the board forms, or it blows away.
+        // Arriving forms the board and leaving blows it away.
         .arrived: HUDStyle(entrance: .slide, motion: .assemble, treatment: .normal),
         .connected: HUDStyle(entrance: .slide, motion: .rock, treatment: .normal),
-        // Still, so the battery ring is what moves the eye. The product glyph
-        // keeps its normal treatment; macOS only reddens the ring, never the
-        // device icon.
+        // Still, so the battery ring draws the eye. The glyph stays normal because macOS only
+        // turns the ring red, never the device icon.
         .lowBattery: HUDStyle(entrance: .slide, motion: .still, treatment: .normal),
         .disconnected: HUDStyle(entrance: .slide, motion: .dust, treatment: .normal),
         .died: HUDStyle(entrance: .slide, motion: .dust, treatment: .dim),
-        // Still: the keyboard is fine, just busy elsewhere, and the button is
-        // what matters.
+        // Still, since the keyboard is fine and the button is what matters.
         .movedAway: HUDStyle(entrance: .slide, motion: .still, treatment: .normal),
         .movedBack: HUDStyle(entrance: .slide, motion: .rock, treatment: .normal),
     ]
 }
 
-/// The HUD's content: product glyph on the left, centered name over status in the
-/// middle, battery ring on the right.
+/// Board glyph on the left, name over status in the middle, battery ring on the right.
 final class HUDView: NSView {
     private let metrics: HUDMetrics
     private let glyph = SpinningBoardView()
@@ -48,7 +41,6 @@ final class HUDView: NSView {
                                                        label: "Move back to this computer",
                                                        diameter: metrics.ringDiameter,
                                                        pointSize: metrics.statusSize)
-    /// Called when "Move back" is clicked on a moved-away HUD.
     var onMoveBack: (() -> Void)?
 
     init(metrics: HUDMetrics) {
@@ -87,9 +79,8 @@ final class HUDView: NSView {
         moveBackButton.action = #selector(moveBack)
         moveBackButton.isHidden = true
 
-        // The right-hand slot: the battery ring, or on a moved-away HUD the
-        // button that brings the keyboard back. Hidden views drop out of the
-        // stack, so an empty slot takes no width.
+        // Right slot: the battery ring, or the move-back button on a moved-away HUD. Hidden
+        // views drop out of the stack and take no width.
         let accessory = NSStackView(views: [ring, moveBackButton])
         accessory.orientation = .horizontal
         accessory.spacing = metrics.gap
@@ -120,8 +111,7 @@ final class HUDView: NSView {
 
     @objc private func moveBack() { onMoveBack?() }
 
-    /// `detail` is the profile name on a moved-away HUD. `canMoveBack` shows
-    /// the button, which needs a way to reach the keyboard.
+    /// `canMoveBack` shows the move-back button, which needs a way to reach the keyboard.
     func configure(kind: HUDKind, name: String, battery: Int?, lowThreshold: Int,
                    detail: String? = nil, canMoveBack: Bool = false) {
         titleLabel.stringValue = name
@@ -130,8 +120,7 @@ final class HUDView: NSView {
 
         moveBackButton.isHidden = !(kind == .movedAway && canMoveBack)
 
-        // On a disconnect the level is stale, and a moved-away HUD has the
-        // button there instead, so the ring collapses away entirely.
+        // No ring on a disconnect (stale level) or a moved-away HUD (the button goes there).
         let showRing = battery != nil && kind.showsRing
         ring.isHidden = !showRing
         ringWidth.constant = showRing ? metrics.ringDiameter : 0
@@ -144,22 +133,20 @@ final class HUDView: NSView {
         needsLayout = true
     }
 
-    /// Run the board's animation only while the HUD is actually on screen.
     func setSpinning(_ spinning: Bool) { glyph.setSpinning(spinning) }
 
-    /// Put the board into a state's motion and treatment.
-    /// Refade the board for a new battery level without restarting its motion.
+    /// Updates the board's fade for a new battery level without restarting its motion.
     func dimBoard(_ style: HUDStyle, battery: Int?) {
         glyph.setTreatment(style.treatment, battery: battery)
     }
 
-    /// `hold` is how long the HUD will stay up, which a crumble times its end to.
+    /// `hold` is how long the HUD stays up. A crumble times its end to it.
     func animateBoard(_ style: HUDStyle, battery: Int?, reduced: Bool, hold: TimeInterval? = nil) {
         glyph.setTreatment(style.treatment, battery: battery)
         glyph.play(style.motion, reduced: reduced, hold: hold)
     }
 
-    /// Frames of the laid-out parts, for verifying geometry against a reference.
+    /// Frames of the laid-out parts, for checking geometry.
     func geometryReport() -> String {
         layoutSubtreeIfNeeded()
         return String(format: "view=%.1fx%.1f glyph=[%.1f..%.1f] text=[%.1f..%.1f] ring=[%.1f..%.1f] trailingGap=%.1f",
@@ -170,7 +157,7 @@ final class HUDView: NSView {
                       bounds.maxX - ring.frame.maxX)
     }
 
-    /// Width that fits the current text, clamped to a HUD-like range.
+    /// Width that fits the text, clamped to `minWidth...maxWidth`.
     var preferredSize: NSSize {
         layoutSubtreeIfNeeded()
         let natural = fittingSize.width
@@ -179,12 +166,8 @@ final class HUDView: NSView {
     }
 }
 
-/// A round icon button the size of the battery ring, which it stands in for:
-/// the AirPods "moved to" HUD's shape, a symbol on a soft disc.
-///
-/// It answers the first click in a window that is not key, which the HUD
-/// never is: it is a non-activating panel, and a plain button there would
-/// spend the click making the window key instead of pressing.
+/// Round icon button the size of the battery ring, like the AirPods "moved to" HUD. It takes
+/// the first click because the HUD panel is never key, so a normal button would ignore it.
 final class CircleIconButton: NSButton {
     private let diameter: CGFloat
 
@@ -226,9 +209,8 @@ final class CircleIconButton: NSButton {
         paintDisc()
     }
 
-    /// The disc behind the symbol, resolved per appearance so it follows a
-    /// light/dark switch: a faint fill at rest, a stronger one while pressed.
-    /// On the layer rather than in draw(_:), which is the button cell's.
+    /// Resolved per appearance so it follows a light/dark switch. Set on the layer because
+    /// draw(_:) belongs to the button cell.
     private func paintDisc() {
         guard let layer else { return }
         layer.cornerRadius = diameter / 2

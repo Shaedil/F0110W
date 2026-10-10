@@ -1,10 +1,6 @@
-// The paired keyboard, through the Win32 Bluetooth LE GATT API.
-//
-// Windows owns the keyboard's link, as macOS does; this only asks about it.
-// The device itself is a BTHLE\DEV_<address> devnode, named as it was paired,
-// and each of its GATT services is a child devnode with a device interface
-// whose class GUID is the service UUID. Opening that interface gives the
-// handle every BluetoothGATT* call wants.
+// The paired keyboard through the Win32 BLE GATT API. Windows owns the link.
+// Each GATT service is a child devnode of BTHLE\DEV_<address> whose interface
+// class GUID is the service UUID. Opening that interface gives the GATT handle.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #endif
@@ -24,12 +20,10 @@
 #define DN_DEVICE_DISCONNECTED 0x02000000
 #endif
 
-// Spelled out rather than taken from devpkey.h, which only defines storage
-// for them under initguid.h.
+// Defined here because devpkey.h only provides storage under initguid.h.
 static const DEVPROPKEY friendly_name_key = {
     {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
-/// What Settings > Bluetooth & devices shows as "Connected". Not in the SDK's
-/// headers, but stable since Windows 8 and what PowerShell users read too.
+/// The "Connected" flag in Bluetooth settings. Not in the SDK headers, but stable since Windows 8.
 static const DEVPROPKEY connected_key = {
     {0x83da6326, 0x97a6, 0x4088, {0x94, 0x53, 0xa1, 0x92, 0x3f, 0x57, 0x3b, 0x29}}, 15};
 
@@ -46,7 +40,7 @@ static int same_guid(const GUID *a, const GUID *b) { return memcmp(a, b, sizeof 
 
 static int uuid_is(const BTH_LE_UUID *uuid, const GUID *wanted) {
     if (!uuid->IsShortUuid) return same_guid(&uuid->Value.LongUuid, wanted);
-    // A 16-bit UUID is shorthand for one in the Bluetooth base range.
+    // A 16-bit UUID expands into the Bluetooth base UUID.
     GUID full = {0x00000000, 0x0000, 0x1000, {0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb}};
     full.Data1 = uuid->Value.ShortUuid;
     return same_guid(&full, wanted);
@@ -57,7 +51,7 @@ static int uuid_is(const BTH_LE_UUID *uuid, const GUID *wanted) {
 int32_t m0110_ble_connected(const uint16_t *instance, int32_t *source) {
     DEVINST device;
     if (CM_Locate_DevNodeW(&device, (DEVINSTID_W)instance, CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS) {
-        // Still known, but not present: paired and away.
+        // A phantom devnode means paired but out of range.
         if (CM_Locate_DevNodeW(&device, (DEVINSTID_W)instance, CM_LOCATE_DEVNODE_PHANTOM) == CR_SUCCESS) {
             if (source) *source = 2;
             return 0;
@@ -89,8 +83,7 @@ static int device_name(HDEVINFO set, SP_DEVINFO_DATA *info, wchar_t *name, DWORD
 }
 
 int32_t m0110_ble_find(const uint16_t *name, uint16_t *instance, uint32_t capacity) {
-    // Every BTHLE devnode, present or not: a paired keyboard that is away may
-    // be either, depending on the Windows build.
+    // No DIGCF_PRESENT, because some Windows builds show an away keyboard as absent.
     HDEVINFO set = SetupDiGetClassDevsW(NULL, L"BTHLE", NULL, DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) return 0;
 
@@ -106,7 +99,7 @@ int32_t m0110_ble_find(const uint16_t *name, uint16_t *instance, uint32_t capaci
         found[255] = 0;
         if (wcscmp(found, (const wchar_t *)name) != 0) continue;
 
-        // Connected beats present beats merely remembered.
+        // Prefer connected, then present, then only remembered.
         int connected = m0110_ble_connected((const uint16_t *)id, NULL);
         int rank = connected == 1 ? 3 : connected == 0 ? 2 : 1;
         if (rank > best && wcslen(id) < capacity) {
@@ -128,7 +121,6 @@ struct m0110_gatt {
     void *context;
 };
 
-/// The 12 hex digits of the address in BTHLE\DEV_<address>\..., uppercase.
 static void device_address(const wchar_t *instance, wchar_t address[13]) {
     address[0] = 0;
     const wchar_t *start = instance + 10;
@@ -138,8 +130,7 @@ static void device_address(const wchar_t *instance, wchar_t address[13]) {
     _wcsupr_s(address, 13);
 }
 
-/// Whether a service devnode is one of `instance`'s: its parent, or failing
-/// that, carrying the same address in its own instance ID.
+/// True if `instance` is the parent, or else if the service ID has the same address.
 static int belongs_to(DEVINST service, const wchar_t *instance, const wchar_t *address) {
     wchar_t id[MAX_DEVICE_ID_LEN];
     DEVINST parent;
@@ -175,7 +166,7 @@ static HANDLE open_service(const wchar_t *instance, const GUID *service, int32_t
         SP_DEVINFO_DATA info = {sizeof info};
         if (SetupDiGetDeviceInterfaceDetailW(set, &interface_data, detail, size, NULL, &info) &&
             belongs_to(info.DevInst, instance, address)) {
-            // Write access is what subscribing takes; read alone still reads.
+            // Subscribing needs write access. Read-only still allows reads.
             handle = CreateFileW(detail->DevicePath, GENERIC_READ | GENERIC_WRITE,
                                  FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
             if (handle == INVALID_HANDLE_VALUE)
@@ -254,8 +245,7 @@ static VOID CALLBACK value_changed(BTH_LE_GATT_EVENT_TYPE type, PVOID parameter,
     gatt->notify(gatt->context, event->CharacteristicValue->Data, event->CharacteristicValue->DataSize);
 }
 
-/// Writes the characteristic's CCCD, which some Windows builds leave to the
-/// caller. A failure here is not fatal: registering may do it anyway.
+/// Some Windows builds leave the CCCD write to the caller. Failure is fine.
 static void enable_updates(m0110_gatt *gatt) {
     USHORT count = 0;
     HRESULT result =

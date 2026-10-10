@@ -1,65 +1,42 @@
 import AppKit
 
-/// Decides what crosses between this Mac's pasteboard and the keyboard, in
-/// both directions. `ClipboardBridge` owns the Bluetooth link and hands this
-/// the frames that arrive; this hands back the frames to send.
-///
-/// Text goes into the keyboard itself. An image, or text longer than the
-/// keyboard holds, cannot, so the keyboard carries a short message instead,
-/// an OFFER, and the helper on the other computer fetches the content from
-/// this one over the network. `helper/PROTOCOL.md` has the whole exchange;
-/// the two halves of it here are "A copy made here" and "Fetching".
-///
-/// ## What is not sent
-///
-/// Anything a password manager has marked concealed or transient, and
-/// anything that is neither text nor an image. The keyboard is then told to
-/// drop what it has, so that it never goes on to deliver something older than
-/// the most recent copy.
-///
-/// Runs on the main queue throughout.
+/// Moves copies between this Mac's pasteboard and the keyboard, both ways.
+/// Text goes into the keyboard itself. Images and text too long for it go as
+/// an OFFER, and the other computer's helper fetches the content over the
+/// network (see `helper/PROTOCOL.md`). Concealed or transient items (password
+/// managers) are never sent, and the keyboard is told to drop its old clip
+/// so it never delivers an outdated copy. Runs on the main queue.
 final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
-    /// How long each stage of a fetch is given. Shortened by the tests.
+    /// Fetch timeouts, shortened by the tests.
     struct Timing {
-        /// After asking the other helper to connect here instead, how long to
-        /// wait for it before settling in for the slow way.
+        /// How long to wait for the other helper to connect here after asking it to.
         var putWait: TimeInterval = 1.5
-        /// How long to wait for the content to come through the keyboard.
         var inlineWait: TimeInterval = 90
-        /// How long a delivery may go without another frame before it is
-        /// taken to have been abandoned.
+        /// A delivery with no new frame for this long counts as abandoned.
         var deliveryIdle: TimeInterval = 3
     }
 
-    /// Marker types from nspasteboard.org that apps put on the pasteboard to
-    /// say "do not record or sync this".
+    /// nspasteboard.org markers that apps set to mean "do not record or sync this".
     private static let privateTypes: Set<String> = [
         "org.nspasteboard.ConcealedType",
         "org.nspasteboard.TransientType",
     ]
 
-    /// When to look at the pasteboard after the keyboard says a copy shortcut
-    /// was just pressed. The app being copied from needs a moment to act on
-    /// it, and how long varies, so there are a few looks rather than one.
+    /// Check times after a copy shortcut. Apps take varying time to update the pasteboard.
     private static let pokeChecks: [TimeInterval] = [0.03, 0.1, 0.25]
 
-    /// The most that is sent through the keyboard when the network fails,
-    /// whatever the keyboard has room for. At the few kilobytes a second the
-    /// link manages, more than this is a longer wait than it is worth.
+    /// Cap on what is sent through the keyboard when the network fails. The
+    /// link only does a few KB/s, so more than this takes too long.
     static let inlineLimit = 40_000
 
     // MARK: Wiring
 
-    /// Queues one frame for the keyboard.
     var send: (Data) -> Void = { _ in }
-    /// Queues a clip, in place of any clip still queued.
+    /// Queues a clip, replacing any clip still queued.
     var sendClip: (_ payload: [UInt8], _ flags: UInt8) -> Void = { _, _ in }
-    /// Drops any clip still queued.
     var dropQueuedClip: () -> Void = {}
-    /// The longest frame the link takes in one write.
     var frameCap: () -> Int = { 20 }
     var keyboardIsOnUSB: () -> Bool = { false }
-    /// This Mac's addresses, as offered to the other helper.
     var localAddresses: () -> [ClipAddress] = ClipChannel.localAddresses
 
     private let pasteboard: NSPasteboard
@@ -69,11 +46,9 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
 
     // MARK: State
 
-    /// The keyboard counts this Mac as having a helper.
     private var running = false
     private var lastChangeCount: Int
-    /// The change this made itself when it put a delivered clip on the
-    /// pasteboard, so that clip is not sent straight back as a new copy.
+    /// Change count from placing a delivered clip, so it is not sent back as a new copy.
     private var ownChangeCount = -1
 
     /// From the keyboard's STATUS frame.
@@ -82,30 +57,26 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
     private var maxOpaque = 0
 
     private var assembler = ClipAssembler()
-    /// When the last frame of a delivery arrived.
     private var deliveryHeard = Date.distantPast
 
-    /// The latest copy made here, if it is one the other helper has to fetch.
+    /// The latest local copy, when it is one the other helper has to fetch.
     private struct Offered {
         let id: [UInt8]
         let key: [UInt8]
         let kind: ClipContent.Kind
         let produce: () -> ClipContent?
         var content: ClipContent?
-        /// A request from the other helper is being answered.
         var answering = false
     }
     private var offered: Offered?
 
-    /// A copy made on another computer that is being fetched.
     private final class Fetch {
         let id: [UInt8]
         let key: [UInt8]
         let kind: ClipContent.Kind
-        /// Checksum of the OFFER, which is what the keyboard is told has
-        /// been dealt with.
+        /// CRC of the OFFER. This is what gets acked to the keyboard.
         let offerCRC: UInt32
-        /// Whether a paste is worth holding back for it; see `ClipWire.holdSoon`.
+        /// Whether a paste is worth holding for it. See `ClipWire.holdSoon`.
         var soon = true
         var wantsSent = 0
         var timers: [Timer] = []
@@ -119,21 +90,14 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         }
     }
     private var fetch: Fetch?
-    /// The copy whose fetch was abandoned because something was copied here
-    /// instead. If its content turns up anyway, it is not wanted.
+    /// A fetch dropped for a newer local copy. Its content is ignored if it still arrives.
     private var abandoned: [UInt8]?
 
-    /// The image last put on the pasteboard, kept for the forms of it that
-    /// are only made if a program asks.
     private var placedImage: Data?
 
-    /// A delivery is arriving or a fetch is running. The periodic HELLO is
-    /// held off meanwhile: the keyboard takes one to mean a helper that has
-    /// only just started, and would begin the delivery again.
-    ///
-    /// A delivery only counts while frames keep coming. The keyboard can
-    /// abandon one without a word, and a helper that then never said HELLO
-    /// again would never be delivered to again.
+    /// True during a delivery or fetch, when the periodic HELLO must wait (the
+    /// keyboard restarts a delivery on HELLO). A delivery only counts while
+    /// frames keep coming, since the keyboard can drop one without notice.
     var busy: Bool {
         fetch != nil
             || (assembler.active && Date().timeIntervalSince(deliveryHeard) < timing.deliveryIdle)
@@ -149,17 +113,14 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         super.init()
     }
 
-    /// The keyboard has been told a helper is here.
     func start() {
-        // Only copies made from here on are carried; whatever is on the
-        // pasteboard already was copied before the keyboard was listening.
+        // Skip whatever is already on the pasteboard. Only new copies are sent.
         lastChangeCount = pasteboard.changeCount
         running = true
         channel.start()
     }
 
-    /// The link is down, or carrying has been switched off. A copy already
-    /// offered stays on offer: the keyboard may still be holding its OFFER.
+    /// The offer stays, since the keyboard may still hold its OFFER.
     func stop() {
         endFetch()
         running = false
@@ -175,16 +136,12 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
 
         guard running, count != ownChangeCount else { return }
 
-        // What was being fetched is no longer the latest copy, and neither is
-        // what was on offer.
         if let fetch {
             endFetch()
             abandoned = fetch.id
             if fetch.wantsSent > 0 {
-                // The computer it was copied on may be about to send it
-                // through the keyboard, which would replace this copy there.
-                // Said before the copy itself goes, while the keyboard still
-                // knows where to pass it.
+                // The other computer may be about to send it through the keyboard.
+                // Cancel first, while the keyboard still knows where to route it.
                 send(ClipWire.relay(ClipDatagram.cancel(id: fetch.id).encoded(room: relayRoom())))
             }
             send(ClipWire.hold(ClipWire.holdOff))
@@ -210,10 +167,9 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         case offer(ClipContent.Kind, () -> ClipContent?)
     }
 
-    /// The least a keyboard must hold for an OFFER with every address to fit.
+    /// Smallest keyboard buffer that fits an OFFER with every address.
     static let minOpaque = 256
 
-    /// Whether the keyboard and this helper can pass an OFFER on.
     private var canOffer: Bool {
         firmwareVersion >= 2 && maxOpaque >= Self.minOpaque
     }
@@ -226,13 +182,10 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         }
 
         let text = pasteboard.string(forType: .string).flatMap { $0.isEmpty ? nil : $0 }
-        // Only whether there is an image, for now. Reading it makes the
-        // program that copied it render it, and for a large one that is not
-        // worth doing unless the image is what gets carried.
+        // Reading an image makes the source app render it, so only check for one here.
         let hasImage = ClipImage.isOn(pasteboard)
-        // Text wins when there is both: a copy from a document or a
-        // spreadsheet means the words. A browser's "Copy Image" is the
-        // exception, where the text is only the image's address.
+        // Text wins when both are there, since a copy from a document means the
+        // words. A browser's "Copy Image" is the exception: its text is just the URL.
         let textIsOnlyALink = types.contains("public.url") && !types.contains("public.file-url")
 
         if hasImage, canOffer, text == nil || textIsOnlyALink,
@@ -272,8 +225,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         offered = new
         channel.offering = (new.id, new.key, { [weak self] in self?.content(of: id)?.data })
 
-        // With no port to be reached at, the other helper still gets to hear
-        // of the copy, and asks for it another way.
+        // Without a port the other helper still hears of the copy and asks another way.
         let port = channel.port
         let message = ClipMessage.offer(kind: kind, id: new.id, key: new.key, port: port ?? 0,
                                         addresses: port == nil ? [] : localAddresses())
@@ -281,7 +233,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         log("clipboard: offering \(kind == .text ? "long text" : "an image") to the next computer")
     }
 
-    /// The content of the copy on offer, made the first time it is wanted.
+    /// Content of the offered copy, produced the first time it is needed.
     private func content(of id: [UInt8]) -> ClipContent? {
         guard let current = offered, current.id == id else { return nil }
         if current.content == nil {
@@ -290,12 +242,11 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         return offered?.content
     }
 
-    /// The other helper could not connect here and asks to be connected to,
-    /// or failing that to be sent the content through the keyboard.
+    /// The other helper could not connect here. It asks this side to connect
+    /// to it, or else to send the content through the keyboard.
     private func answerWant(id: [UInt8], port: UInt16, addresses: [ClipAddress]) {
         guard let current = offered, current.id == id else {
-            // Something has been copied here since. Saying so spares the
-            // other helper a long wait for content that is not coming.
+            // Something was copied here since. Saying so saves the other helper a long wait.
             send(ClipWire.relay(ClipDatagram.gone(id: id).encoded(room: relayRoom())))
             return
         }
@@ -308,8 +259,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
             return
         }
 
-        // With no addresses to try, this fails at once and falls through to
-        // the keyboard.
+        // With no addresses this fails at once and falls back to the keyboard.
         channel.push(id: id, key: current.key, content: content.data, to: addresses, port: port) {
             [weak self] handedOver in
             guard let self, self.running, self.offered?.id == id else { return }
@@ -322,7 +272,6 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         }
     }
 
-    /// Sends the content through the keyboard, cut down to what that takes.
     private func sendInline(_ content: ClipContent, id: [UInt8]) {
         let budget = min(maxOpaque, Self.inlineLimit) - ClipMessage.inlineOverhead
 
@@ -337,7 +286,6 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.offered?.id == id else { return }
                 self.offered?.answering = false
-                // The link went while this was being made ready.
                 guard self.running else { return }
 
                 guard let fitted else {
@@ -383,9 +331,8 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
                 log("clipboard: keyboard refused the clip (code \(frame[1]))")
             }
         case .poke:
-            // The keyboard saw Cmd-C or Cmd-X go by. Looking now, rather than
-            // on the next tick, is what lets a quick switch-and-paste carry
-            // the new clip instead of the one before it.
+            // The keyboard saw Cmd-C or Cmd-X. Checking now lets a quick
+            // switch-and-paste get the new clip.
             for delay in Self.pokeChecks {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     self?.checkPasteboard()
@@ -430,22 +377,18 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
     }
 
     private func accept(text bytes: [UInt8], crc: UInt32) {
-        // A different clip from the one being fetched, if one was.
         endFetch()
 
-        // Text that cannot be put on the pasteboard is left unacknowledged:
-        // the keyboard then types it, which is the next best thing.
+        // The ack tells the keyboard to let the paste through. Without it the
+        // keyboard types the clip, which is the fallback if placing fails.
         guard place(ClipContent(kind: .text, data: Data(bytes))) == .placed else { return }
-        // The acknowledgement is what tells the keyboard to let the paste
-        // through instead of typing the clip.
         send(ClipWire.ack(crc: crc))
         log("clipboard: took delivery of \(bytes.count) bytes")
     }
 
     private func accept(message bytes: [UInt8], crc: UInt32) {
         guard let message = ClipMessage(bytes) else {
-            // From a newer helper than this one. Acknowledged all the same,
-            // so that a paste here is not kept waiting on it.
+            // This came from a newer helper. Ack it anyway so a paste here does not wait.
             endFetch()
             send(ClipWire.ack(crc: crc))
             log("clipboard: the other computer sent something this version cannot read")
@@ -459,8 +402,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         case let .inline(kind, id, content):
             endFetch()
             if id == abandoned {
-                // Asked for before something was copied here instead. The
-                // acknowledgement still goes, so a paste is not held for it.
+                // This was requested before a local copy replaced it. Ack it so a paste does not wait.
                 send(ClipWire.ack(crc: crc))
                 return
             }
@@ -469,7 +411,6 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
                 send(ClipWire.ack(crc: crc))
                 log("clipboard: took delivery of \(content.count) bytes through the keyboard")
             case .unusable:
-                // Nothing more will come of it; a paste should not wait.
                 send(ClipWire.ack(crc: crc))
                 log("clipboard: what came through the keyboard could not be put on the pasteboard")
             case .superseded:
@@ -484,16 +425,13 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         endFetch()
         fetch = new
 
-        // Said at once and then repeated, so that a paste pressed while this
-        // is going on waits for it instead of putting down whatever the
-        // pasteboard held before.
+        // Sent now and repeated, so a paste meanwhile waits for this copy instead of the old one.
         hold(new)
         after(ClipWire.holdRepeat, repeats: true, during: new) { [weak self] fetch in
             self?.hold(fetch)
         }
-        // If it has not come by the time both ways over the network have had
-        // their chance, it is coming the slow way or as a long download, and
-        // a paste is not worth holding for either.
+        // After both network routes had their chance, it is coming through the
+        // keyboard or as a long download, so a paste should not wait for it.
         after(ClipChannel.connectTimeout + timing.putWait, repeats: false, during: new) {
             [weak self] fetch in
             fetch.soon = false
@@ -515,9 +453,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         send(ClipWire.hold(fetch.soon ? ClipWire.holdSoon : 0))
     }
 
-    /// Nothing answered at any address the copy was offered at. The computer
-    /// it was made on may still be able to connect here, and if not, it can
-    /// send the content through the keyboard.
+    /// No address answered. The other side may still connect here or use the keyboard.
     private func askToBeSent(_ fetch: Fetch) {
         channel.expecting = (fetch.id, fetch.key, { [weak self, weak fetch] data in
             guard let self, let fetch, self.fetch === fetch else { return }
@@ -546,7 +482,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         guard let fetch, fetch.wantsSent > 0 else { return }
 
         if fetch.wantsSent == 1 {
-            // It may only have been too long for the link at the other end.
+            // The WANT may have been too long for the other link. Retry without addresses.
             sendWant(fetch, withAddresses: false)
         } else {
             giveUp(fetch, because: "the computer it was copied on is out of reach")
@@ -560,7 +496,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
             send(ClipWire.ack(crc: fetch.offerCRC))
             log("clipboard: fetched \(content.data.count) bytes over the network")
         case .unusable:
-            // The same as giving up: the keyboard is told not to wait.
+            // Same as giving up, so the keyboard stops waiting.
             send(ClipWire.hold(ClipWire.holdOff))
             send(ClipWire.ack(crc: fetch.offerCRC))
             log("clipboard: what was fetched could not be put on the pasteboard")
@@ -569,8 +505,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         }
     }
 
-    /// Tells the keyboard there is nothing more to wait for, which lets a
-    /// paste through as this Mac's own.
+    /// Tells the keyboard to stop waiting, so a paste uses this Mac's own clipboard.
     private func giveUp(_ fetch: Fetch, because reason: String) {
         endFetch()
         send(ClipWire.hold(ClipWire.holdOff))
@@ -588,8 +523,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
         self.fetch = nil
     }
 
-    /// Runs `action` after `interval`, for as long as `fetch` is the one in
-    /// progress.
+    /// Runs `action` after `interval`, as long as `fetch` is still the current one.
     private func after(_ interval: TimeInterval, repeats: Bool, during fetch: Fetch,
                        _ action: @escaping (Fetch) -> Void) {
         let timer = Timer(timeInterval: interval, repeats: repeats) { [weak self, weak fetch] _ in
@@ -604,16 +538,13 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
 
     private enum Placed {
         case placed
-        /// Something was copied here in the meantime, and stays.
         case superseded
-        /// The content is not what it says it is.
+        /// The content does not match its stated kind.
         case unusable
     }
 
-    /// Puts delivered content on the pasteboard.
     private func place(_ content: ClipContent) -> Placed {
-        // Something copied here since the last look is newer than whatever
-        // has just arrived, and must not be written over.
+        // Something copied here since the last check is newer, so keep it.
         if pasteboard.changeCount != lastChangeCount {
             checkPasteboard()
             return .superseded
@@ -631,9 +562,7 @@ final class ClipCourier: NSObject, NSPasteboardItemDataProvider {
             let png = content.kind == .png
 
             item.setData(content.data, forType: png ? .png : ClipImage.jpegType)
-            // TIFF is what AppKit itself trades in, and some programs take
-            // nothing else. It is several times the size, so it is made only
-            // for a program that asks.
+            // Some apps only take TIFF, which is much larger, so it is made on request.
             item.setDataProvider(self, forTypes: png ? [.tiff] : [.png, .tiff])
             pasteboard.clearContents()
             placedImage = content.data

@@ -1,15 +1,10 @@
 import Foundation
 
-/// The wire format of the keyboard's clipboard service.
-///
-/// Mirrors `config/clipboard/clip_proto.h` in the firmware: one frame per GATT
-/// write or notification, the first byte the frame type, multi-byte fields
-/// little-endian. A clip travels the same way in both directions, as BEGIN,
-/// then DATA frames in offset order, then END.
-///
-/// A clip is text, or it is opaque: a message for the helper on another
-/// computer, which the keyboard carries and never types. `ClipMessage` is what
-/// goes inside one.
+/// Wire format of the keyboard's clipboard service, matching the firmware's
+/// `config/clipboard/clip_proto.h`. One frame per GATT write or notification,
+/// first byte is the frame type, fields are little-endian. A clip is sent as
+/// BEGIN, DATA frames in offset order, then END, in both directions.
+/// An opaque clip holds a `ClipMessage` for the other helper and is never typed.
 enum ClipWire {
     static let version: UInt8 = 2
 
@@ -28,28 +23,28 @@ enum ClipWire {
         case poke = 0x12
     }
 
-    /// BEGIN flags. Without `usbKnown` the keyboard cannot tell whether its USB
-    /// port leads back to this computer, and leaves pastes over USB alone.
+    /// BEGIN flags. Without `usbKnown` the keyboard cannot tell if its USB port
+    /// goes to this computer, so it leaves USB pastes alone.
     static let usbKnown: UInt8 = 0x01
     static let usbLocal: UInt8 = 0x02
-    /// BEGIN flag, either direction: the clip is opaque rather than text.
+    /// BEGIN flag (either direction) for an opaque clip.
     static let opaque: UInt8 = 0x04
 
-    /// HOLD flags. With `holdSoon` a paste waits for the fetch; without, it is
-    /// dropped. `holdOff` ends the hold.
+    /// HOLD flags. With `holdSoon` a paste waits for the fetch, without it the
+    /// paste is dropped. `holdOff` ends the hold.
     static let holdSoon: UInt8 = 0x01
     static let holdOff: UInt8 = 0x02
-    /// A hold lapses unless repeated at least this often.
+    /// A hold expires unless repeated at least this often.
     static let holdRepeat: TimeInterval = 0.4
 
-    /// The longest RELAY frame the keyboard passes on, type byte included.
+    /// Longest RELAY frame the keyboard forwards, type byte included.
     static let relayMax = 64
-    /// RESULT code for a RELAY that had no helper to go to.
+    /// RESULT code: a RELAY had no helper to go to.
     static let resultUnreachable: UInt8 = 3
 
     static let dataHeaderLength = 3
 
-    /// CRC-32 (IEEE 802.3), bitwise to match the firmware's.
+    /// CRC-32 (IEEE 802.3), bitwise to match the firmware.
     static func crc32(_ bytes: [UInt8]) -> UInt32 {
         var crc: UInt32 = 0xFFFF_FFFF
         for byte in bytes {
@@ -78,8 +73,6 @@ enum ClipWire {
         Data([Frame.relay.rawValue] + datagram)
     }
 
-    /// Every frame needed to send `payload`, sized for a link that takes
-    /// `frameCap` bytes per write.
     static func transfer(_ payload: [UInt8], flags: UInt8, frameCap: Int) -> [Data] {
         let length = UInt16(payload.count)
         var frames = [Data([Frame.begin.rawValue, flags] + le16(length) + le32(crc32(payload)))]
@@ -114,13 +107,10 @@ enum ClipWire {
     }
 }
 
-/// Reassembles a clip the keyboard is delivering.
-///
-/// DATA must arrive in order. A gap, an overrun or a checksum mismatch fails
-/// the whole clip at END rather than yielding part of one.
+/// Rebuilds a clip from the keyboard's frames. DATA must arrive in order.
+/// A gap, overrun or CRC mismatch fails the whole clip at END.
 struct ClipAssembler {
-    /// As long as the wire format can say; a bound on what a misbehaving
-    /// peripheral can make this app buffer.
+    /// Max of the 16-bit length field. Also caps what a bad peripheral can make the app buffer.
     static let maxLength = 65535
 
     private var expected = 0
@@ -157,8 +147,6 @@ struct ClipAssembler {
         bytes.append(contentsOf: payload)
     }
 
-    /// The verified clip, its checksum and whether it is opaque, or nil if
-    /// the transfer was bad.
     mutating func end() -> (bytes: [UInt8], crc: UInt32, opaque: Bool)? {
         defer {
             active = false
@@ -171,30 +159,24 @@ struct ClipAssembler {
     }
 }
 
-/// Frames waiting to be written to the keyboard.
-///
-/// The frames of a clip go out in order, after everything else. An
-/// acknowledgement or a hold queued behind a long upload would reach the
-/// keyboard after the paste it was meant for, so anything that is not part of
-/// a clip goes ahead of one. Each frame stands on its own, and the keyboard
-/// does not mind one arriving in the middle of a clip.
+/// Frames waiting to be written to the keyboard. Non-clip frames go ahead of
+/// clip frames, since an ack or hold stuck behind a long upload would arrive
+/// after the paste it was for. The keyboard accepts a frame in the middle of a clip.
 struct ClipOutbox {
     private var control: [Data] = []
     private var clip: [Data] = []
 
     var isEmpty: Bool { control.isEmpty && clip.isEmpty }
 
-    /// Queues a frame that is not part of a clip.
     mutating func send(_ frame: Data) {
         control.append(frame)
     }
 
-    /// Queues a clip, in place of whatever is left of the one before it.
+    /// Replaces whatever is left of the previous clip.
     mutating func sendClip(_ frames: [Data]) {
         clip = frames
     }
 
-    /// Drops whatever is left of the clip being sent.
     mutating func dropClip() {
         clip.removeAll()
     }
@@ -204,7 +186,6 @@ struct ClipOutbox {
         clip.removeAll()
     }
 
-    /// The next frame to write.
     mutating func next() -> Data? {
         if !control.isEmpty { return control.removeFirst() }
         return clip.isEmpty ? nil : clip.removeFirst()

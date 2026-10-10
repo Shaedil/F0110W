@@ -1,53 +1,43 @@
 import CM0110Win
 import Foundation
 
-/// The Bluetooth link to the keyboard's clipboard service: the Mac's
-/// ClipboardBridge, over the Win32 GATT calls the battery and the profile
-/// report already use. What goes in the frames is WinClipCourier's business.
-///
-/// The GATT calls block, so they run on a queue of their own, one write at a
-/// time; everything else is on the app thread.
+/// GATT link to the keyboard's clipboard service, like the Mac's ClipboardBridge. Frame
+/// contents belong to WinClipCourier. GATT calls block, so they run one at a time on
+/// their own queue. Everything else is on the app thread.
 final class WinClipLink {
     /// Must match `CLIP_UUID` in the firmware's `config/clipboard/clipboard.c`.
     static let service = gattUUID("B02961DE-EEC8-443B-9EDE-2919A6354188")
     static let rx = gattUUID("B02961DF-EEC8-443B-9EDE-2919A6354188")
     static let tx = gattUUID("B02961E0-EEC8-443B-9EDE-2919A6354188")
 
-    /// ZMK's default USB IDs, which this firmware keeps.
     private static let usbVendor: UInt16 = 0x1D50
     private static let usbProduct: UInt16 = 0x615E
 
     private static let tickInterval: TimeInterval = 2
-    /// Ticks between HELLOs: the firmware stops waiting on a helper that
-    /// misses an acknowledgement, and a HELLO is what gets it trusted again.
+    /// The firmware stops waiting on a helper that misses an ack, and a HELLO makes it trusted again.
     private static let helloEveryTicks = 15
-    /// Win32 does not say how long a write the link takes, so the longest
-    /// that works is found by trying: a write longer than the link's MTU
-    /// fails, and the next size down is tried.
+    /// Win32 does not report the link MTU, so try each size and step down when a write fails.
     private static let frameSizes = [244, 182, 128, 64, 20]
 
     let courier: WinClipCourier
     private let deviceName: String
     private let log: (String) -> Void
 
-    /// The Settings pane's switch. Off says goodbye to the keyboard, which
-    /// then types pastes here instead of waiting on this helper.
+    /// Turning it off sends BYE, so the keyboard types pastes here instead of waiting on this helper.
     var enabled: Bool {
         didSet { if enabled != oldValue { tick() } }
     }
 
-    // The app thread's.
+    // App thread only.
     private var instance: String?
     private var opening = false
     private var open = false
     private var announced = false
-    /// The keyboard has no usable clipboard service, which is what older
-    /// firmware looks like. Left alone until it reconnects, which a reflash
-    /// forces.
+    /// No usable clipboard service (older firmware). Retried only after a reconnect, which a reflash forces.
     private var unsupported = false
     private var retryAfter = Date.distantPast
     private var outbox = ClipOutbox()
-    /// The clip being written, kept to write again at a smaller frame size.
+    /// Kept so the clip can be rewritten at a smaller frame size.
     private var clip: (payload: [UInt8], flags: UInt8)?
     private var writing = false
     private var failures = 0
@@ -55,7 +45,7 @@ final class WinClipLink {
     private var ticksSinceHello = 0
     private var lastLogged = ""
 
-    // The queue's.
+    // Queue only.
     private let queue = DispatchQueue(label: "M0110HUD.clipboard")
     private var rxLink: OpaquePointer?
     private var txLink: OpaquePointer?
@@ -95,8 +85,6 @@ final class WinClipLink {
 
     // MARK: The keyboard coming and going
 
-    /// From the Bluetooth monitor: the keyboard's instance as it connects, nil
-    /// as it leaves.
     func keyboard(_ found: String?) {
         if found == nil {
             drop()
@@ -147,8 +135,7 @@ final class WinClipLink {
             }, context)
             guard subscribed == 0 else {
                 closeLinks()
-                // The service needs an encrypted link, so this is where a
-                // keyboard that is connected but not paired shows up.
+                // The service needs encryption, so a connected but unpaired keyboard fails here.
                 Main.async { [self] in failed("could not subscribe", subscribed) }
                 return
             }
@@ -185,8 +172,7 @@ final class WinClipLink {
         log("clipboard: ready")
     }
 
-    /// Tells the keyboard this helper is going, so the next paste here does
-    /// not wait on an acknowledgement that will never come.
+    /// Tells the keyboard this helper is leaving, so the next paste does not wait for an ack.
     private func goodbye() {
         courier.stop()
         outbox.dropClip()
@@ -206,7 +192,6 @@ final class WinClipLink {
         queue.async { [self] in closeLinks() }
     }
 
-    /// As the app quits: the goodbye goes before the link is let go of.
     func shutdown() {
         guard open else { return }
         courier.stop()
@@ -231,14 +216,12 @@ final class WinClipLink {
         pump()
     }
 
-    /// A newer clip replaces whatever of the last one is still queued.
     private func sendClip(_ payload: [UInt8], flags: UInt8) {
         clip = (payload, flags)
         outbox.sendClip(ClipWire.transfer(payload, flags: flags, frameCap: Self.frameSizes[frameSize]))
         pump()
     }
 
-    /// One write at a time, on the queue, in the outbox's order.
     private func pump() {
         guard open, !writing, let frame = outbox.next() else { return }
         writing = true
@@ -250,7 +233,7 @@ final class WinClipLink {
     }
 
     private func wrote(_ frame: [UInt8], _ result: Int32) {
-        guard writing else { return } // Dropped meanwhile.
+        guard writing else { return } // Dropped while writing.
         writing = false
         let isClip = [ClipWire.Frame.begin, .data, .end].contains { $0.rawValue == frame.first }
         if result == 0 {
@@ -258,8 +241,7 @@ final class WinClipLink {
             if isClip, frame.first == ClipWire.Frame.end.rawValue { clip = nil }
         } else if frame.count > Self.frameSizes.last!, frameSize + 1 < Self.frameSizes.count,
                   frame.count > Self.frameSizes[frameSize + 1] {
-            // Too long for this link: the next size down, and the clip
-            // started again in frames that fit.
+            // Too long for this link. Step down a size and restart the clip in frames that fit.
             frameSize += 1
             log("clipboard: writes of \(frame.count) bytes fail (\(hex(result))); "
                 + "trying \(Self.frameSizes[frameSize])")
@@ -280,7 +262,6 @@ final class WinClipLink {
     }
 }
 
-/// UUIDs as the 16 bytes the C layer takes.
 func gattUUID(_ string: String) -> [UInt8] {
     let u = UUID(uuidString: string)!.uuid
     return [u.0, u.1, u.2, u.3, u.4, u.5, u.6, u.7, u.8, u.9, u.10, u.11, u.12, u.13, u.14, u.15]

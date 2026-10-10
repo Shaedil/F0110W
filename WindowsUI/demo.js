@@ -1,7 +1,5 @@
-// The app's side of the bridge, for previewing the page in a browser. It
-// answers as the Windows app does, with fixture.json: the board, the picker
-// and this repo's keymap, built by tools/win-ui-fixture.sh from the app's
-// own Swift.
+// Fakes the Windows app when the page is opened in a browser. fixture.json is
+// made by tools/win-ui-fixture.sh.
 
 const params = new URLSearchParams(location.search);
 

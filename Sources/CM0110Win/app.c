@@ -1,5 +1,4 @@
-// The app's hidden window, its message loop and timers, and the two things it
-// puts on screen: the HUD, a layered window, and the tray icon.
+// The hidden app window, message loop, timers, the layered HUD window and the tray icon.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #endif
@@ -46,7 +45,7 @@ static void add_tray(void) {
 static LRESULT CALLBACK app_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     switch (message) {
     case WM_M0110_WAKE:
-        // Cleared first, so a wake asked for while this one runs posts again.
+        // Clear first, so a wake requested during this callback posts again.
         InterlockedExchange(&wake_pending, 0);
         if (callbacks.wake) callbacks.wake();
         return 0;
@@ -67,11 +66,8 @@ static LRESULT CALLBACK app_proc(HWND window, UINT message, WPARAM wparam, LPARA
         return 0;
     case WM_SETTINGCHANGE:
     case WM_DISPLAYCHANGE:
-        // Answered at once, and acted on afterwards. These arrive as sent
-        // messages, often a broadcast from Explorer, and acting on one
-        // updates the tray icon, which is a message back to Explorer: done
-        // inside the broadcast, the two can wait on each other until Windows
-        // gives up on one of them. Several in a row become one update.
+        // Handled later. Explorer often sends these as a broadcast, and updating
+        // the tray icon inside one can deadlock with Explorer. Repeated messages merge.
         if (InterlockedExchange(&settings_pending, 1) == 0) PostMessageW(window, WM_M0110_SETTINGS, 0, 0);
         return 0;
     case WM_CLIPBOARDUPDATE:
@@ -82,7 +78,7 @@ static LRESULT CALLBACK app_proc(HWND window, UINT message, WPARAM wparam, LPARA
         if (callbacks.settings_changed) callbacks.settings_changed();
         return 0;
     default:
-        // Explorer restarted, and took the tray icon with it.
+        // Explorer restarted and dropped the tray icon.
         if (message == taskbar_created && taskbar_created != 0) {
             if (tray_icon) add_tray();
             return 0;
@@ -95,23 +91,19 @@ static LRESULT CALLBACK app_proc(HWND window, UINT message, WPARAM wparam, LPARA
 typedef BOOL(WINAPI *set_dpi_context_fn)(DPI_AWARENESS_CONTEXT);
 typedef int(WINAPI *set_app_mode_fn)(int);
 
-/// Once per process, and before anything asks about the screen: a process
-/// that is not DPI-aware is told every monitor is 96 DPI.
+/// Must run before any screen query, or Windows reports 96 DPI for every monitor.
 static void opt_in(void) {
     static int done;
     if (done) return;
     done = 1;
 
-    // Per-monitor DPI, so the HUD is drawn at the size it is shown at rather
-    // than stretched by the system. Windows 10 1703 and later.
+    // Per-monitor DPI (Windows 10 1703+), so the system does not stretch the HUD.
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     set_dpi_context_fn set_dpi =
         user32 ? (set_dpi_context_fn)(void *)GetProcAddress(user32, "SetProcessDpiAwarenessContext") : NULL;
     if (!set_dpi || !set_dpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) SetProcessDPIAware();
 
-    // Lets the tray menu follow dark mode. Undocumented: uxtheme's ordinal 135,
-    // SetPreferredAppMode, which Explorer and Notepad use. Without it the menu
-    // is always light, which is all that is lost.
+    // Undocumented uxtheme ordinal 135 (SetPreferredAppMode) lets the tray menu go dark.
     HMODULE uxtheme = LoadLibraryExW(L"uxtheme.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     set_app_mode_fn set_mode =
         uxtheme ? (set_app_mode_fn)(void *)GetProcAddress(uxtheme, MAKEINTRESOURCEA(135)) : NULL;
@@ -129,8 +121,7 @@ int32_t m0110_app_init(const m0110_callbacks *app_callbacks) {
     app_class.lpszClassName = L"M0110HUD.App";
     if (!RegisterClassExW(&app_class)) return (int32_t)GetLastError();
 
-    // A real top-level window that is never shown, rather than a message-only
-    // one: those miss the broadcasts for theme changes and Explorer restarts.
+    // Hidden top-level window, since message-only windows miss theme and Explorer broadcasts.
     app_window = CreateWindowExW(WS_EX_TOOLWINDOW, app_class.lpszClassName, L"M0110HUD", WS_POPUP,
                                  0, 0, 0, 0, NULL, NULL, instance, NULL);
     if (!app_window) return (int32_t)GetLastError();
@@ -142,8 +133,6 @@ int32_t m0110_app_init(const m0110_callbacks *app_callbacks) {
     hud_class.lpszClassName = L"M0110HUD.HUD";
     if (!RegisterClassExW(&hud_class)) return (int32_t)GetLastError();
 
-    // Layered for per-pixel alpha; transparent and no-activate so it never
-    // takes a click or the focus; a tool window so it is not in Alt+Tab.
     hud_window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW |
                                      WS_EX_NOACTIVATE,
                                  hud_class.lpszClassName, L"M0110", WS_POPUP, 0, 0, 1, 1, NULL, NULL,
@@ -179,8 +168,7 @@ void m0110_timer_start(uint32_t id, uint32_t milliseconds) {
 void m0110_timer_stop(uint32_t id) { KillTimer(app_window, (UINT_PTR)id); }
 
 static void attach(void) {
-    // Started with its output redirected, or built as a console program: the
-    // handles are already there.
+    // Already has handles if output is redirected or it was built as a console app.
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out != NULL && out != INVALID_HANDLE_VALUE && GetFileType(out) != FILE_TYPE_UNKNOWN) return;
     if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
@@ -198,20 +186,18 @@ static void attach(void) {
 
 void m0110_attach_console(void) {
     attach();
-    // Unbuffered: a pipe or file would otherwise hold --verbose output until
-    // exit, and this app is long-lived and gets killed, not exited.
+    // Unbuffered, because the app usually gets killed and buffered output would be lost.
     setvbuf(stdout, NULL, _IONBF, 0);
 }
 
 int32_t m0110_single_instance(const uint16_t *name) {
-    // Held until exit, which is what keeps a second copy out.
+    // Never closed, so the mutex lasts until exit.
     HANDLE mutex = CreateMutexW(NULL, TRUE, (const wchar_t *)name);
     if (!mutex) return 1;
     return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : 1;
 }
 
-/// GetVersionEx answers what the manifest says the app supports, which is not
-/// the running Windows; RtlGetVersion answers the truth.
+/// Uses RtlGetVersion because GetVersionEx reports the manifest's version instead of the real one.
 uint32_t m0110_windows_build(void) {
     typedef LONG(WINAPI * rtl_get_version)(OSVERSIONINFOW *);
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -276,9 +262,8 @@ m0110_screen m0110_current_screen(void) {
     if (FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y))) dpi_x = 96;
     screen.dpi = dpi_x;
 
-    // The taskbar is whichever edge the work area stops short of. One that
-    // hides itself, or lives on another monitor, leaves none: count that as
-    // the bottom, where it usually is.
+    // The taskbar is on the edge where the work area stops short. An auto-hide
+    // taskbar or one on another monitor leaves no gap, so assume the bottom.
     if (info.rcWork.top > info.rcMonitor.top) screen.taskbar_edge = 1;
     else if (info.rcWork.left > info.rcMonitor.left) screen.taskbar_edge = 0;
     else if (info.rcWork.right < info.rcMonitor.right) screen.taskbar_edge = 2;
@@ -343,7 +328,7 @@ int32_t m0110_hud_present(const uint8_t *pixels, int32_t width, int32_t height, 
     ReleaseDC(NULL, screen);
 
     if (!error && !IsWindowVisible(hud_window)) ShowWindow(hud_window, SW_SHOWNOACTIVATE);
-    // Back above anything that went topmost since.
+    // Raise again above windows that became topmost since.
     SetWindowPos(hud_window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     return (int32_t)error;
 }
@@ -379,7 +364,7 @@ static HICON make_icon(const uint8_t *pixels, int32_t size) {
     if (!color || !bits) return NULL;
     memcpy(bits, pixels, (size_t)size * (size_t)size * 4);
 
-    // The colour bitmap's alpha does the masking; this one only has to exist.
+    // The color bitmap's alpha does the masking, but an icon still needs a mask.
     size_t stride = (size_t)((size + 15) / 16) * 2;
     void *zeros = calloc(stride * (size_t)size, 1);
     HBITMAP mask = CreateBitmap(size, size, 1, 1, zeros);

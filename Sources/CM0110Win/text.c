@@ -1,8 +1,6 @@
-// One line of text as an antialiased coverage mask, drawn by GDI.
-//
-// The HUD is composited in Swift with per-pixel alpha, where ClearType's
-// coloured fringes would show, so text is drawn white on black in greyscale
-// antialiasing and only its coverage is kept.
+// Draws one line of text with GDI as a coverage mask. It uses greyscale
+// antialiasing, white on black, because ClearType color fringes would show
+// once Swift composites the HUD with per-pixel alpha.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #endif
@@ -34,7 +32,6 @@ static int installed(const wchar_t *face) {
     return found;
 }
 
-/// The first installed face in a ';'-separated list, or an empty string.
 static void pick_face(const wchar_t *faces, wchar_t face[LF_FACESIZE]) {
     face[0] = 0;
     while (*faces) {

@@ -1,9 +1,7 @@
 import CM0110Win
 import Foundation
 
-// build.ps1 marks the release executable a GUI program, so starting it at
-// login opens no console. Asked for output from a terminal, it borrows that
-// terminal's.
+// The release build is a GUI program, so this borrows the launching terminal for output.
 m0110_attach_console()
 
 func printUsage() {
@@ -39,8 +37,7 @@ func printUsage() {
     """)
 }
 
-// The options only Windows has, taken out before the shared Config sees the
-// rest. Its own --help describes the Mac app, so that is answered here.
+// Windows-only options. Config's own --help describes the Mac app, so --help is answered here.
 var arguments = CommandLine.arguments
 var bleProbe = false
 var clipboardProbe = false
@@ -57,7 +54,7 @@ for option in arguments.dropFirst() {
 }
 arguments.removeAll { ["--ble-probe", "--clipboard-probe", "--install", "--uninstall"].contains($0) }
 
-// The window's settings, under any flags given here.
+// Saved settings act as defaults, so flags override them.
 UserDefaults.standard.register(defaults: WinSettings.load().defaults)
 let config = Config.resolve(arguments)
 
@@ -71,7 +68,7 @@ if clipboardProbe {
     exit(ClipboardProbe.run())
 }
 if let install {
-    // Everything but the install flag itself goes with it into the Run key.
+    // The Run key gets all the other arguments.
     let status = WinApp.setRunAtLogin(install, arguments: Array(arguments.dropFirst()))
     print(status == 0 ? (install ? "M0110HUD will start at login." : "M0110HUD will not start at login.")
                       : "could not change the Run key: error \(status)")

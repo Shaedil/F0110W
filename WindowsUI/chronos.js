@@ -1,33 +1,27 @@
-// prismorphism's Chronos engine, as the Mac's Chronos.swift ports it: where
-// the real sun is, and the prismatic triad that goes with it. Dawn rose, noon
-// prism, dusk amber, deep-indigo night. Colours are [r, g, b], 0...255.
-//
-// Times are read on the page's own clock and time zone, as the Mac reads
-// TimeZone.current. Coordinates are guessed from the clock offset, so no
-// location permission is needed.
+// Sun position and time-of-day colours, ported from the Mac's Chronos.swift.
+// Colours are [r, g, b] from 0 to 255. Location is guessed from the time zone
+// offset, so no location permission is needed.
 
 const RAD = Math.PI / 180;
 
-/** The static prism the engine settles on when the sun is high. */
+/** Colours used when the sun is high. */
 export const NOON = {
   triad: [[255, 30, 140], [26, 229, 229], [255, 232, 59]],
   glowCap: 0.9, phase: 'day', elevation: 90, azimuth: 180, sunX: 0.5, sunY: 0.08,
 };
 
-/** Hours east of UTC at `date`: getTimezoneOffset, in hours and the other way round. */
 function offsetHours(date) {
   return -date.getTimezoneOffset() / 60;
 }
 
-/** Longitude from the clock offset at a temperate latitude, the original's
- *  `tzGuess`. During daylight saving the guess sits 15° east of true, and
- *  `sunPosition` subtracts the same hour back out. */
+/** Guesses longitude from the UTC offset. During daylight saving it is 15 degrees
+ *  too far east, but `sunPosition` subtracts the same hour, so it cancels out. */
 export function guess(date) {
   return { lat: 40, lng: Math.round(offsetHours(date) * 15) };
 }
 
-/** NOAA's general solar position: elevation above the horizon and azimuth
- *  clockwise from north, both in degrees. */
+/** NOAA's solar position formula. Returns elevation and azimuth (clockwise
+ *  from north) in degrees. */
 export function sunPosition(date, coords) {
   const startOfYear = new Date(date.getFullYear(), 0, 1);
   const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -56,7 +50,7 @@ export function sunPosition(date, coords) {
 
 const stop = (el, p1, p2, p3, glow) => ({ el, p1, p2, p3, glow });
 
-/** The original's DEFAULT_RISE, morning colours from deep night up. */
+/** Colour stops by sun elevation in degrees, from the Mac's DEFAULT_RISE and DEFAULT_SET. */
 export const RISE = [
   stop(-14, [26, 35, 71], [28, 62, 80], [62, 46, 96], 0.35),
   stop(-7, [44, 74, 124], [46, 107, 125], [176, 120, 158], 0.50),
@@ -66,7 +60,6 @@ export const RISE = [
   stop(45, [255, 30, 140], [26, 229, 229], [255, 232, 59], 0.90),
 ];
 
-/** The original's DEFAULT_SET, evening colours from high sun down. */
 export const SET = [
   stop(45, [255, 30, 140], [26, 229, 229], [255, 232, 59], 0.90),
   stop(14, [255, 160, 90], [255, 210, 140], [130, 165, 205], 0.88),
@@ -77,8 +70,6 @@ export const SET = [
   stop(-14, [26, 35, 71], [28, 62, 80], [62, 46, 96], 0.35),
 ];
 
-/** The ramp at an altitude: the end stops beyond either end, a mix of the two
- *  stops around it in between. */
 export function sample(stops, el) {
   const asc = stops[0].el < stops[stops.length - 1].el ? stops : [...stops].reverse();
   const first = asc[0], last = asc[asc.length - 1];
@@ -93,8 +84,6 @@ export function sample(stops, el) {
   return last;
 }
 
-/** The triad for a moment. With no coordinates, they are guessed from the
- *  clock offset. */
 export function state(date, coords = guess(date)) {
   const sun = sunPosition(date, coords);
   const rising = sun.azimuth < 180;
@@ -113,9 +102,7 @@ export function state(date, coords = guess(date)) {
 
 // ---- OKLCH ----
 
-/** Mix in OKLCH, so a transition stays luminous rather than passing through a
- *  muddy midpoint. Hue takes the short way round; a near-grey end takes the
- *  other end's hue. */
+/** Mixes in OKLCH to avoid a muddy midpoint. A near-grey end uses the other end's hue. */
 export function mix(a, b, t) {
   const A = lab(a), B = lab(b);
   const ca = Math.hypot(A.a, A.b), cb = Math.hypot(B.a, B.b);
@@ -126,9 +113,7 @@ export function mix(a, b, t) {
   return toRGB(L, C * Math.cos(h), C * Math.sin(h));
 }
 
-/** The same hue at a lightness clamped into [lo, hi] and at least `minChroma`
- *  of colour, for a colour that has to show on a dark window. Already within
- *  both, it comes back untouched. */
+/** Clamps lightness to [lo, hi] and raises chroma to at least `minChroma`, keeping the hue. */
 export function withLightness(c, lo, hi, minChroma = 0) {
   const x = lab(c);
   const L = Math.min(Math.max(x.L, lo), hi);

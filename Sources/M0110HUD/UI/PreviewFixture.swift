@@ -1,10 +1,7 @@
 import Foundation
 
-/// Synthesised M0110A layout and keymap, so the interface can be rendered and
-/// reviewed without the keyboard attached or unlocked.
-///
-/// Geometry mirrors `config/boards/shields/m0110/m0110-layouts.dtsi`, 79 keys
-/// in hundredths of a key unit, so previews match what the firmware reports.
+/// Fake M0110A layout and keymap, for rendering the interface without the
+/// keyboard. Geometry follows `config/boards/shields/m0110/m0110-layouts.dtsi`.
 enum PreviewFixture {
     static func layout() -> PhysicalLayout {
         var keys: [KeyPhysicalAttrs] = []
@@ -54,9 +51,8 @@ enum PreviewFixture {
         // Caps ASDFGHJKL ; ' Return, then KP4 KP5 KP6 KP+
         add([0x39, 0x04, 0x16, 0x07, 0x09, 0x0A, 0x0B, 0x0D, 0x0E, 0x0F, 0x33, 0x34, 0x28])
         add([0x5C, 0x5D, 0x5E, 0x57])
-        // LShift ISO ZXCVBNM , . / RAlt Up, then KP1 KP2 KP3.
-        // Position 64 is RALT in config/m0110.keymap rather than a right Shift:
-        // the dtsi's comment block says "RSh" but the bindings are authoritative.
+        // LShift ISO ZXCVBNM , . / RAlt Up, then KP1 KP2 KP3. Position 64 is
+        // RALT in config/m0110.keymap, even though the dtsi comment says "RSh".
         add([0xE1, 0x64, 0x1D, 0x1B, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38, 0xE6, 0x52])
         add([0x59, 0x5A, 0x5B])
         // LCtrl LGui Space \ Left Right Down, then KP0 KP. KPEnter

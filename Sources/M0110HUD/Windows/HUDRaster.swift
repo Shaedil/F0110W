@@ -1,14 +1,9 @@
 import Foundation
 
-// The Windows HUD, drawn in software.
-//
-// Windows has no vibrancy or SceneKit to borrow, and GDI cannot antialias a
-// shape or draw with alpha, so the capsule, the board and the battery ring are
-// rasterised here from signed distances, and only the text comes from the
-// system. Nothing in this file touches Windows: tools/win-hud-preview.sh
-// draws the same HUD on a Mac.
+// Software-drawn HUD. GDI cannot antialias shapes or use alpha, so shapes come from signed
+// distances. Nothing here calls Windows, so tools/win-hud-preview.sh can draw it on a Mac.
 
-/// A colour in sRGB, straight alpha, each part 0...1.
+/// sRGB with straight alpha, each part 0...1.
 struct RGBA: Equatable {
     var r, g, b, a: Float
 
@@ -21,23 +16,21 @@ struct RGBA: Equatable {
     func alpha(_ factor: Float) -> RGBA { RGBA(r, g, b, a * factor) }
 }
 
-/// One line of text as coverage, 0-255, `width` x `height`, top-down.
+/// Coverage 0-255, `width` x `height`, top-down.
 struct TextMask {
     var width: Int
     var height: Int
     var coverage: [UInt8]
 }
 
-/// Where text comes from: GDI on Windows, Core Text in the Mac preview.
 protocol TextRasterizer {
-    /// `size` is the em height in pixels; `weight` as in CSS, 400 regular,
-    /// 600 semibold. Text wider than `maxWidth` is cut short with an ellipsis.
+    /// `size` is the em height in pixels. `weight` is CSS-style (400 regular, 600 semibold).
+    /// Text wider than `maxWidth` ends in an ellipsis.
     func render(_ text: String, size: Int, weight: Int, maxWidth: Int) -> TextMask
-    /// A single glyph from the system's icon font, or nil if there is none.
     func icon(_ codepoint: UInt32, size: Int) -> TextMask?
 }
 
-/// Premultiplied RGBA pixels, `Float` per channel until they are packed.
+/// Premultiplied RGBA, one Float per channel.
 struct Canvas {
     let width: Int
     let height: Int
@@ -49,7 +42,6 @@ struct Canvas {
         pixels = [Float](repeating: 0, count: width * height * 4)
     }
 
-    /// Paints `color` over pixel x, y at `coverage`, source over.
     @inline(__always)
     mutating func blend(_ x: Int, _ y: Int, _ color: RGBA, coverage: Float) {
         let a = color.a * coverage
@@ -62,8 +54,7 @@ struct Canvas {
         pixels[i + 3] = a + pixels[i + 3] * keep
     }
 
-    /// Fills a shape given as a signed distance in pixels, negative inside,
-    /// sampled at pixel centres over `bounds`. One pixel of antialiasing.
+    /// Fills a shape given as a signed distance in pixels (negative inside), with 1 px of antialiasing.
     mutating func fill(_ color: RGBA, in bounds: (x0: Float, y0: Float, x1: Float, y1: Float),
                        _ distance: (Float, Float) -> Float) {
         let x0 = max(0, Int(bounds.x0.rounded(.down)) - 1), x1 = min(width - 1, Int(bounds.x1.rounded(.up)) + 1)
@@ -79,7 +70,6 @@ struct Canvas {
         }
     }
 
-    /// Paints a text mask in `color` with its top-left at x, y.
     mutating func draw(_ mask: TextMask, at x: Int, _ y: Int, _ color: RGBA) {
         for my in 0..<mask.height {
             for mx in 0..<mask.width {
@@ -89,7 +79,7 @@ struct Canvas {
         }
     }
 
-    /// BGRA bytes, premultiplied, which is what a layered window takes.
+    /// Premultiplied BGRA, the format a layered window takes.
     func bgraPremultiplied() -> [UInt8] {
         var out = [UInt8](repeating: 0, count: width * height * 4)
         for i in stride(from: 0, to: pixels.count, by: 4) {
@@ -101,7 +91,7 @@ struct Canvas {
         return out
     }
 
-    /// BGRA bytes, straight alpha, which is what an icon takes.
+    /// Straight-alpha BGRA, the format an icon takes.
     func bgraStraight() -> [UInt8] {
         var out = [UInt8](repeating: 0, count: width * height * 4)
         for i in stride(from: 0, to: pixels.count, by: 4) {
@@ -118,7 +108,6 @@ struct Canvas {
     private static func byte(_ v: Float) -> UInt8 { UInt8(min(max(v, 0), 1) * 255 + 0.5) }
 }
 
-/// Signed distances, in pixels.
 enum Shape {
     static func roundedRect(_ px: Float, _ py: Float,
                             x: Float, y: Float, w: Float, h: Float, radius: Float) -> Float {
@@ -129,13 +118,11 @@ enum Shape {
         return outside + min(max(qx, qy), 0) - r
     }
 
-    /// A circle's outline, `width` thick.
     static func ring(_ px: Float, _ py: Float, cx: Float, cy: Float, radius: Float, width: Float) -> Float {
         abs(hypot(px - cx, py - cy) - radius) - width / 2
     }
 
-    /// An arc with round ends, clockwise from twelve o'clock through
-    /// `fraction` of a turn.
+    /// A round-capped arc, clockwise from 12 o'clock through `fraction` of a turn.
     static func arc(_ px: Float, _ py: Float, cx: Float, cy: Float, radius: Float, width: Float,
                     fraction: Float) -> Float {
         let sweep = 2 * Float.pi * min(max(fraction, 0), 1)
@@ -149,10 +136,8 @@ enum Shape {
     }
 }
 
-/// Light or dark, and the inks for each.
 struct HUDTheme {
     var dark: Bool
-    /// Transparency effects: on lets a little of the desktop through.
     var translucent: Bool
 
     var fill: RGBA {
@@ -164,12 +149,11 @@ struct HUDTheme {
     var title: RGBA { dark ? RGBA(gray: 1, 0.95) : RGBA(gray: 0, 0.89) }
     var secondary: RGBA { dark ? RGBA(gray: 1, 0.64) : RGBA(gray: 0, 0.60) }
     var track: RGBA { dark ? RGBA(gray: 1, 0.22) : RGBA(gray: 0, 0.13) }
-    /// macOS's systemGreen and systemRed, which the Mac HUD's ring uses.
+    /// macOS systemGreen and systemRed, as in the Mac HUD's ring.
     var good: RGBA { dark ? RGBA(0.188, 0.820, 0.345) : RGBA(0.204, 0.780, 0.349) }
     var low: RGBA { dark ? RGBA(1, 0.271, 0.227) : RGBA(1, 0.231, 0.188) }
 }
 
-/// What one HUD says.
 struct HUDContent: Equatable {
     var kind: HUDKind
     var name: String
@@ -178,8 +162,7 @@ struct HUDContent: Equatable {
     var lowThreshold: Int
 }
 
-/// The HUD's geometry at one scale, in pixels. The proportions are the Mac
-/// HUD's (HUDMetrics), with type a step larger to sit with Windows' 14 px UI.
+/// Pixel geometry with the Mac HUD's proportions, but text one step larger for the 14 px Windows UI.
 struct WinHUDMetrics {
     var scale: Float
 
@@ -195,21 +178,18 @@ struct WinHUDMetrics {
     var gap: Float { 12 * scale }
     var minWidth: Float { 220 * scale }
     var maxWidth: Float { 380 * scale }
-    /// Room around the capsule for its shadow.
     var margin: Float { 14 * scale }
 }
 
-/// A rendered HUD: the pixels, and where in them the capsule sits, so it can
-/// be placed by its own edges rather than its shadow's.
+/// `capsule` is the capsule's rect inside the canvas, so placement can ignore the shadow.
 struct HUDImage {
     var canvas: Canvas
     var capsule: (x: Int, y: Int, width: Int, height: Int)
 }
 
 enum HUDArt {
-    /// The US M0110's rows as key widths in hundredths of a unit, 1500 wide.
-    /// A zero is a gap: the bottom row is inset a unit at each end. The same
-    /// widths as M0110Layout.ansi, which is tied to the Mac's board drawing.
+    /// US M0110 rows as key widths in hundredths of a unit, 1500 wide. A negative
+    /// width is a gap. Same widths as M0110Layout.ansi.
     static let rows: [[Int32]] = [
         [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 200],
         [150, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 150],
@@ -226,9 +206,7 @@ enum HUDArt {
         }
     }
 
-    /// The M0110, top down, as the glyph on the left: cream case, warm-grey
-    /// caps, no black, as the Mac's board art. `dim` greys it out for a dead
-    /// battery.
+    /// The board seen from above, like the Mac's board art. `dim` grays it out for a dead battery.
     static func board(on canvas: inout Canvas, x: Float, y: Float, width: Float, dim: Bool) {
         let unitsWide: Float = 1500
         let unitsHigh: Float = 500
@@ -266,7 +244,6 @@ enum HUDArt {
         }
     }
 
-    /// The board's height for a given width.
     static func boardHeight(width: Float) -> Float {
         let bezel: Float = 40
         return width * (500 + bezel * 2) / (1500 + bezel * 2)
@@ -292,7 +269,6 @@ enum HUDArt {
                     Int((cy - Float(label.height) / 2).rounded()), theme.secondary)
     }
 
-    /// The whole HUD, shadow included.
     static func render(_ content: HUDContent, metrics m: WinHUDMetrics, theme: HUDTheme,
                        text: TextRasterizer) -> HUDImage {
         let showRing = content.battery != nil && content.kind.showsRing
@@ -313,21 +289,19 @@ enum HUDArt {
         let x = margin, y = margin
         let radius = height / 2
 
-        // A soft shadow a little below, since a layered window gets none.
+        // Layered windows get no system shadow, so draw one.
         let blur = 9 * m.scale
         let drop = 3 * m.scale
         canvas.fill(theme.shadow, in: (0, 0, Float(canvas.width), Float(canvas.height))) { px, py in
             let d = Shape.roundedRect(px, py, x: x, y: y + drop, w: width, h: height, radius: radius)
-            // Spread the edge over `blur` pixels instead of one, and hand fill
-            // back the distance that gives that coverage.
+            // Spread the edge over `blur` pixels and return the distance that gives that coverage.
             let t = min(max((d + blur * 0.4) / (blur * 1.4), 0), 1)
             return 0.5 - (1 - t * t * (3 - 2 * t))
         }
         canvas.fill(theme.stroke, in: (x - 1, y - 1, x + width + 1, y + height + 1)) {
             Shape.roundedRect($0, $1, x: x - 1, y: y - 1, w: width + 2, h: height + 2, radius: radius + 1)
         }
-        // The fill replaces what is under it rather than covering it, so the
-        // shadow does not darken a translucent capsule from inside.
+        // The fill replaces the pixels under it, so the shadow does not darken a translucent capsule.
         var fill = Canvas(width: canvas.width, height: canvas.height)
         fill.fill(theme.fill, in: (x, y, x + width, y + height)) {
             Shape.roundedRect($0, $1, x: x, y: y, w: width, h: height, radius: radius)
@@ -339,8 +313,6 @@ enum HUDArt {
         board(on: &canvas, x: glyphX, y: (y + (height - boardH) / 2).rounded(), width: m.glyphWidth,
               dim: content.kind == .died)
 
-        // Text centred between the glyph and the ring, the pair centred on the
-        // capsule's midline.
         let textLeft = glyphX + m.glyphWidth + m.gap
         let textRight = x + width - m.padTrailing - (showRing ? m.ringDiameter + m.gap : m.gap)
         let pairHeight = Float(title.height + status.height) - 2 * m.scale
@@ -357,12 +329,11 @@ enum HUDArt {
         return HUDImage(canvas: canvas, capsule: (Int(x), Int(y), Int(width), Int(height)))
     }
 
-    /// The tray icon: a keyboard from the system's icon font, else a drawn
-    /// one, in the taskbar's ink. Faded while the keyboard is away.
+    /// A keyboard glyph from the icon font, or a drawn one if missing. Faded while the keyboard is away.
     static func trayIcon(size: Int, darkTaskbar: Bool, connected: Bool, text: TextRasterizer) -> Canvas {
         var canvas = Canvas(width: size, height: size)
         let ink = RGBA(gray: darkTaskbar ? 1 : 0, connected ? 1 : 0.45)
-        // Segoe Fluent Icons and Segoe MDL2 Assets both have KeyboardClassic.
+        // 0xE765 is KeyboardClassic.
         if let glyph = text.icon(0xE765, size: size) {
             canvas.draw(glyph, at: (size - glyph.width) / 2, (size - glyph.height) / 2, ink)
             return canvas
@@ -394,9 +365,7 @@ enum HUDArt {
 }
 
 extension HUDArt {
-    /// Every state, light over a light desktop and dark over a dark one, with
-    /// the tray icons along the bottom: what `--snapshot` writes on Windows
-    /// and tools/win-hud-preview.sh on a Mac, to check the drawing by eye.
+    /// Every state plus the tray icons, for `--snapshot` and tools/win-hud-preview.sh.
     static func sheet(scale: Float, text: TextRasterizer) -> Canvas {
         let samples: [HUDContent] = [
             HUDContent(kind: .arrived, name: "M0110", battery: 76, detail: nil, lowThreshold: 20),
@@ -439,7 +408,6 @@ extension HUDArt {
 }
 
 extension Canvas {
-    /// Composites another canvas over this one with its top-left at x, y.
     mutating func draw(_ other: Canvas, at x: Int, _ y: Int) {
         for oy in 0..<other.height {
             let ty = y + oy
@@ -456,8 +424,7 @@ extension Canvas {
         }
     }
 
-    /// A 32-bit BMP of the canvas, which any viewer opens and which needs no
-    /// encoder.
+    /// A 32-bit BMP, which any viewer opens and which needs no encoder.
     func bmp() -> [UInt8] {
         var out: [UInt8] = []
         func le(_ value: UInt32, _ bytes: Int) {
@@ -477,9 +444,6 @@ extension Canvas {
 }
 
 extension Canvas {
-    /// Lays `other`, a shape filled at `opacity`, over this canvas, replacing
-    /// what is under the shape rather than blending with it, so that a
-    /// translucent fill shows the desktop and not the shadow drawn under it.
     mutating func replace(with other: Canvas, opacity: Float) {
         precondition(other.width == width && other.height == height)
         var mixed = pixels

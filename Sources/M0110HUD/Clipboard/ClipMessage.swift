@@ -1,11 +1,9 @@
 import Foundation
 
-/// What the helpers pass each other when the keyboard cannot carry the content
-/// itself: an image, or text longer than it holds.
-///
-/// `helper/PROTOCOL.md` is the reference for all of it. The keyboard carries a
-/// `ClipMessage` as an opaque clip and a `ClipDatagram` as a RELAY, and looks
-/// inside neither.
+/// Messages between helpers for content the keyboard cannot carry itself:
+/// images, or text too long for it. See `helper/PROTOCOL.md`.
+/// The keyboard carries a `ClipMessage` as an opaque clip and a
+/// `ClipDatagram` as a RELAY, and never looks inside either.
 struct ClipContent: Equatable {
     enum Kind: UInt8 {
         /// UTF-8, LF line endings.
@@ -18,7 +16,6 @@ struct ClipContent: Equatable {
     let data: Data
 }
 
-/// One of a computer's own network addresses: 4 bytes of IPv4 or 16 of IPv6.
 struct ClipAddress: Equatable {
     let bytes: [UInt8]
 
@@ -43,7 +40,6 @@ struct ClipAddress: Equatable {
         return out
     }
 
-    /// Decodes a counted list starting at `index`, or nil if it is cut short.
     fileprivate static func decode(_ bytes: [UInt8], at index: Int) -> [ClipAddress]? {
         guard index < bytes.count else { return nil }
         var addresses: [ClipAddress] = []
@@ -67,18 +63,17 @@ struct ClipAddress: Equatable {
     }
 }
 
-/// The inside of an opaque clip.
 enum ClipMessage: Equatable {
     static let idLength = 8
     static let keyLength = 32
     static let maxAddresses = 6
-    /// The bytes of an INLINE that are not content.
+    /// Bytes of an INLINE that are not content.
     static let inlineOverhead = 2 + idLength
 
-    /// "The content is here; come and fetch it."
+    /// Tells the other helper where to fetch the content.
     case offer(kind: ClipContent.Kind, id: [UInt8], key: [UInt8], port: UInt16,
                addresses: [ClipAddress])
-    /// The content itself, cut down to fit through the keyboard.
+    /// The content itself, shrunk to fit through the keyboard.
     case inline(kind: ClipContent.Kind, id: [UInt8], content: [UInt8])
 
     init?(_ bytes: [UInt8]) {
@@ -113,13 +108,11 @@ enum ClipMessage: Equatable {
     }
 }
 
-/// The inside of a RELAY: a word from one helper to the other, not stored.
+/// A short message to the other helper. The keyboard forwards it without storing it.
 enum ClipDatagram: Equatable {
-    /// "I could not reach you. Reach me here, or send it through the keyboard."
+    /// Could not reach the offering helper. Connect here, or send the content through the keyboard.
     case want(id: [UInt8], port: UInt16, addresses: [ClipAddress])
-    /// "That copy cannot be had."
     case gone(id: [UInt8])
-    /// "I no longer want that copy; do not send it."
     case cancel(id: [UInt8])
 
     init?(_ bytes: [UInt8]) {
@@ -141,8 +134,8 @@ enum ClipDatagram: Equatable {
         }
     }
 
-    /// The datagram in at most `room` bytes, leaving out addresses that do not
-    /// fit. A WANT with none still fits any link.
+    /// Fits the datagram in `room` bytes by dropping addresses. A WANT with
+    /// no addresses fits any link.
     func encoded(room: Int) -> [UInt8] {
         switch self {
         case let .want(id, port, addresses):

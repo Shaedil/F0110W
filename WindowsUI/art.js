@@ -1,11 +1,10 @@
-// The Mac window's drawn details: PixelIcon's sidebar icons, DitheredTitle's
-// pane titles and the RacingStripes beside them. Each is drawn one dot per
-// CSS pixel and scaled up without smoothing, so it stays chunky.
+// Ports of the Mac window's PixelIcon, DitheredTitle and RacingStripes. They are
+// drawn one dot per CSS pixel and scaled up without smoothing.
 
 const ATKINSON = [[1, 0], [2, 0], [-1, 1], [0, 1], [1, 1], [0, 2]];
 
-/** Atkinson-dithers `level` (0...1 per pixel, row-major) in place; returns
- *  the lit pixels. `keep(y)` limits where error may spread. */
+/** Atkinson dithering. Changes `level` (0 to 1 per pixel) in place.
+ *  `keep(y)` limits which rows the error can spread to. */
 function dither(level, width, height, keep = () => true) {
   const lit = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
@@ -34,7 +33,7 @@ function canvas(width, height) {
   return c;
 }
 
-/** `ink` is one [r, g, b], or a function of x giving one. */
+/** `ink` is [r, g, b] or a function of x that returns one. */
 function paint(c, lit, ink) {
   const ctx = c.getContext('2d');
   const image = ctx.createImageData(c.width, c.height);
@@ -47,7 +46,6 @@ function paint(c, lit, ink) {
   ctx.putImageData(image, 0, 0);
 }
 
-/** Colours spread evenly left to right across `width`, mixed between. */
 function gradient(colours, width) {
   return (x) => {
     const t = (width > 1 ? x / (width - 1) : 0) * (colours.length - 1);
@@ -57,7 +55,6 @@ function gradient(colours, width) {
   };
 }
 
-/** "#d9b880" to [217, 184, 128]. */
 export function rgb(hex) {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -98,7 +95,6 @@ const ICONS = {
   },
 };
 
-/** A 16-point PixelIcon in `tint`, drawn at the screen's resolution. */
 export function pixelIcon(kind, tint) {
   const scale = window.devicePixelRatio || 1;
   const size = 16;
@@ -118,9 +114,7 @@ export function pixelIcon(kind, tint) {
 
 // ---- Racing stripes ----
 
-/** Two lit rows, one gap, fading out to the right in dithered dots. `inks`
- *  is a "#rrggbb", or [r, g, b] colours run left to right: the prism's marks,
- *  so the stripes fade out of the prism the way they fade out of black. */
+/** `inks` is a "#rrggbb" string or a list of [r, g, b] colours spread left to right. */
 export function racingStripes(width, inks, height = 13) {
   width = Math.max(1, Math.floor(width));
   const level = new Float64Array(width * height);
@@ -138,7 +132,6 @@ export function racingStripes(width, inks, height = 13) {
 
 const titles = new Map();
 
-/** The pane's title as dithered dots, fading by half from top to bottom. */
 export function ditheredTitle(text, ink = [247, 244, 236]) {
   const key = `${text}|${ink}`;
   if (!titles.has(key)) titles.set(key, titleDots(text));

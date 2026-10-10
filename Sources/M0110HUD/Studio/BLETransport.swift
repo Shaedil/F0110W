@@ -1,53 +1,30 @@
 import CoreBluetooth
 import Foundation
 
-/// Blocking Studio transport over the firmware's GATT RPC service.
-///
-/// ZMK exposes the same RPC protocol on Bluetooth that it does on the serial
-/// port, with the same framing and the same protobuf envelopes, through one
-/// characteristic that is written to and indicates back
-/// (`zmk/app/src/studio/gatt_rpc_transport.c`). So only the byte channel is new
-/// here; everything above `StudioTransport` is shared with the serial path.
-///
-/// ## Only one transport is live at a time
-///
-/// The firmware selects its RPC transport from the endpoint the keyboard is
-/// currently *outputting* to (`refresh_selected_transport` in `rpc.c`), and the
-/// GATT transport drops every write while it is not the selected one. So this
-/// works when the keyboard's output endpoint is Bluetooth, and is deaf when the
-/// endpoint is USB, which is what a plugged-in board defaults to. The keymap's
-/// Fn layer has `&out OUT_BLE` for switching.
-///
-/// ## Bridging callbacks to a blocking call
-///
-/// `StudioClient` is synchronous on its own serial queue. CoreBluetooth is
-/// callbacks on another. Everything shared sits behind one `NSCondition`: the
-/// delegate signals, the caller waits with a deadline. The two queues are
-/// always different, so the wait cannot block the callbacks that would end it.
+/// Blocking Studio transport over the firmware's GATT RPC characteristic, with
+/// the same framing and protobuf messages as serial
+/// (`zmk/app/src/studio/gatt_rpc_transport.c`). The firmware only serves RPC on
+/// the current output endpoint (`refresh_selected_transport` in `rpc.c`), so
+/// this fails while output is USB, the default when plugged in. The Fn layer's
+/// `&out OUT_BLE` switches it. `StudioClient` blocks on its own queue while
+/// CoreBluetooth calls back on another, so waiting on the shared `NSCondition`
+/// cannot block the callback that would end the wait.
 final class BLETransport: NSObject, StudioTransport {
     /// `ZMK_BT_STUDIO_UUID` from `zmk/app/src/studio/uuid.h`.
     static let serviceUUID = CBUUID(string: "00000000-0196-6107-C967-C5CFB1C2482A")
     static let rpcCharacteristicUUID = CBUUID(string: "00000001-0196-6107-C967-C5CFB1C2482A")
-    /// Used only as a fallback route to the peripheral; see `findPeripheral`.
+    /// Fallback route to the peripheral. See `findPeripheral`.
     private static let hidServiceUUID = CBUUID(string: "1812")
 
-    /// How long `open` waits for the whole connect-and-subscribe sequence.
+    /// Time `open` gets to connect and subscribe.
     private static let setupTimeout: TimeInterval = 8
-    /// How long a single chunk write waits for its acknowledgement.
     private static let writeTimeout: TimeInterval = 3
 
     let label = "Bluetooth"
 
-    /// Time without *any* incoming data before the link is called dead.
-    ///
-    /// Not a budget for the whole reply. The firmware indicates back 27 bytes
-    /// at a time and waits for each to be confirmed, so a kilobyte-scale
-    /// answer (the physical layouts, the keymap) is dozens of round trips,
-    /// and with the connection latency ZMK requests those can add up past any
-    /// fixed figure. Budgeting the whole response meant a transfer that was
-    /// progressing perfectly well got abandoned partway; measuring silence
-    /// instead lets a slow reply finish while a genuinely dead link still
-    /// fails quickly.
+    /// Silence allowed before the link counts as dead. The firmware sends 27 bytes
+    /// per indication and waits for each confirm, so a big reply (layouts, keymap)
+    /// can outlast any fixed total.
     let responseTimeout: TimeInterval = 6
 
     private let deviceName: String
@@ -65,8 +42,6 @@ final class BLETransport: NSObject, StudioTransport {
     private var frames: [[UInt8]] = []
     private var decoder = StudioFraming.Decoder()
     private var pendingWriteAcks = 0
-    /// When bytes last arrived, so waiting can be measured against silence
-    /// rather than against the clock.
     private var lastActivity = Date()
     private var bytesSeen = 0
 
@@ -124,7 +99,7 @@ final class BLETransport: NSObject, StudioTransport {
         if let failure { throw failure }
     }
 
-    /// Record a terminal failure and wake whoever is waiting. On `queue`.
+    /// Records the first fatal error and wakes any waiter. Call on `queue`.
     private func fail(_ error: StudioError) {
         log("studio/ble: \(error)")
         lock.lock()
@@ -141,8 +116,8 @@ final class BLETransport: NSObject, StudioTransport {
         }
         let framed = StudioFraming.wrap(payload)
 
-        // The firmware reassembles from a ring buffer, so a frame may be split
-        // across writes, but not beyond the negotiated ATT payload.
+        // The firmware reassembles from a ring buffer, so a frame can be split
+        // across writes, but each write must fit the negotiated ATT payload.
         let chunk = max(20, peripheral.maximumWriteValueLength(for: .withResponse))
         var index = 0
         while index < framed.count {
@@ -171,8 +146,7 @@ final class BLETransport: NSObject, StudioTransport {
         if let failure { throw failure }
     }
 
-    /// Waits for a complete frame, giving up only after `timeout` of total
-    /// silence; every indication that arrives renews the clock.
+    /// The timeout counts silence, so it restarts whenever data arrives.
     func receiveFrame(timeout: TimeInterval) throws -> [UInt8] {
         lock.lock()
         defer { lock.unlock() }
@@ -180,13 +154,11 @@ final class BLETransport: NSObject, StudioTransport {
         while frames.isEmpty, failure == nil {
             let deadline = lastActivity.addingTimeInterval(timeout)
             if Date() >= deadline {
-                // The byte count is the useful part: a partial count means the
-                // firmware stalled mid-message rather than never answering.
+                // The byte count shows whether the firmware stalled mid-message or never answered.
                 log("studio/ble: gave up after \(bytesSeen) bytes with no complete frame")
                 throw StudioError.timeout("a response frame over Bluetooth")
             }
-            // The wait can return early; the loop re-reads `lastActivity`, so
-            // data arriving mid-wait pushes the deadline out.
+            // Re-reading `lastActivity` each loop lets new data push the deadline out.
             _ = lock.wait(until: deadline)
         }
         if let failure { throw failure }
@@ -202,13 +174,10 @@ final class BLETransport: NSObject, StudioTransport {
 
     // MARK: - Finding the keyboard
 
-    /// The keyboard is already paired and connected to macOS for HID, so it is
-    /// retrieved rather than scanned for: ZMK does not put the Studio service
-    /// in its advertising data, and a scan would never match on it.
-    ///
-    /// Asking by Studio UUID only finds the peripheral once macOS has cached
-    /// that service, which it has not necessarily done; the HID service is the
-    /// fallback, narrowed by name.
+    /// The keyboard is already connected to macOS for HID, so it is retrieved
+    /// instead of scanned for (ZMK does not advertise the Studio service).
+    /// macOS may not have cached the Studio service yet, so the HID service,
+    /// narrowed by name, is the fallback.
     private func findPeripheral(_ central: CBCentralManager) -> CBPeripheral? {
         let byStudio = central.retrieveConnectedPeripherals(withServices: [Self.serviceUUID])
         if let match = byStudio.first { return match }
@@ -286,16 +255,14 @@ extension BLETransport: CBPeripheralDelegate {
             return
         }
         rpc = characteristic
-        // Responses arrive as indications, so subscribing is what opens the
-        // return path; the transport is not usable until it succeeds.
+        // Replies come as indications, so the link is not ready until this succeeds.
         peripheral.setNotifyValue(true, for: characteristic)
     }
 
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
-            // The characteristic needs an encrypted link, so this is where an
-            // unbonded or un-paired keyboard shows up.
+            // The characteristic needs an encrypted link, so an unpaired keyboard fails here.
             fail(.portUnavailable("Bluetooth: could not subscribe (\(error.localizedDescription))"))
             return
         }
@@ -314,16 +281,14 @@ extension BLETransport: CBPeripheralDelegate {
             return
         }
         guard let data = characteristic.value else { return }
-        // Indications are capped at 27 bytes by the firmware, so one response
-        // arrives across many of them and the decoder does the reassembly.
+        // The firmware caps indications at 27 bytes, so the decoder rebuilds each reply.
         lock.lock()
         lastActivity = Date()
         bytesSeen += data.count
         for byte in data {
             if let frame = decoder.feed(byte) { frames.append(frame) }
         }
-        // Broadcast even without a completed frame, so a waiter wakes and sees
-        // the renewed activity rather than timing out mid-transfer.
+        // Wake waiters even without a full frame so they see the new activity.
         lock.broadcast()
         lock.unlock()
     }

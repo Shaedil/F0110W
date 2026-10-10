@@ -1,10 +1,6 @@
-// The M0110 window: a Win32 window with a WebView2 filling it.
-//
-// WebView2 is COM, so this file is C++; it hands Swift plain C. The handful of
-// completion handlers WebView2 calls back on are small classes below rather
-// than WRL's, which keeps the build to the Windows SDK and WebView2.h. It uses
-// no C++ standard library: the toolchain's Clang can be older than the one
-// Visual Studio's STL insists on.
+// A Win32 window filled by a WebView2. The COM handlers are written by hand instead of
+// WRL, so only the Windows SDK and WebView2.h are needed. No STL, since this Clang may be
+// older than Visual Studio's STL requires.
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -27,8 +23,7 @@ namespace {
 
 // ---- COM handlers ----
 
-// One class per handler interface WebView2 calls back on: IUnknown by hand,
-// and Invoke forwarding to a lambda, made with handle(...).
+// Implements one WebView2 handler interface, with Invoke calling a lambda.
 #define M0110_HANDLER(Name, Interface, Params, Args)                                     \
     template <typename F> class Name final : public Interface {                            \
       public:                                                                              \
@@ -86,21 +81,18 @@ bool environment_pending;
 ICoreWebView2Controller *controller;
 ICoreWebView2 *webview;
 wchar_t folder[MAX_PATH * 2], data_folder[MAX_PATH * 2];
-/// Fixed size, as the Mac window is: no thick frame, no maximise.
 const DWORD window_style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
 bool developer_mode() { return GetEnvironmentVariableW(L"M0110_WEB_DEV", nullptr, 0) > 0; }
 
 
-/// The page's ground, which is the same near-black in light and dark, as on
-/// the Mac; only the sidebar follows the theme.
+/// Page background. The same near-black in light and dark, as on the Mac.
 const COLORREF ground = RGB(0x0b, 0x0a, 0x09);
 
 void apply_frame_theme() {
     if (!window) return;
-    // A dark caption whatever the theme, in the page's own black, so the
-    // title bar reads as part of the window: DWMWA_USE_IMMERSIVE_DARK_MODE
-    // (20) on Windows 10 20H1+, DWMWA_CAPTION_COLOR (35) on Windows 11.
+    // Dark caption in the page's black for any theme. 20 is DWMWA_USE_IMMERSIVE_DARK_MODE
+    // (Windows 10 20H1+) and 35 is DWMWA_CAPTION_COLOR (Windows 11).
     BOOL dark = TRUE;
     DwmSetWindowAttribute(window, 20, &dark, sizeof dark);
     COLORREF caption = ground;
@@ -160,7 +152,7 @@ void set_up(ICoreWebView2Controller *new_controller) {
         }
         return S_OK;
     }), &token);
-    // The renderer crashing leaves a blank window: load the page again.
+    // A renderer crash leaves a blank window, so reload.
     webview->add_ProcessFailed(make_ProcessFailed([](ICoreWebView2 *sender, ICoreWebView2ProcessFailedEventArgs *args) {
         COREWEBVIEW2_PROCESS_FAILED_KIND kind;
         if (SUCCEEDED(args->get_ProcessFailedKind(&kind)) &&
@@ -168,7 +160,6 @@ void set_up(ICoreWebView2Controller *new_controller) {
             sender->Reload();
         return S_OK;
     }), &token);
-    // Links that would open a window open in the browser instead.
     webview->add_NewWindowRequested(make_NewWindow([](ICoreWebView2 *, ICoreWebView2NewWindowRequestedEventArgs *args) {
         LPWSTR uri = nullptr;
         if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
@@ -194,7 +185,7 @@ void create_controller() {
     HWND target = window;
     environment->CreateCoreWebView2Controller(
         window, make_ControllerDone([target](HRESULT result, ICoreWebView2Controller *new_controller) {
-            // Closed while WebView2 was starting.
+            // The window was closed while WebView2 was starting.
             if (window != target) {
                 if (new_controller) new_controller->Close();
                 return S_OK;
@@ -271,8 +262,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
-/// The window's outer rectangle: `width` x `height` of client area at 96 DPI,
-/// scaled for and centred on the monitor under the mouse.
+/// Outer rect for a 96 DPI client size, scaled and centered on the monitor under the mouse.
 RECT placement(int width, int height) {
     POINT cursor;
     GetCursorPos(&cursor);
@@ -304,8 +294,7 @@ extern "C" int32_t m0110_web_open(const uint16_t *title, const uint16_t *page_fo
 
     static bool com;
     if (!com) {
-        // WebView2 wants a single-threaded apartment on the thread that owns
-        // its window: this one, which also runs the message loop.
+        // WebView2 needs an STA on the thread that owns its window and runs the message loop.
         HRESULT result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         if (FAILED(result) && result != RPC_E_CHANGED_MODE) return (int32_t)result;
         com = true;

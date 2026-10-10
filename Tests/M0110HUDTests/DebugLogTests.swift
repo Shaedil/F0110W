@@ -20,7 +20,7 @@ final class DebugLogTests: XCTestCase {
         XCTAssertEqual(log.snapshot().map(\.message), ["line 3", "line 4", "line 5"])
     }
 
-    /// The clipboard puts its own name on its messages; the tag already says it.
+    /// The tag already names the source, so a matching prefix is dropped.
     func testDropsTheSourcesOwnPrefix() {
         let log = DebugLog(file: nil)
         log.add(.clipboard, "clipboard: ready")
@@ -44,8 +44,7 @@ final class DebugLogTests: XCTestCase {
         XCTAssertTrue(lines[1].hasSuffix(" [bluetooth] GATT link up"), lines[1])
     }
 
-    /// Past the cap the file is moved aside, replacing the last one moved, so
-    /// the log never grows past two files.
+    /// Past the cap the file replaces the old rotated one, so there are at most two files.
     func testRotatesAtTheCap() throws {
         let file = dir.appendingPathComponent("hud.log")
         let log = DebugLog(file: file, maxFileBytes: 200)
@@ -61,7 +60,6 @@ final class DebugLogTests: XCTestCase {
         XCTAssertTrue(last.contains("line 19 "))
     }
 
-    /// The debug panel's made-up events stay out of the file.
     func testWritesNothingWhenNotPersisting() {
         let file = dir.appendingPathComponent("hud.log")
         let log = DebugLog(file: file)
@@ -100,8 +98,7 @@ final class ProfileMoveTests: XCTestCase {
         XCTAssertEqual(ProfileMove(previous: 1, active: 0, own: 2).outcome, .elsewhere)
     }
 
-    /// The case seen live: the keyboard named this computer as a profile that
-    /// was not the one it left, so leaving showed nothing. The log has to say so.
+    /// A switch between two other profiles shows nothing, and the log must say why.
     func testExplainsASilentSwitchInSettingsNumbering() {
         XCTAssertEqual(ProfileMove(previous: 1, active: 0, own: 2).explanation,
                        "Profile 2 to Profile 1, neither is this computer (Profile 3); nothing shown")

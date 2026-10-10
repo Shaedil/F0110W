@@ -1,14 +1,11 @@
 import Foundation
 
-/// HID usage tables for the keycodes this board can produce.
-///
-/// ZMK packs a binding parameter as `(usage_page << 16) | usage_id`, confirmed
-/// against live hardware: the first key of the M0110A layout reports 458805 =
-/// 0x00070035: page 0x07 (Keyboard/Keypad), usage 0x35 (Grave).
+/// HID usage tables for the keycodes this board can produce. ZMK packs a
+/// binding parameter as `(usage_page << 16) | usage_id`. For example, 458805 =
+/// 0x00070035 is page 0x07 (Keyboard/Keypad), usage 0x35 (Grave).
 enum HIDKeycodes {
     static let keyboardPage: UInt32 = 0x07
-    /// Consumer page. ZMK's `C_*` codes live here (volume, transport, screen
-    /// brightness), and the keymap's Fn layer uses several of them.
+    /// Consumer page, which holds ZMK's `C_*` codes (volume, media, brightness).
     static let consumerPage: UInt32 = 0x0C
 
     static func encode(page: UInt32 = keyboardPage, usage: UInt32) -> UInt32 {
@@ -19,11 +16,7 @@ enum HIDKeycodes {
         (param >> 16, param & 0xFFFF)
     }
 
-    /// Short label for a binding parameter, suitable for drawing on a keycap.
-    ///
-    /// Both pages the keymap actually uses are decoded. Falling through to raw
-    /// hex for anything off the keyboard page put `0xc00ea` on a keycap where
-    /// the board has a volume key.
+    /// Short keycap label for a binding parameter.
     static func label(for param: UInt32) -> String {
         let (page, usage) = decode(param)
         switch page {
@@ -43,8 +36,7 @@ enum HIDKeycodes {
         }
     }
 
-    /// Consumer-page usage -> keycap label. Named for ZMK's `C_*` bindings, so
-    /// `C_VOL_UP` is `0xE9` and so on.
+    /// Consumer-page usage to keycap label, matching ZMK's `C_*` codes (`C_VOL_UP` is 0xE9).
     static let consumer: [UInt32: String] = [
         0x30: "power", 0x32: "sleep",
         0x6F: "bri+", 0x70: "bri-",
@@ -69,7 +61,7 @@ enum HIDKeycodes {
         0x226: "Stop Loading", 0x227: "Reload",
     ]
 
-    /// usage id -> keycap label
+    /// Keyboard-page usage to keycap label.
     static let keyboard: [UInt32: String] = {
         var m: [UInt32: String] = [:]
         for (i, c) in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".enumerated() {
@@ -114,8 +106,6 @@ enum HIDKeycodes {
         0xE4: "Right Control", 0xE5: "Right Shift", 0xE6: "Right Option", 0xE7: "Right Command",
     ]
 
-    /// Grouped picker contents as page-encoded binding parameters, in the
-    /// order a person would look for them.
     static let groups: [(String, [UInt32])] = [
         ("Letters", keys(Array(0x04...0x1D))),
         ("Numbers", keys(Array(0x1E...0x27))),
@@ -126,8 +116,8 @@ enum HIDKeycodes {
         ("Keypad", keys([0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D,
                          0x5E, 0x5F, 0x60, 0x61, 0x62, 0x63, 0x67])),
         ("Modifiers", keys([0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7])),
-        // Consumer usages up to 0xFF only: ZMK's default BASIC consumer report
-        // refuses anything higher, in set_layer_binding and on the wire.
+        // Consumer usages up to 0xFF only. ZMK's default BASIC consumer report
+        // rejects higher ones, both in set_layer_binding and on the wire.
         ("Media", media([0xB6, 0xCD, 0xB5, 0xB7, 0xB4, 0xB3, 0xE2, 0xEA, 0xE9, 0x70, 0x6F, 0xB8])),
     ]
 

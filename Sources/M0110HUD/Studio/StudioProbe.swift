@@ -1,7 +1,6 @@
 import Foundation
 
-/// Command-line check that the RPC layer actually talks to the keyboard.
-/// Exists so the protocol can be validated without any UI in the picture.
+/// Command-line check that the RPC layer can talk to the keyboard, without the UI.
 enum StudioProbe {
     static func run(verbose: Bool) -> Int32 {
         let ports = SerialTransport.candidatePorts()

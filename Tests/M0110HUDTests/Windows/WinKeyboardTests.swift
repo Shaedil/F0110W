@@ -3,12 +3,8 @@ import XCTest
 
 @testable import M0110HUD
 
-// The Windows keymap editor against a scripted ZMK Studio firmware: what the
-// window does with a real keyboard, without one. The firmware answers each
-// request the way zmk-studio-messages describes, refuses keymap calls while
-// locked, and keeps the edits it is sent.
+// Tests the Windows keymap editor against a fake ZMK Studio firmware.
 
-/// A ZMK Studio endpoint in memory: a transport WinKeyboard's client talks to.
 private final class FakeFirmware: StudioTransport {
     var label = "COM9"
     var isOpen = true
@@ -31,8 +27,7 @@ private final class FakeFirmware: StudioTransport {
     func open() throws {}
     func close() {}
 
-    /// Someone pressed &studio_unlock, or the idle timer ran out: the lock
-    /// changes and the firmware says so.
+    /// Changes the lock and sends the notification, like an unlock key or the idle timer.
     func setLocked(_ value: Bool) {
         lock.lock()
         locked = value
@@ -101,7 +96,7 @@ private final class FakeFirmware: StudioTransport {
             var details = ProtobufWriter()
             details.uint32(1, UInt32(info.id), skipZero: false)
             details.string(2, info.displayName)
-            // One parameter set: param1 a HID usage (5), a layer id (6) or nothing (2).
+            // One parameter set. param1 is a HID usage (5), a layer ID (6) or nothing (2).
             var value = ProtobufWriter()
             switch info.param1 {
             case .hidUsage: value.message(5, [])
@@ -158,7 +153,6 @@ private final class FakeFirmware: StudioTransport {
         outgoing.append(reply)
     }
 
-    /// The first field of a subsystem request, and its body when it has one.
     private static func call(in body: [UInt8]) throws -> (Int, [UInt8]) {
         var r = ProtobufReader(body)
         guard !r.isAtEnd else { return (0, []) }
@@ -205,8 +199,7 @@ final class WinKeyboardTests: XCTestCase {
         return keyboard
     }
 
-    /// Runs the app thread's queue until `condition` holds: in the app, the
-    /// Win32 loop does this.
+    /// Drains the main queue until `condition` holds. In the app the Win32 loop does this.
     private func wait(_ what: String, timeout: TimeInterval = 8, until condition: () -> Bool) {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -254,7 +247,6 @@ final class WinKeyboardTests: XCTestCase {
         wait("the second edit") { keyboard.pendingEdits == 2 }
         XCTAssertEqual(firmware.binding(layer: 1, position: 20), BehaviorBinding(behaviorID: kp, param1: mute, param2: 0))
 
-        // A Bluetooth key has no keycode to change.
         keyboard.rebind(layerIndex: 1, position: 19, to: b)
         Main.drain()
         XCTAssertEqual(keyboard.status, "Bluetooth does not take a keycode parameter")

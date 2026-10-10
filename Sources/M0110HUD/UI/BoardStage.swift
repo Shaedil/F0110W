@@ -2,14 +2,11 @@ import AppKit
 import SceneKit
 import SwiftUI
 
-/// What the stage's camera is looking at. Each pane, and each Settings tab,
-/// picks the part of the keyboard it is about.
+/// What the stage's camera looks at. Each pane and Settings tab picks a part of the keyboard.
 enum BoardFocus: Equatable {
-    /// The Keyboard pane's editor: the whole board, near top-down.
     case editor
     case overview
-    /// The Soli radar board under the right of the keyboard, which reads
-    /// hand gestures over the keys.
+    /// The Soli radar board under the right side of the keyboard, which reads hand gestures.
     case gestures
     case popup
     case battery
@@ -18,9 +15,7 @@ enum BoardFocus: Equatable {
 
     init(pane: Pane, settingsTab: SettingsTab) {
         switch pane {
-        // The Keyboard pane's own board is framed this way, so the stage
-        // waiting behind it is too, and leaving that pane flies on from the
-        // view the eye was already on.
+        // Matches the Keyboard pane's framing, so leaving it starts from the same view.
         case .keys: self = .editor
         case .bluetooth: self = .radio
         case .battery: self = .battery
@@ -43,32 +38,22 @@ enum BoardFocus: Equatable {
     }
 }
 
-/// The 3D M0110 the side panes zoom around.
-///
-/// The case is StephenLulz's measured reproduction (Thingiverse 4061711,
-/// CC BY); the keycaps, switches and converter boards were modelled to go in
-/// it. Everything comes from `Resources/M0110.usdz`, exported from
-/// `assets/M0110.blend`, with every key, switch and board as a named node so
-/// this class can find and move them.
-///
-/// One instance lives for the whole window, so moving between panes flies the
-/// camera from one part to the next rather than cutting.
+/// The 3D M0110 the side panes zoom around. The case is StephenLulz's model
+/// (Thingiverse 4061711, CC BY), loaded from `Resources/M0110.usdz` with each key,
+/// switch and board as a named node. One instance lives as long as the window so
+/// pane switches can animate the camera.
 final class BoardStage {
     let scene = SCNScene()
     let cameraNode = SCNNode()
 
-    /// The board, re-centred so the camera's targets can be given from its
-    /// middle.
     private let board = SCNNode()
-    /// The camera hangs off two nodes: `rig` sits on the target and turns,
-    /// `sway` adds the idle drift on top, and the camera itself only ever
-    /// moves along its own z, which is the distance.
+    /// `rig` sits on the target and rotates, `sway` adds idle drift, and the
+    /// camera only moves along its own z (the distance).
     private let rig = SCNNode()
     private let sway = SCNNode()
 
     private var caseMaterials: [SCNMaterial] = []
-    /// The key a pane is about gets materials of its own, so it can turn to
-    /// glass while the rest stay solid.
+    /// Featured keys get their own materials so they can turn to glass while the rest stay solid.
     private var featuredMaterials: [String: [SCNMaterial]] = [:]
     private static let featuredKeys = ["71_0"]
     /// Everything that sits on the case top: caps, switches, plate, PCB.
@@ -76,7 +61,6 @@ final class BoardStage {
     private var upperRest = SCNVector3Zero
     private var look = Look(caseXray: 0, featured: [:])
 
-    /// A key and what moves with it when it is pressed.
     private struct Key {
         let cap: SCNNode
         let stem: SCNNode?
@@ -90,29 +74,25 @@ final class BoardStage {
     private static let batteryScale: Float = 1.6
     /// Half the modelled cell's 6 mm thickness, before scaling.
     private static let batteryHalfHeight: Float = 0.003
-    /// The charge gauge printed on the cell: ten segments, lit to the level.
     private var gaugeSegments: [SCNNode] = []
     private var batteryLevel: Int?
     private var gaugeColour = NSColor(srgbRed: 0.35, green: 0.86, blue: 0.42, alpha: 1)
-    /// At or under the low-battery alert, when the last segment blinks.
+    /// At or below the low-battery alert, so the last segment blinks.
     private var gaugeLow = false
     private var nano: SCNNode?
-    /// The Soli radar board. Not in the model: built here, where the board
-    /// will go, on the case floor under the right-hand keys.
+    /// The Soli radar board, built in code since it isn't in the model.
     private var soli: SCNNode?
     private var plateMaterial: SCNMaterial?
-    /// Each cap's own material, which its legend is painted into.
     private var capMaterials: [String: SCNMaterial] = [:]
-    /// Each cap's top face, in metres: the area its painted face covers.
+    /// Size of each cap's painted top face, in meters.
     private(set) var capFaces: [String: CGSize] = [:]
-    /// Whatever the current focus added to the scene, removed on the next one.
+    /// Nodes the current focus added, removed on the next focus change.
     private var effects: [SCNNode] = []
     private(set) var focus: BoardFocus?
-    /// The last focus a visible stage showed, so the Keyboard pane's board
-    /// can start there and fly back to the whole board instead of cutting.
+    /// The last focus shown, so the Keyboard pane's board can fly back from it.
     @MainActor static var lastShown: BoardFocus?
 
-    /// Switch travel, a little over the real 3.5 mm so it reads at a distance.
+    /// Switch travel, a bit more than the real 3.5 mm so it shows from a distance.
     private static let travel: CGFloat = 0.004
 
     init?() {
@@ -121,8 +101,7 @@ final class BoardStage {
               let root = model.rootNode.childNode(withName: "M0110", recursively: true)
         else { return nil }
 
-        // Mount from the file's top node down: the export's turn from Blender's
-        // Z-up to SceneKit's Y-up lives on a transform above "M0110".
+        // Mount from the top node, since the Z-up to Y-up rotation sits above "M0110".
         var top = root
         while let parent = top.parent, parent !== model.rootNode { top = parent }
         board.addChildNode(top)
@@ -136,8 +115,7 @@ final class BoardStage {
         setUpLights()
     }
 
-    /// The bundled copy in a built app; in a `swift run` build there is no
-    /// bundle, so look up from the binary for the repo's own `Resources`.
+    /// The bundled copy, or for `swift run` (no bundle), the repo's `Resources` folder.
     private static func resourceURL(_ name: String) -> URL? {
         if let url = Bundle.main.url(forResource: name, withExtension: "usdz") { return url }
         var dir = Bundle.main.executableURL?.deletingLastPathComponent()
@@ -152,8 +130,7 @@ final class BoardStage {
 
     // MARK: - Setup
 
-    /// USD comes in as a transform node with a same-named mesh child, so
-    /// names are looked up on the transform, which is the one to move.
+    /// USD imports a transform with a same-named mesh child. Returns the transform.
     private func xform(_ name: String, in root: SCNNode) -> SCNNode? {
         guard let node = root.childNode(withName: name, recursively: true) else { return nil }
         if node.geometry != nil, let parent = node.parent, parent.name == name { return parent }
@@ -161,8 +138,7 @@ final class BoardStage {
     }
 
     private func collect(in root: SCNNode) {
-        // Materials are copied before the x-ray shader goes on, so it never
-        // reaches the parts that should stay solid.
+        // Copy materials first so the x-ray shader doesn't reach parts that stay solid.
         func xrayable(_ node: SCNNode, into list: inout [SCNMaterial],
                       cache: inout [String: SCNMaterial], haze: CGFloat = 0.03) {
             node.enumerateHierarchy { child, _ in
@@ -186,7 +162,7 @@ final class BoardStage {
         var caseCache: [String: SCNMaterial] = [:]
         for name in ["Upper", "Lower"] {
             guard let shell = root.childNode(withName: name, recursively: true) else { continue }
-            // Only the shell's own mesh: the keys and switches hang off Upper.
+            // Only the shell's own mesh, since the keys and switches are children of Upper.
             let meshes = ([shell] + shell.childNodes).filter { $0.name == name && $0.geometry != nil }
             for mesh in meshes { xrayable(mesh, into: &caseMaterials, cache: &caseCache) }
         }
@@ -198,16 +174,13 @@ final class BoardStage {
             if Self.featuredKeys.contains(tag) {
                 var own: [String: SCNMaterial] = [:]
                 var list: [SCNMaterial] = []
-                // Frosted rather than clear, so the cap still reads as a cap
-                // with its switch inside.
+                // Frosted, so the cap still looks like a cap with the switch inside.
                 xrayable(node, into: &list, cache: &own, haze: 0.2)
                 featuredMaterials[tag] = list
             } else {
                 // Solid, but still drawn after the insides, like the glass.
                 node.enumerateHierarchy { child, _ in child.renderingOrder = 10 }
             }
-            // A material per cap, to paint its legend into, and texture
-            // coordinates laid over its top face to paint it with.
             if let mesh = node.childNodes.first(where: { $0.geometry != nil }),
                let geometry = mesh.geometry {
                 if !Self.featuredKeys.contains(tag),
@@ -240,8 +213,7 @@ final class BoardStage {
 
         battery = xform("Battery", in: root)
         if let battery {
-            // The real pack is a 10,000 mAh brick, twice the modelled cell
-            // each way. Grown from its bottom face, so it stays on the floor.
+            // The real pack is bigger. Scale from the bottom face so it stays on the floor.
             let up = simd_normalize(simd_make_float3(battery.simdTransform.columns.2))
             battery.simdPosition += up * (Self.batteryHalfHeight * (Self.batteryScale - 1))
             battery.simdScale *= Self.batteryScale
@@ -259,20 +231,13 @@ final class BoardStage {
         upperRest = upper?.position ?? SCNVector3Zero
     }
 
-    /// The cap's top face as modelled in `assets/M0110.blend`: inset from the
-    /// footprint at the sides, front and back by these, in metres.
+    /// How far a cap's top face is inset from its footprint in `assets/M0110.blend`, in meters.
     private static let faceInset = (side: Float(0.0021), front: Float(0.0030), back: Float(0.0014))
 
-    /// The geometry again, with texture coordinates that put 0...1 across its
-    /// top face. The walls fall outside that range and, with the texture
-    /// clamped, take the colour of the painted face's border.
-    ///
-    /// The caps are in Blender's axes: x across, y front to back, z up.
-    ///
-    /// USD brings the caps in as polygons with one normal per corner rather
-    /// than per vertex, indexed separately, a layout SceneKit can draw but
-    /// that cannot simply have another source added to it. So the mesh is unrolled into triangles, one vertex
-    /// per corner, carrying its own position, normal and coordinate.
+    /// Returns the geometry with UVs mapping 0...1 across the cap's top face (Blender
+    /// axes, z up). With clamping, the walls take the face's border color. USD polygons
+    /// index normals per corner, and SceneKit can't add a source to that layout, so
+    /// the mesh is unrolled into one vertex per corner.
     private static func withTopFaceUVs(_ geometry: SCNGeometry) -> (SCNGeometry, CGSize)? {
         guard let vertexSource = geometry.sources(for: .vertex).first,
               let normalSource = geometry.sources(for: .normal).first,
@@ -293,8 +258,7 @@ final class BoardStage {
         }
         let points = vectors(vertexSource), normals = vectors(normalSource)
 
-        // A polygon element is the corner count of each polygon, then, for
-        // every corner, one index per source: here a vertex, then a normal.
+        // Layout: each polygon's corner count, then a vertex and a normal index per corner.
         let indices: [Int] = element.data.withUnsafeBytes { raw in
             let size = element.bytesPerIndex
             let count = raw.count / size
@@ -337,7 +301,7 @@ final class BoardStage {
                 outUVs.append(CGPoint(x: CGFloat((p.x - x0) / (x1 - x0)),
                                       y: CGFloat((y1 - p.y) / (y1 - y0))))
             }
-            // A fan: the caps' polygons are all convex.
+            // A triangle fan works because the caps' polygons are all convex.
             for k in 1..<max(1, count - 1) {
                 triangles += [UInt32(first), UInt32(first + k), UInt32(first + k + 1)]
             }
@@ -357,7 +321,6 @@ final class BoardStage {
     /// Every cap's tag, `<position>_<n>`, with `x` for the unmapped Enter.
     var capTags: [String] { Array(keys.keys) }
 
-    /// Colours the case and the plate; the caps are painted one by one.
     func applyPalette(case shell: NSColor, plate: NSColor) {
         for material in caseMaterials { material.diffuse.contents = shell }
         plateMaterial?.diffuse.contents = plate
@@ -367,7 +330,6 @@ final class BoardStage {
         capMaterials[tag]?.diffuse.contents = face
     }
 
-    /// The cap under a point in the view, if there is one.
     func capTag(at point: CGPoint, in view: SCNView) -> String? {
         let hits = view.hitTest(point, options: [
             .searchMode: SCNHitTestSearchMode.closest.rawValue,
@@ -381,15 +343,13 @@ final class BoardStage {
         return nil
     }
 
-    /// One press of a cap, for a click on it.
     func tap(_ tag: String) {
         guard let key = keys[tag] else { return }
         run(key, { press(key) }, delay: 0, repeating: false)
     }
 
-    /// Glass that is clear face-on and bright at grazing angles, the way an
-    /// x-ray outline reads. `xray` runs 0 (the plastic as modelled) to 1;
-    /// `haze` is how much is left of a surface seen face-on.
+    /// Glass that is clear face-on and bright at grazing angles, like an x-ray.
+    /// `xray` runs 0 (normal plastic) to 1. `haze` is the opacity of a surface seen face-on.
     private static let xrayShader = """
     #pragma arguments
     float xray;
@@ -468,8 +428,7 @@ final class BoardStage {
         var distance: CGFloat
     }
 
-    /// A node's position in the board's (centred) space, since that is the
-    /// space the rig sits in.
+    /// World position, which is the rig's space since the board sits at the origin.
     private func target(_ node: SCNNode?, lift: CGFloat = 0) -> SCNVector3 {
         guard let node else { return SCNVector3Zero }
         var p = node.worldPosition
@@ -480,17 +439,14 @@ final class BoardStage {
     private func pose(for focus: BoardFocus) -> Pose {
         switch focus {
         case .editor:
-            // Far enough back that the whole case, its near corners included,
-            // fits the editor's wide, short box with a margin all round.
+            // Far enough back that the whole case fits the editor's wide, short box.
             return Pose(target: SCNVector3(0, -0.004, -0.014), yaw: 0, pitch: 52, distance: 0.76)
         case .overview:
             return Pose(target: SCNVector3(0, 0, 0.01), yaw: 0, pitch: 34, distance: 0.62)
         case .popup:
             return Pose(target: SCNVector3(0, 0, 0.01), yaw: -22, pitch: 30, distance: 0.58)
         case .gestures:
-            // From low inside the case, behind the module's shoulder,
-            // looking out through the right wall: the module, the waves
-            // and the hand beyond, the way Soli's own drawing lays them out.
+            // From low inside the case, looking out through the right wall toward the hand.
             var centre = target(soli, lift: 0.012)
             centre.x += 0.045
             return Pose(target: centre, yaw: -38.7, pitch: 25.3, distance: 0.27)
@@ -516,8 +472,7 @@ final class BoardStage {
         sway.eulerAngles = SCNVector3Zero
         let look = look(for: focus)
         if let upper {
-            // Up and back, out of the way of a camera looking down from the
-            // front.
+            // Lift it up and back, out of the camera's way.
             upper.position = upperRest
             if look.exploded {
                 var lifted = upper.worldPosition
@@ -528,12 +483,9 @@ final class BoardStage {
         }
         SCNTransaction.commit()
 
-        // Turning back to solid waits until the camera has mostly pulled
-        // out: solid too soon and the close-up fills with the case's cream
-        // inside.
+        // When turning solid, wait until the camera has mostly pulled out, or the
+        // close-up fills with the inside of the case. Then fade quickly.
         let solidifying = look.caseXray < self.look.caseXray
-        // And then goes quickly: half glass, half cream is a frame worth
-        // passing through, not one to linger on.
         fade(to: look, duration: animated ? (solidifying ? 0.28 : 0.7) : 0,
              delay: animated && solidifying ? 0.6 : 0)
 
@@ -595,7 +547,6 @@ final class BoardStage {
 
     // MARK: - Animations
 
-    /// One key going down and back up, and its stem with it.
     private func press(_ key: Key, hold: TimeInterval = 0, down: TimeInterval = 0.07,
                        up: TimeInterval = 0.18) -> (cap: SCNAction, stem: SCNAction) {
         let d = Self.travel
@@ -623,7 +574,7 @@ final class BoardStage {
 
     /// The board typing its own name, M-0-1-1-0, once.
     private func typeName(after delay: TimeInterval) {
-        // M, 0 and 1 by firmware position; the second 1 is the same key again.
+        // Firmware positions for M, 0 and 1. The second 1 repeats the same key.
         let strokes = ["60_0", "10_0", "1_0", "1_0", "10_0"]
         var times: [String: [TimeInterval]] = [:]
         for (n, tag) in strokes.enumerated() {
@@ -645,8 +596,7 @@ final class BoardStage {
         }
     }
 
-    /// A slow look from side to side, for the pane with nothing in particular
-    /// to point at.
+    /// A slow side-to-side look, for the pane with nothing specific to point at.
     private func drift() {
         let left = SCNAction.rotateTo(x: 0, y: 0.12, z: 0, duration: 5)
         left.timingMode = .easeInEaseOut
@@ -657,9 +607,7 @@ final class BoardStage {
 
     // MARK: - Battery gauge
 
-    /// Ten segments on the cell's top face, in its own axes (Blender's: x
-    /// along the cell, z up), so they sit flat on it however the case is
-    /// tilted.
+    /// Ten segments in the cell's own axes (x along it, z up) so they lie flat on it.
     private func buildGauge() {
         guard let battery else { return }
         let count = 10, pitch: CGFloat = 0.0042, width: CGFloat = 0.0034
@@ -686,9 +634,8 @@ final class BoardStage {
         return material
     }
 
-    /// The level the gauge shows, and the colour it shows it in: red at or
-    /// under the low-battery alert, amber until the alert re-arms, green above.
-    /// Nil is no reading, which leaves every segment dark.
+    /// Sets the gauge level and color: red at or below the low alert, amber until
+    /// it re-arms, green above. Nil means no reading and leaves every segment dark.
     func setBattery(_ level: Int?, low: Int, rearm: Int) {
         let colour: NSColor
         switch level ?? 100 {
@@ -704,8 +651,8 @@ final class BoardStage {
         showGauge(animated: false)
     }
 
-    /// Lights one segment per tenth of charge, rounding up so any charge at all
-    /// shows. Animated, they fill from empty, the last one blinking when low.
+    /// Lights one segment per 10% of charge, rounding up so any charge shows. When
+    /// animated, they fill from empty and the last one blinks when low.
     private func showGauge(animated: Bool) {
         let lit = batteryLevel.map { Int((Double($0) / 10).rounded(.up)) } ?? 0
         let dim = NSColor(white: 0.16, alpha: 1)
@@ -766,12 +713,7 @@ final class BoardStage {
 
     // MARK: - Soli radar
 
-    /// The Soli radar board, standing against the inside of the case's
-    /// right wall: a small black PCB with the radar chip and its gold
-    /// antenna pads, a few passives, and its connector along the bottom
-    /// edge, chip side in. In the model's own Blender axes (z up, the floor
-    /// rising toward the front); the node sits on the floor below the
-    /// board's centre.
+    /// Builds the Soli board against the inside of the right wall, chip side in, in Blender axes (z up).
     private func buildSoli(in root: SCNNode) {
         // The right wall's inner face, measured off the lower shell.
         let wall: CGFloat = 0.1495
@@ -782,10 +724,8 @@ final class BoardStage {
         node.position = SCNVector3(wall - thickness / 2, y, 0.0128 - 0.2036 * y)
         node.eulerAngles = SCNVector3(-11.508 * .pi / 180, 0, 0)
 
-        // Everything on the board is placed on its inward face, x = 0 at the
-        // face, y across, z up from the floor.
-        // Scaled to stand under the wall's rim, about 12.5 mm above the
-        // floor here; at full size it stood out over the top of the case.
+        // Parts sit on the board's inward face: x = 0 at the face, y across, z up.
+        // Scaled down to fit under the wall's rim, about 12.5 mm above the floor.
         let board = SCNNode()
         board.scale = SCNVector3(1, Self.soliScale, Self.soliScale)
         board.position = SCNVector3(0, 0, side * Self.soliScale / 2 + 0.0012)
@@ -820,8 +760,7 @@ final class BoardStage {
         silver.metalness.contents = 1
         silver.roughness.contents = 0.3
 
-        // The radar chip, with its antennas in the package: one transmitter
-        // and three receivers in an L, gold squares on its face.
+        // Radar chip, with one transmit and three receive antennas in an L.
         part(0.0065, 0.005, 0.0009, at: 0, 0.0025, mold, chamfer: 0.0002)
         for (py, pz) in [(-0.0018, 0.0038), (0.0, 0.0038), (0.0018, 0.0038), (0.0018, 0.002)]
             as [(CGFloat, CGFloat)] {
@@ -830,10 +769,9 @@ final class BoardStage {
             pad.position = SCNVector3(face - 0.00095, py, pz)
             board.addChildNode(pad)
         }
-        // A pin-1 dot.
         part(0.0005, 0.0005, 0.0001, at: -0.0027, 0.0006, gold)
 
-        // Passives round it, a crystal, and the regulator.
+        // Passives, a crystal, and the regulator.
         for (py, pz) in [(-0.0055, 0.002), (-0.0055, 0.0035), (0.0055, 0.002), (0.0055, 0.0035),
                          (-0.0045, -0.001), (0.0045, -0.001)] as [(CGFloat, CGFloat)] {
             part(0.001, 0.0005, 0.0005, at: py, pz, ceramic)
@@ -851,8 +789,7 @@ final class BoardStage {
         soli = node
     }
 
-    /// The Soli board's size against the case, and the height of its radar
-    /// chip off the floor, where the waves start.
+    /// Soli board scale, and the chip's height off the floor where the waves start.
     private static let soliScale: CGFloat = 0.55
     private static let soliChipHeight = Float(0.018 * soliScale / 2 + 0.0012 + 0.0025 * soliScale)
 
@@ -864,7 +801,7 @@ final class BoardStage {
         return material
     }
 
-    /// Light that adds rather than covers, and never hides what is behind it.
+    /// Additive material that never hides what is behind it.
     private static func glow(_ colour: NSColor, _ contents: Any? = nil) -> SCNMaterial {
         let material = SCNMaterial()
         material.lightingModel = .constant
@@ -875,10 +812,7 @@ final class BoardStage {
         return material
     }
 
-    /// The radar at work, seen from overhead: the module lit up through
-    /// the ghosted keys, and fine wavy fronts rolling out of it to the right,
-    /// a Wi-Fi symbol on its side, toward a hand off the case's edge rubbing
-    /// thumb against finger, the micro-gesture Soli was made to read.
+    /// Radar waves rolling toward a hand rubbing thumb against finger, the gesture Soli reads.
     private func scan() {
         guard let soli else { return }
         let stage = SCNNode()
@@ -886,9 +820,7 @@ final class BoardStage {
         effects.append(stage)
         let blue = NSColor(srgbRed: 0.52, green: 0.80, blue: 1, alpha: 1)
 
-        // The wavefronts, in 3D: wavy domes rolling out of the chip through
-        // the wall, each one a fan of wavy arcs turned about the beam's
-        // axis, thinning as they go.
+        // Wavy domes rolling out of the chip through the wall, fading as they go.
         let fan = SCNNode()
         fan.position = SCNVector3(0, 0, Self.soliChipHeight)
         stage.addChildNode(fan)
@@ -914,10 +846,8 @@ final class BoardStage {
         }))
 
         let hand = Self.hand()
-        // Just outside the wall, the forearm coming from the front and the
-        // fist pointing to the keyboard's top edge, palm down and thumb
-        // toward the case: the sculpt is upright, so lay it forward, then
-        // roll it a quarter turn about its knuckles.
+        // Just outside the wall, palm down, thumb toward the case. The model is
+        // upright, so tip it forward and then roll it a quarter turn.
         hand.position = SCNVector3(0.08, -0.006, 0.016)
         hand.simdOrientation = simd_quatf(angle: -.pi / 2, axis: [0, 1, 0])
             * simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
@@ -925,10 +855,7 @@ final class BoardStage {
         stage.addChildNode(hand)
     }
 
-    /// The wavefronts, one geometry per step of their travel: at each
-    /// radius, wavy arcs fanning ±40° off +x, in planes turned about the x
-    /// axis, so together they make a wavy dome. Built once, swapped in as
-    /// each front rolls out, since rebuilding them every frame is slow.
+    /// A wave dome geometry per step of travel, prebuilt since rebuilding per frame is slow.
     private static let waveDomes: [SCNGeometry] = {
         let steps = 60, planes = 5
         let material = glow(NSColor(srgbRed: 0.52, green: 0.80, blue: 1, alpha: 1))
@@ -962,8 +889,7 @@ final class BoardStage {
         }
     }()
 
-    /// A flat ribbon along a line in the x-z plane, so a line reads at a
-    /// set width rather than SceneKit's one pixel.
+    /// A flat ribbon along a line in the x-z plane, since SceneKit lines are one pixel wide.
     private static func ribbon(_ points: [(Double, Double)], width: Double) -> SCNGeometry {
         let (vertices, indices) = ribbonVertices(points, width: width)
         return SCNGeometry(sources: [SCNGeometrySource(vertices: vertices)],
@@ -989,28 +915,25 @@ final class BoardStage {
         return (vertices, indices)
     }
 
-    /// The sculpted hand from `tools/make-hand.py`: an upright fist, palm
-    /// toward -x, its thumb rubbing back and forth along the index finger.
+    /// The hand model from `tools/make-hand.py`: an upright fist, palm toward -x,
+    /// with the thumb rubbing along the index finger.
     private static func hand() -> SCNNode {
         let hand = SCNNode()
         guard let url = resourceURL("Hand"), let scene = try? SCNScene(url: url) else { return hand }
         let skin = SCNMaterial()
         skin.lightingModel = .physicallyBased
-        // Warmer and brighter than the glass case, so it reads as a solid
-        // thing beyond it rather than more of the x-ray.
+        // Warmer and brighter than the glass case so it looks solid.
         skin.diffuse.contents = NSColor(srgbRed: 0.86, green: 0.78, blue: 0.72, alpha: 1)
         skin.roughness.contents = 0.55
         for name in ["Hand", "Thumb"] {
             guard let mesh = scene.rootNode.childNode(withName: name, recursively: true) else { continue }
             mesh.removeFromParentNode()
             mesh.geometry?.materials = [skin]
-            // Drawn after the waves, which write no depth, so the hand covers
-            // them wherever it is in the way rather than glowing through.
+            // Drawn after the waves (which write no depth) so the hand covers them.
             mesh.renderingOrder = 50
             hand.addChildNode(mesh)
             guard name == "Thumb" else { continue }
-            // Pivot at the thumb's first knuckle, where it meets the hand,
-            // so the tip slides along the index finger toward its knuckle.
+            // Pivot at the thumb's base so the tip slides along the index finger.
             let base = SCNVector3(-0.017, -0.039, -0.012)
             mesh.pivot = SCNMatrix4MakeTranslation(base.x, base.y, base.z)
             mesh.position = base
@@ -1022,12 +945,11 @@ final class BoardStage {
     }
 }
 
-/// The stage in a panel, with what it is looking at underneath.
+/// The stage in a panel, with a caption for what it shows.
 struct BoardStageView: View {
     let focus: BoardFocus
-    /// False while the stage is off screen, so it stops rendering. The view
-    /// is hidden outright too: an SCNView draws through Metal, and SwiftUI
-    /// fading or resizing it does not stop it flashing a frame of the board.
+    /// False while off screen, so it stops rendering. The view is also hidden,
+    /// because an SCNView (Metal) still flashes a frame when SwiftUI fades it.
     var active = true
     /// The keyboard's last battery reading, nil when it is not connected.
     var battery: Int?
@@ -1035,8 +957,6 @@ struct BoardStageView: View {
     @AppStorage("rearmThreshold") private var rearmThreshold: Int = 30
     @Environment(\.classicSnapshot) private var snapshot
 
-    /// The battery focus says how charged the cell is, in words as well as
-    /// on the gauge.
     private var detail: String? {
         guard focus == .battery else { return nil }
         guard let battery else { return "Not connected" }
@@ -1107,8 +1027,7 @@ private struct StageSceneView: NSViewRepresentable {
         view.isPlaying = active
         if active && view.isHidden { view.fadeIn() }
         view.isHidden = !active
-        // Hidden behind the Keyboard pane it keeps what it showed last, for
-        // that pane to fly back from; hidden anywhere else, nothing was shown.
+        // Keep the last focus behind the Keyboard pane so it can fly back. Clear it elsewhere.
         if active { BoardStage.lastShown = focus } else if focus != .editor { BoardStage.lastShown = nil }
         context.coordinator.stage?.setBattery(battery.level, low: battery.low, rearm: battery.rearm)
         context.coordinator.stage?.setFocus(focus, animated: true)
@@ -1116,9 +1035,7 @@ private struct StageSceneView: NSViewRepresentable {
 }
 
 extension SCNView {
-    /// Arrive from transparent rather than popping in. Only the alpha moves:
-    /// the view is already at its size, which is what kept this from
-    /// smearing the way a SwiftUI resize of it does.
+    /// Fades in by alpha only, since resizing an SCNView in SwiftUI smears it.
     func fadeIn(duration: TimeInterval = 0.32) {
         alphaValue = 0
         DispatchQueue.main.async {

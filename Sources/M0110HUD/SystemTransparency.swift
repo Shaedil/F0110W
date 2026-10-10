@@ -1,29 +1,18 @@
 import AppKit
 
-/// The system's UI transparency, expressed as a level in 0...1: 1 is full
-/// vibrancy, 0 is fully opaque.
-///
-/// What System Settings actually publishes is a switch, not a dial. Accessibility
-/// › Display › "Reduce transparency" is `accessibilityDisplayShouldReduceTransparency`,
-/// a `BOOL`, and it is stored as `reduceTransparency` = 0 or 1 in
-/// `com.apple.universalaccess`. On macOS 27 the Appearance pane's "Icon style:
-/// Tinted / Clear" is a two-state picker over icon glass, not a window
-/// transparency level. So the switch is read as the two ends of the dial, and
-/// everything in between is reachable only by asking for it explicitly.
-///
-/// The level is still modelled as a fraction rather than a `Bool` for two
-/// reasons: `--transparency` can then dial the HUD to any value, and if a
-/// release does add a real level control it will land in the same defaults
-/// domain and `systemLevel()` will start returning it with no other change.
+/// The system's UI transparency as a level in 0...1 (1 is full vibrancy, 0 is opaque).
+/// System Settings only has a switch: Accessibility > Display > Reduce transparency
+/// (`reduceTransparency` = 0 or 1 in `com.apple.universalaccess`). The macOS 27 "Icon style"
+/// picker only affects icons. The switch maps to the two ends, and values in between come
+/// only from `--transparency`. It stays a fraction so a future system level setting would
+/// work through `systemLevel()` with no other change.
 final class SystemTransparency {
-    /// Fires on the main thread when the resolved level changes.
+    /// Called on the main thread when the level changes.
     var onChange: ((Double) -> Void)?
 
-    /// 1 = full vibrancy, 0 = fully opaque. Never read before `init` returns.
     private(set) var level: Double = 1
 
-    /// Set from `--transparency`, or live from the debug panel; `nil` follows
-    /// the system.
+    /// From `--transparency` or the debug panel. Nil follows the system.
     var override: Double? {
         didSet {
             override = override.map { min(max($0, 0), 1) }
@@ -39,9 +28,8 @@ final class SystemTransparency {
         self.verbose = verbose
         self.level = Self.resolve(override: self.override)
 
-        // Posted when any of the accessibility display options change, which is
-        // what the "Reduce transparency" switch is. This is the live path: a
-        // HUD already on screen restyles under the user without being reshown.
+        // Posted when any accessibility display option changes, including Reduce transparency.
+        // This lets a visible HUD restyle without being shown again.
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(systemChanged),
@@ -58,9 +46,8 @@ final class SystemTransparency {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
-    /// Re-read the system and report a change. Cheap enough to call on every
-    /// HUD, which is what keeps a preference the system does not broadcast from
-    /// going stale.
+    /// Re-reads the system and reports a change. Cheap enough to call on every HUD, which
+    /// catches settings the system does not broadcast.
     @discardableResult
     func refresh() -> Double {
         let next = Self.resolve(override: override)
@@ -83,16 +70,11 @@ final class SystemTransparency {
         systemLevel() != nil ? "\(domain) level key" : "reduceTransparency switch"
     }
 
-    /// A fractional transparency level from the accessibility domain, if the
-    /// running system publishes one.
-    ///
-    /// Read by shape rather than by a hardcoded name, because the only key that
-    /// exists today is the switch and a future dial would arrive under a name
-    /// that cannot be known ahead of time. A key qualifies when it mentions
-    /// transparency, holds a fraction strictly between 0 and 1, and is not a
-    /// "reduce"-style key — a key named for reduction counts the other way, and
-    /// reading it as a transparency level would invert the HUD. A whole 0 or 1
-    /// is left to the switch below, which already means the same thing.
+    /// A fractional transparency level from the accessibility domain, if the system has one.
+    /// Matched by key shape, since only the switch exists today and a future key name is
+    /// unknown. A key counts if it mentions transparency, holds a value strictly between 0 and
+    /// 1, and does not start with "reduce" (those count the other way and would invert the HUD).
+    /// 0 and 1 are left to the switch.
     private static func systemLevel() -> Double? {
         guard let keys = CFPreferencesCopyKeyList(domain as CFString,
                                                   kCFPreferencesCurrentUser,

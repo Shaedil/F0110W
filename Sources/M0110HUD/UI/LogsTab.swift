@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// Which lines the Logs tab shows.
 enum LogFilter: String, CaseIterable {
     case all
     case app
@@ -24,12 +23,10 @@ enum LogFilter: String, CaseIterable {
     }
 }
 
-/// Settings' Logs tab: what the app saw from the keyboard and what it did
-/// about it, newest at the bottom. Made for the question "why did that popup
-/// not show", whose answer is usually in the Bluetooth and App lines.
+/// What the app saw from the keyboard and what it did, newest at the bottom.
+/// Useful for finding out why a popup did not show.
 struct LogsTab: View {
     @ObservedObject private var log = DebugLog.shared
-    /// Remembered, since a run of debugging tends to look at one source.
     @AppStorage("logsFilter") private var filter: LogFilter = .all
     @Environment(\.classicSnapshot) private var snapshot
 
@@ -72,8 +69,7 @@ struct LogsTab: View {
                     .foregroundStyle(Theme.textDim)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if snapshot {
-                // `ImageRenderer` cannot size a ScrollView; the newest lines
-                // stand in for the scrolled-to-the-bottom list.
+                // `ImageRenderer` cannot size a ScrollView, so show the newest lines.
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(shown.suffix(24)) { row($0) }
                 }
@@ -117,8 +113,8 @@ struct LogsTab: View {
         .textSelection(.enabled)
     }
 
-    /// Fixed rather than dynamic: the panel is dark in either appearance, and
-    /// `accentPale`'s dark variant all but vanishes on it.
+    /// Fixed colors, since the panel is dark in both modes and `accentPale`'s
+    /// dark variant is nearly invisible on it.
     private static func tint(_ source: DebugLog.Source) -> Color {
         switch source {
         case .app: return Theme.accent
@@ -128,7 +124,7 @@ struct LogsTab: View {
         }
     }
 
-    /// The lines showing, in the file's format, ready to paste into an issue.
+    /// Copies the visible lines in the log file's format, for pasting into an issue.
     private func copy() {
         let text = shown.map(\.line).joined(separator: "\n")
         NSPasteboard.general.clearContents()

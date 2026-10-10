@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Width of the pane, so the board can be drawn as large as fits.
 private struct PaneWidthKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -8,25 +7,19 @@ private struct PaneWidthKey: PreferenceKey {
     }
 }
 
-/// Live keymap editor: the layout in a rounded panel, with a keycode picker for
-/// the selected key.
+/// Live keymap editor with a keycode picker for the selected key.
 struct KeysPane: View {
     @ObservedObject var controller: KeyboardController
 
-    /// How wide the board is drawn when there is room for it. Legends are sized
-    /// in unit-hundredths, so they scale with this: one number sets both the
-    /// keyboard's size and its type size.
+    /// Legends are sized in key units, so this also sets the text size.
     private static let preferredBoardWidth: CGFloat = 990
     /// Below this the drawing stops being readable, so the pane clips instead.
     private static let minimumBoardWidth: CGFloat = 420
 
-    /// Width the pane has been given. Measured rather than assumed: at the
-    /// window's minimum size, or with the sidebar showing, there is not always
-    /// room for the preferred width, and a board wider than its container gets
-    /// silently clipped rather than shrinking.
+    /// Measured, because a board wider than its container gets clipped instead
+    /// of shrinking.
     @State private var paneWidth: CGFloat = preferredBoardWidth
-    /// Show the modelled board rather than the drawing. Only the M0110 is
-    /// modelled, so the M0110A always gets the drawing.
+    /// Only the M0110 has a 3D model, so the M0110A always gets the 2D drawing.
     @AppStorage("keyboard3D") private var prefers3D = true
     private var shows3D: Bool { prefers3D && controller.variant == .m0110 }
 
@@ -39,29 +32,20 @@ struct KeysPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             toolbar
-            // The M0110's key table is hand-built and never empty, so keying
-            // the explanation off the key list alone meant a locked or unloaded
-            // keyboard showed a full board with every legend blank and nothing
-            // saying why. The keymap is what is missing, so that is what
-            // decides.
+            // The M0110 key table is never empty, so check the keymap too, or
+            // a locked keyboard shows a blank board with no explanation.
             if controller.displayKeys.isEmpty || controller.activeLayer == nil {
                 emptyState
             } else {
                 Panel(padding: 14,
-                      // The 3D view leaves its own margin round the case.
+                      // The 3D view leaves its own margin around the case.
                       verticalPadding: shows3D ? 24 : 42,
-                      // The 3D board sits on the same dark stage as the
-                      // other panes' board, so moving between them reads as
-                      // one scene.
+                      // Same dark stage as the other panes' 3D board.
                       surface: shows3D ? Theme.glass : Theme.boardSurround,
                       stroke: shows3D ? Theme.glassStroke : Theme.boardSurroundStroke) {
-                    // Full width, so the panel's edges line up with the
-                    // picker's below it; the board centres inside.
                     Group { if shows3D { board3D } else { board } }
                         .frame(maxWidth: .infinity)
                 }
-                    // The board stops at its preferred width; centred in
-                    // whatever the pane has beyond that, full screen included.
                     .frame(maxWidth: .infinity)
                 if let position = controller.selectedKey {
                     KeycodePicker(controller: controller, keyPosition: position)
@@ -90,9 +74,8 @@ struct KeysPane: View {
                     padding: EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
             }
 
-            // In the toolbar rather than under the picker: the page does not
-            // scroll, and a line appearing below it on every edit pushed the
-            // whole layout down.
+            // In the toolbar because the page does not scroll, and a status
+            // line below would push the layout down.
             if let status = controller.status {
                 Text(status)
                     .font(Theme.small)
@@ -147,7 +130,6 @@ struct KeysPane: View {
                     .font(Theme.body)
                     .foregroundStyle(Theme.textDim)
                     .fixedSize(horizontal: false, vertical: true)
-                // With no link there is nothing to reload, so it reconnects.
                 Button("Reload") {
                     if controller.connection.isConnected { controller.refresh() } else { controller.connect() }
                 }
@@ -162,8 +144,7 @@ struct KeysPane: View {
         controller.connection.isConnected && controller.lockState == .locked
     }
 
-    /// The modelled board, in the same box the drawing fills, so switching
-    /// between them leaves the window and the picker where they were.
+    /// Same box as the 2D drawing, so switching views does not move the picker.
     private var board3D: some View {
         let bezel = controller.boardBezel
         let span = CGFloat(controller.displayWidth) + bezel.side * 2
@@ -173,14 +154,11 @@ struct KeysPane: View {
             .frame(width: box.width, height: box.height)
     }
 
-    /// The drawn case, with the live matrix seated in its wells.
     private var board: some View {
-        // Fit the whole case, margins included, into the available width.
         let bezel = controller.boardBezel
         let span = CGFloat(controller.displayWidth) + bezel.side * 2
         let unitScale = boardWidth / span
-        // On the compact board the bezel is wider down the sides than across
-        // the top, so the key field's origin is not one inset.
+        // The M0110 bezel is wider at the sides than at the top.
         let originX = bezel.side * unitScale
         let originY = bezel.top * unitScale
         let box = BoardCase.size(unitsWide: controller.displayWidth,
@@ -196,17 +174,12 @@ struct KeysPane: View {
             keycaps(originX: originX, originY: originY, scale: unitScale)
         }
         .frame(width: box.width, height: box.height, alignment: .topLeading)
-        // Flatten the board into one Metal-rendered layer. Each of the ~58
-        // keycaps casts its own shadow, and a shadow is an offscreen pass, so
-        // every redraw of this pane was ~58 of them, which is what made
-        // dragging the window judder. The board only changes when the keymap or
-        // the selection does, so there is nothing to lose by rasterising it.
+        // One Metal layer. Each of the ~58 keycaps has a shadow, which is an
+        // offscreen pass, and redrawing them all made window drags stutter.
         .drawingGroup()
     }
 
     private func keycaps(originX: CGFloat, originY: CGFloat, scale: CGFloat) -> some View {
-        // In unit-hundredths, like everything else, so the gap between caps and
-        // the border around the block stay equal at any scale.
         let gap = BoardCase.keyGap * scale
         return ForEach(Array(controller.displayKeys.enumerated()), id: \.offset) { _, key in
             Keycap(legend: key.labeled ? controller.legend(forKeyAt: key.position) : .blank,
@@ -228,7 +201,6 @@ struct KeysPane: View {
     }
 }
 
-/// Grouped keycode chooser for the selected key.
 private struct KeycodePicker: View {
     @ObservedObject var controller: KeyboardController
     let keyPosition: Int
@@ -270,7 +242,6 @@ private struct KeycodePicker: View {
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity)
                             }
-                            // Keycaps, not pills: these stand for keys.
                             .buttonStyle(PillButtonStyle(cornerRadius: 9, verticalPadding: 9,
                                                          font: .system(size: 14, weight: .medium)))
                             .help(HIDKeycodes.name(for: param))
@@ -292,15 +263,12 @@ private struct KeycodePicker: View {
     private var takesKeycode: Bool { controller.acceptsKeycode(at: keyPosition) }
 }
 
-/// Which keyboard the pane is talking to and how: a status light, the name,
-/// the route, whether Studio is unlocked, and whether the keyboard is typing
-/// to this computer. The reason a connect failed, and the button to try
-/// again, are the empty state's; this stays one short line.
+/// One-line connection summary: status light, name, route, lock, and which
+/// computer the keyboard types to.
 struct ConnectionBadge: View {
     @ObservedObject var controller: KeyboardController
-    /// The keyboard's own link, for which profile it types to. Separate from
-    /// the Studio link above: ZMK keeps every profile's link up, so Studio can
-    /// be connected while the keystrokes go to another computer.
+    /// The keyboard's own link, for the active profile. ZMK keeps every
+    /// profile's link up, so Studio can be connected while keys go elsewhere.
     @ObservedObject private var status = StatusModel.shared
 
     var body: some View {
@@ -334,9 +302,8 @@ struct ConnectionBadge: View {
                     .font(Theme.toolbar)
                     .foregroundStyle(Theme.textDim)
             }
-            // Shown whatever the Studio link is doing: Studio answers only on
-            // the profile being typed to, so a keyboard moved elsewhere is
-            // also the likeliest reason it is not connected.
+            // Shown even with no Studio link. Studio only answers on the active
+            // profile, so this is the likeliest reason it is not connected.
             if let profile, let here = profile.typingHere {
                 if here {
                     Image(systemName: "desktopcomputer")
@@ -378,15 +345,14 @@ struct ConnectionBadge: View {
         }
     }
 
-    /// True over USB, false over Bluetooth, nil with no link. Serial ports
-    /// are device paths; the Bluetooth transport labels itself otherwise.
+    /// True over USB, false over Bluetooth, nil with no link. Only serial
+    /// ports have /dev/ paths.
     private var route: Bool? {
         guard case .connected(let port, _) = controller.connection else { return nil }
         return port.hasPrefix("/dev/")
     }
 
-    /// Said in words only while there is no link; once there is, the route
-    /// and the lock are icons.
+    /// Empty once connected, since the route and lock show as icons.
     private var detail: String {
         switch controller.connection {
         case .disconnected, .failed: return "Not connected"
@@ -395,11 +361,8 @@ struct ConnectionBadge: View {
         }
     }
 
-    /// The profile report, while the keyboard's own link is up to send one.
     private var profile: ProfileState? { status.linked ? status.profile : nil }
 
-    /// The full story on hover: the port, or why nothing answered, then where
-    /// the keystrokes are going.
     private var help: String {
         let link: String
         switch controller.connection {
@@ -414,8 +377,7 @@ struct ConnectionBadge: View {
     }
 }
 
-/// The Bluetooth rune. SF Symbols has no public one, so it is drawn: a spine
-/// with two arrowheads off its right side, crossed by the two diagonals.
+/// The Bluetooth logo, drawn by hand because SF Symbols has no public one.
 struct BluetoothGlyph: Shape {
     func path(in rect: CGRect) -> Path {
         func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {

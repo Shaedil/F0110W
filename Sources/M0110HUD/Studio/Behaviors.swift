@@ -1,7 +1,7 @@
 import Foundation
 
-/// What a behavior's first parameter means, which decides how a binding is
-/// labelled and whether a keycode picker even applies.
+/// Type of a behavior's first parameter. It decides the binding label and
+/// whether the keycode picker applies.
 enum ParamKind {
     case none
     case hidUsage
@@ -27,7 +27,7 @@ struct BehaviorInfo {
         case let n where n.contains("unlock"): return "UNLK"
         case let n where n.contains("reset"): return "RST"
         default:
-            // Initials keep long behaviour names inside a keycap.
+            // Use initials so long names fit on a keycap.
             let words = displayName.split(separator: " ")
             if words.count > 1 { return words.compactMap { $0.first }.map(String.init).joined().uppercased() }
             return String(displayName.prefix(4))
@@ -37,8 +37,7 @@ struct BehaviorInfo {
     /// `&kp`, by the display name ZMK gives it in `key_press.dtsi`.
     var isKeyPress: Bool { param1 == .hidUsage && displayName.lowercased() == "key press" }
 
-    /// `&trans` and `&none`: the slot does nothing of its own, so replacing
-    /// the behaviour loses nothing.
+    /// `&trans` and `&none` do nothing of their own, so replacing them loses nothing.
     var isEmptySlot: Bool { ["transparent", "none"].contains(displayName.lowercased()) }
 
     static func decode(_ bytes: [UInt8]) throws -> BehaviorInfo {
@@ -58,8 +57,8 @@ struct BehaviorInfo {
                     let (f, t) = try set.nextField()
                     if f == 1, t == .lengthDelimited {
                         let kind = try Self.paramKind(set.bytesField())
-                        // Any set that names a keycode wins, so `&kp` reads as
-                        // a keycode even when other parameter sets exist.
+                        // A keycode set wins, so `&kp` counts as a keycode
+                        // even when it has other parameter sets.
                         if info.param1 == .none || kind == .hidUsage { info.param1 = kind }
                     } else {
                         try set.skip(t)
@@ -94,11 +93,8 @@ extension ParamKind: Equatable {}
 
 extension BehaviorBinding {
     /// This slot rebound to send `param`, or nil if a keycode cannot go here.
-    ///
-    /// A behaviour that takes a keycode keeps its behaviour and only the
-    /// keycode moves. An empty slot (`&trans`, `&none`) has no keycode to
-    /// move, so it becomes a `&kp`. Anything else (`&bt`, `&studio_unlock`)
-    /// is left alone rather than silently overwritten.
+    /// Keycode behaviors only change the keycode, empty slots (`&trans`, `&none`)
+    /// become `&kp`, and others (`&bt`, `&studio_unlock`) are left alone.
     func sending(_ param: UInt32, behaviors: [Int32: BehaviorInfo]) -> BehaviorBinding? {
         guard let info = behaviors[behaviorID] else { return nil }
         if info.param1 == .hidUsage {
@@ -113,7 +109,6 @@ extension BehaviorBinding {
 }
 
 extension StudioClient {
-    /// All behavior ids the firmware exposes.
     func listBehaviors() throws -> [UInt32] {
         var w = ProtobufWriter(); w.bool(1, true)
         let payload = try request(subsystem: 4, body: w.bytes)
@@ -141,14 +136,13 @@ extension StudioClient {
         return try BehaviorInfo.decode(try Self.subfield(2, in: payload))
     }
 
-    /// Every behavior, keyed by id, for labelling bindings.
     func behaviorTable() throws -> [Int32: BehaviorInfo] {
         var table: [Int32: BehaviorInfo] = [:]
         for id in try listBehaviors() {
             if let info = try? behaviorDetails(id: id) {
                 table[info.id] = info
-                // Bindings carry sint32 ids; index the queried id too in case
-                // the firmware reports a different one in the details.
+                // Bindings carry sint32 ids. Also index by the queried id in
+                // case the details report a different one.
                 table[Int32(bitPattern: id)] = info
             }
         }

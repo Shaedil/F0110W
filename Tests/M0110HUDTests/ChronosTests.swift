@@ -2,9 +2,8 @@ import XCTest
 
 @testable import M0110HUD
 
-/// The expected values come from prismorphism's own engine, js/chronos.mjs,
-/// run under TZ=America/New_York for the same moments, so these hold the
-/// port to the original rather than to itself.
+/// Expected values come from prismorphism's js/chronos.mjs, run with
+/// TZ=America/New_York at the same times.
 final class ChronosTests: XCTestCase {
     private let newYork = TimeZone(identifier: "America/New_York")!
     private let nyc = Chronos.Coordinates(lat: 40.71, lng: -74.0)
@@ -17,8 +16,7 @@ final class ChronosTests: XCTestCase {
 
     private func rgb(_ r: Int, _ g: Int, _ b: Int) -> Chronos.RGB { .init(r: r, g: g, b: b) }
 
-    /// Channels within one step of the JS output: the two languages round the
-    /// same floating-point work at slightly different points.
+    /// Each channel may be off by one, since Swift and JS round at slightly different points.
     private func assertTriad(_ got: [Chronos.RGB], _ want: [Chronos.RGB],
                              file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertEqual(got.count, 3, file: file, line: line)
@@ -101,11 +99,10 @@ final class ChronosTests: XCTestCase {
         let noon = state(local(2026, 6, 21, 13, 0))
         XCTAssertEqual(noon.sunX, 0.511, accuracy: 0.001)
         XCTAssertEqual(noon.sunY, 0.221, accuracy: 0.001)
-        // Rising in the east, low: the leading edge, near the bottom.
         let dawn = state(local(2026, 6, 21, 5, 40))
         XCTAssertEqual(dawn.sunX, 0, accuracy: 0.001)
         XCTAssertEqual(dawn.sunY, 0.884, accuracy: 0.001)
-        // Set in the west: the trailing edge, held at the bottom however low.
+        // After sunset it stays at the trailing edge and the bottom, however low it goes.
         let dusk = state(local(2026, 6, 21, 21, 10))
         XCTAssertEqual(dusk.sunX, 1, accuracy: 0.001)
         XCTAssertEqual(dusk.sunY, 0.9, accuracy: 0.001)
@@ -116,13 +113,11 @@ final class ChronosTests: XCTestCase {
         let lifted = Chronos.withLightness(navy, in: 0.72...1)
         XCTAssertGreaterThan(lifted.r + lifted.g + lifted.b, 3 * 150, "\(lifted)")
         XCTAssertGreaterThan(lifted.b, lifted.r, "still blue: \(lifted)")
-        // Already inside the range: untouched.
         let pink = rgb(255, 30, 140)
         XCTAssertEqual(Chronos.withLightness(pink, in: 0...1), pink)
         XCTAssertEqual(Chronos.withLightness(pink, in: 0...1, minChroma: 0.1), pink)
     }
 
-    /// Night's greyish teal comes out as a teal: more colour, same hue.
     func testChromaFloorSaturatesWithoutTurningTheHue() {
         let teal = rgb(28, 62, 80)
         let vivid = Chronos.withLightness(teal, in: 0.62...1, minChroma: 0.13)
@@ -138,8 +133,7 @@ final class ChronosTests: XCTestCase {
         assertTriad([Chronos.mix(a, b, 0), Chronos.mix(a, b, 1), Chronos.mix(a, a, 0.5)], [a, b, a])
     }
 
-    /// A grey has no hue of its own, so a mix toward a colour takes that
-    /// colour's hue all the way, rather than swinging through an unrelated one.
+    /// Grey has no hue, so mixing toward a color keeps that color's hue.
     func testMixFromGreyKeepsTheColoursHue() {
         let m = Chronos.mix(rgb(128, 128, 128), rgb(255, 0, 0), 0.5)
         XCTAssertGreaterThan(m.r, m.g)

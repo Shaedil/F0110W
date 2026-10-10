@@ -1,42 +1,37 @@
 import Foundation
 
-/// The profile names the keyboard keeps, as its names characteristic carries
-/// them; see `config/src/profile_names.h` on the firmware branch.
-///
-/// The keyboard holds the names so every computer paired with it shows the
-/// same ones. Each computer keeps a copy under `ProfileNames.key`, which is
-/// what the HUD reads, for when the keyboard is not connected.
+/// Wire format of the keyboard's profile names (`config/src/profile_names.h`). Read: format,
+/// count, then a length byte and UTF-8 bytes per name. Write: op, index, UTF-8 name.
+/// The keyboard stores the names so every paired computer shows the same ones.
 enum ProfileNamesWire {
     static let format: UInt8 = 1
-    /// The longest name the keyboard stores, in UTF-8 bytes.
+    /// Max name length the keyboard stores, in UTF-8 bytes.
     static let maxBytes = 24
-    /// The longest name a computer may offer for itself, leaving the keyboard
-    /// room to number it.
+    /// Max length for a computer's own name, leaving room for the keyboard to add a number.
     static let autoMaxBytes = 21
 
     enum Op: UInt8 {
-        /// Names a profile; an empty name clears it.
+        /// An empty name clears the profile's name.
         case set = 1
-        /// Names a profile only if it has no name, numbering any other
-        /// profile that already has it: "MacBook Pro M4 1", "MacBook Pro M4 2".
+        /// Names a profile only if it has none. Duplicate names get numbered
+        /// ("MacBook Pro M4 1", "MacBook Pro M4 2").
         case auto = 2
     }
 
-    /// One name per profile, "" where none was given. Nil if malformed.
+    /// One name per profile ("" if unset). Nil if malformed.
     static func parse(_ data: Data) -> [String]? {
         decode([UInt8](data))?.names
     }
 
-    /// The profiles whose name the keyboard read from the device itself, as
-    /// a stand-in until its helper names it: a byte after the names, a bit
-    /// per profile. Firmware from before it sends none.
+    /// Profiles whose name the keyboard read from the device, as a placeholder until the app
+    /// names it. One bit per profile in the byte after the names. Older firmware omits it.
     static func fromDevice(_ data: Data) -> Set<Int> {
         let bytes = [UInt8](data)
         guard let (names, end) = decode(bytes), end < bytes.count else { return [] }
         return Set(names.indices.filter { $0 < 8 && bytes[end] & (1 << $0) != 0 })
     }
 
-    /// The names, and where the bytes after them start.
+    /// The names, and the index of the first byte after them.
     private static func decode(_ bytes: [UInt8]) -> (names: [String], end: Int)? {
         guard bytes.count >= 2, bytes[0] == format else { return nil }
         var names: [String] = []
@@ -57,8 +52,7 @@ enum ProfileNamesWire {
         return Data([op.rawValue, UInt8(index)] + Array(clean(name, maxBytes: limit).utf8))
     }
 
-    /// `name` as the keyboard will take it: no control characters, no
-    /// surrounding spaces, cut at a character boundary to fit.
+    /// `name` as the keyboard stores it: printable, trimmed, and cut to fit.
     static func clean(_ name: String, maxBytes: Int = maxBytes) -> String {
         let printable = String(String.UnicodeScalarView(
             name.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7F }))
@@ -68,7 +62,6 @@ enum ProfileNamesWire {
     }
 }
 
-/// What to tell the keyboard after reading its names.
 enum ProfileNameSync {
     struct Write: Equatable {
         var op: ProfileNamesWire.Op
@@ -76,16 +69,11 @@ enum ProfileNameSync {
         var name: String
     }
 
-    /// - keyboard: the names just read from the keyboard.
-    /// - pending: renames made here that have not reached the keyboard yet.
-    /// - own: the profile that is this computer, if known. The keyboard
-    ///   takes names only from a computer that is one of its profiles, so
-    ///   until that is known nothing is sent and renames wait.
-    /// - deviceName: what this computer calls itself, for its own profile
-    ///   when that has no name or is called "Profile N".
-    /// - fromDevice: the profiles whose name the keyboard read from the
-    ///   device itself. On this computer's own profile that is only a stand-in,
-    ///   which the keyboard lets this computer's name replace.
+    /// - own: this computer's profile, if known. The keyboard only takes names from a computer
+    ///   bonded to one of its profiles, so nothing is sent until this is known.
+    /// - deviceName: used for this computer's profile when it is unnamed or "Profile N".
+    /// - fromDevice: profiles whose name the keyboard read from the device. On this computer's
+    ///   profile that is a placeholder, which this computer's name may replace.
     static func writes(keyboard: [String], pending: [Int: String], own: Int?,
                        deviceName: String?, fromDevice: Set<Int> = []) -> [Write] {
         guard let own else { return [] }
@@ -96,8 +84,7 @@ enum ProfileNameSync {
         for (index, name) in pending.sorted(by: { $0.key < $1.key })
         where names.indices.contains(index) {
             let name = ProfileNamesWire.clean(name)
-            // Sent even when it reads the same as the device's own name, so
-            // the keyboard keeps it as given here.
+            // Sent even if it matches the device's own name, so the keyboard stores it as set here.
             guard names[index] != name || standIns.contains(index) else { continue }
             out.append(Write(op: .set, index: index, name: name))
             names[index] = name
@@ -109,9 +96,8 @@ enum ProfileNameSync {
                   ProfileNamesWire.clean($0, maxBytes: ProfileNamesWire.autoMaxBytes)
               }),
               !deviceName.isEmpty else { return out }
-        // "Profile N" is what an unnamed profile shows anyway, so a profile
-        // named that is treated as unnamed. The keyboard only fills in a
-        // blank name, so it is cleared first.
+        // "Profile N" is what an unnamed profile shows, so treat it as unnamed. The keyboard only
+        // fills in a blank name, so clear it first.
         if names[own] == ProfileNames.placeholder(own) {
             out.append(Write(op: .set, index: own, name: ""))
             names[own] = ""
@@ -122,9 +108,8 @@ enum ProfileNameSync {
         return out
     }
 
-    /// The names this computer had before the keyboard kept them, for the
-    /// profiles the keyboard has no name for. "Profile N" is the placeholder,
-    /// not a name, and is left out.
+    /// Names set here before the keyboard stored names, for profiles the keyboard has no name
+    /// for. "Profile N" is a placeholder and is skipped.
     static func carryOver(keyboard: [String], local: [String]) -> [Int: String] {
         var out: [Int: String] = [:]
         for index in keyboard.indices where keyboard[index].isEmpty && local.indices.contains(index) {
@@ -137,17 +122,14 @@ enum ProfileNameSync {
     }
 }
 
-/// This computer's side of the names: its copy of the keyboard's, which is
-/// what the HUD shows, and the renames made here that the keyboard has not
-/// taken yet. The Mac keeps it in UserDefaults, under the keys `ProfileNames`
-/// reads; Windows in settings.json.
+/// This computer's copy of the keyboard's names (what the HUD shows), plus renames the keyboard
+/// has not taken yet. Stored in UserDefaults on the Mac and settings.json on Windows.
 final class ProfileNameStore {
     struct State: Equatable {
-        /// One per profile, "" where there is none.
+        /// One per profile, "" if unset.
         var names: [String]
         var pending: [Int: String]
-        /// Whether the names given here before the keyboard kept them have
-        /// been offered to it.
+        /// Whether names set here before the keyboard stored them have been offered to it.
         var carriedOver: Bool
     }
 
@@ -204,14 +186,12 @@ final class ProfileNameStore {
 
     var pending: [Int: String] { load().pending }
 
-    /// The copy here, one per profile, "" where there is none.
     func local(count: Int = ProfileNames.count) -> [String] {
         let names = load().names
         return (0..<count).map { names.indices.contains($0) ? names[$0] : "" }
     }
 
-    /// A rename made here. It shows at once and goes to the keyboard when it
-    /// next can.
+    /// Shows at once and goes to the keyboard when it can.
     func edit(_ index: Int, _ name: String) {
         update { state in
             guard state.names.indices.contains(index) else { return }
@@ -220,8 +200,7 @@ final class ProfileNameStore {
         }
     }
 
-    /// The first time names are read from the keyboard, the ones given here
-    /// before it kept them are queued for it.
+    /// On the first read from the keyboard, queues names set here before it stored them.
     func carryOverIfNeeded(keyboard: [String]) {
         update { state in
             guard !state.carriedOver else { return }
@@ -233,9 +212,8 @@ final class ProfileNameStore {
         }
     }
 
-    /// Takes the keyboard's names as the copy here, except where a rename made
-    /// here is still on its way. A rename the keyboard already has is done
-    /// with, sent or not.
+    /// Takes the keyboard's names, except where a rename from here is still pending. A rename
+    /// the keyboard already has counts as done, sent or not.
     func cache(_ keyboard: [String]) {
         update { state in
             for (index, name) in keyboard.enumerated() where state.names.indices.contains(index) {
@@ -248,8 +226,7 @@ final class ProfileNameStore {
         }
     }
 
-    /// The keyboard answered a write. Taken or refused, the rename is done
-    /// with: a refused one would only be refused again.
+    /// Done whether taken or refused, since a refused rename would be refused again.
     func answered(_ write: ProfileNameSync.Write) {
         guard write.op == .set else { return }
         update { state in
@@ -265,12 +242,10 @@ extension Notification.Name {
     static let profileNameEdited = Notification.Name("M0110ProfileNameEdited")
 }
 
-/// What a computer calls itself when it names its own profile: its kind and,
-/// for a Mac, its chip, so "MacBook Air M4" rather than whatever the user
-/// named the machine.
+/// What a computer calls its own profile: its kind and, on a Mac, its chip (e.g. "MacBook Air
+/// M4") instead of the user's machine name.
 enum DeviceName {
-    /// - productName: the IORegistry's "MacBook Air (13-inch, M4, 2025)", nil
-    ///   on Macs that lack it.
+    /// - productName: IORegistry name like "MacBook Air (13-inch, M4, 2025)", nil if missing.
     /// - modelIdentifier: `hw.model`, e.g. "Mac16,12" or "MacBookPro16,1".
     /// - cpuBrand: `machdep.cpu.brand_string`, e.g. "Apple M4 Pro".
     static func mac(productName: String?, modelIdentifier: String, cpuBrand: String) -> String {
@@ -288,8 +263,7 @@ enum DeviceName {
         return model
     }
 
-    /// For Macs without a product name: Intel ones, whose identifiers still
-    /// say what they are.
+    /// For Intel Macs, which have no product name but whose identifiers name the model.
     static func macModel(fromIdentifier identifier: String) -> String {
         let known: [(String, String)] = [
             ("MacBookPro", "MacBook Pro"), ("MacBookAir", "MacBook Air"),

@@ -1,8 +1,7 @@
 import Foundation
 
-/// Byte framing used by ZMK Studio's RPC transports, mirroring
-/// `zmk/app/src/studio/msg_framing.h`: a frame runs from SOF to EOF, and any
-/// payload byte that collides with a framing byte is escaped.
+/// Studio RPC byte framing, matching `zmk/app/src/studio/msg_framing.h`. A frame
+/// runs from SOF to EOF, and payload bytes equal to a framing byte are escaped.
 enum StudioFraming {
     static let sof: UInt8 = 0xAB
     static let esc: UInt8 = 0xAC
@@ -18,8 +17,7 @@ enum StudioFraming {
         return out
     }
 
-    /// Incremental unescaping. Feed bytes as they arrive; a completed frame is
-    /// returned once, on the byte that closes it.
+    /// Incremental unescaping. Returns each completed frame once, on its closing byte.
     struct Decoder {
         private var payload = [UInt8]()
         private var inFrame = false
@@ -33,7 +31,7 @@ enum StudioFraming {
             }
             switch byte {
             case StudioFraming.sof:
-                // A fresh SOF abandons any partial frame.
+                // A new SOF drops any partial frame.
                 payload.removeAll()
                 inFrame = true
             case StudioFraming.esc where inFrame:
@@ -51,42 +49,31 @@ enum StudioFraming {
     }
 }
 
-/// A blocking byte channel carrying framed Studio RPC messages.
-///
-/// `StudioClient` is synchronous and runs on its own serial queue, so a
-/// transport's job is to make whatever it wraps look blocking, whether that is
-/// the CDC ACM serial port or the firmware's GATT service.
+/// Blocking byte channel for framed Studio RPC messages. `StudioClient` is
+/// synchronous, so each transport makes its link (serial or GATT) look blocking.
 protocol StudioTransport: AnyObject {
-    /// How the connection is described in logs and in the UI.
     var label: String { get }
     var isOpen: Bool { get }
-    /// How long one request may take to answer, end to end.
     var responseTimeout: TimeInterval { get }
 
     func open() throws
     func close()
     func send(_ payload: [UInt8]) throws
-    /// Block until a complete frame arrives or `timeout` elapses.
     func receiveFrame(timeout: TimeInterval) throws -> [UInt8]
-    /// A frame that has already arrived, or nil, without waiting for one.
-    /// Lets unsolicited notifications be read while no request is in flight.
+    /// A frame that already arrived, or nil, without waiting. Used to read
+    /// notifications while no request is running.
     func receiveFrameIfAvailable() throws -> [UInt8]?
 }
 
 #if canImport(Darwin)
-/// Blocking serial transport over a CDC ACM port. The Windows one is in
-/// Windows/SerialTransport.swift.
-///
-/// ZMK exposes two CDC ACM interfaces on this build, a logging console and the
-/// Studio RPC endpoint, so callers generally probe each candidate port.
+/// Blocking serial transport over a CDC ACM port (Windows version: Windows/SerialTransport.swift).
+/// ZMK exposes two CDC ACM ports here, a log console and Studio RPC, so callers probe each one.
 final class SerialTransport: StudioTransport {
     private var fd: Int32 = -1
     private let path: String
     private var decoder = StudioFraming.Decoder()
-    /// Frames decoded but not yet handed out. One read can carry several: the
-    /// firmware sends a notification immediately before the reply to the
-    /// request that raised it, `set_layer_binding` included, so returning on
-    /// the first frame and dropping the rest of the read lost the reply.
+    /// Decoded frames not yet returned. One read can hold several, since the firmware
+    /// sends a notification right before the reply to the request that caused it.
     private var pending: [[UInt8]] = []
 
     var label: String { path }
@@ -107,7 +94,7 @@ final class SerialTransport: StudioTransport {
     }
 
     func open() throws {
-        // O_NONBLOCK so opening doesn't block on carrier detect; cleared after.
+        // O_NONBLOCK so open does not wait for carrier detect. Cleared below.
         fd = Darwin.open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
         guard fd >= 0 else { throw StudioError.portUnavailable("\(path): \(String(cString: strerror(errno)))") }
 
@@ -123,7 +110,7 @@ final class SerialTransport: StudioTransport {
             close()
             throw StudioError.portUnavailable("\(path): tcsetattr failed")
         }
-        // Back to blocking reads; VMIN/VTIME now govern timing.
+        // Back to blocking reads. VMIN/VTIME now control timing.
         _ = fcntl(fd, F_SETFL, 0)
         tcflush(fd, TCIOFLUSH)
         decoder = StudioFraming.Decoder()
@@ -148,7 +135,6 @@ final class SerialTransport: StudioTransport {
         }
     }
 
-    /// Read until a complete frame arrives or `timeout` elapses.
     func receiveFrame(timeout: TimeInterval) throws -> [UInt8] {
         let deadline = Date().addingTimeInterval(timeout)
         while pending.isEmpty, Date() < deadline {
@@ -163,7 +149,7 @@ final class SerialTransport: StudioTransport {
         return pending.isEmpty ? nil : pending.removeFirst()
     }
 
-    /// One read, waiting at most VTIME, with every frame it completes queued.
+    /// Does one read, waiting at most VTIME, and queues every frame it completes.
     private func readOnce() throws {
         var scratch = [UInt8](repeating: 0, count: 512)
         let n = scratch.withUnsafeMutableBufferPointer {

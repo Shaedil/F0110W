@@ -1,14 +1,8 @@
 import Foundation
 
-/// prismorphism's Chronos engine, ported from its js/chronos.mjs: where the
-/// real sun is, and the prismatic triad that goes with it. Dawn rose, noon
-/// prism, dusk amber, deep-indigo night.
-///
-/// Only the parts the window uses came across. The original also ramps an
-/// accent, a background tint and a warmth for apps that let the sun paint
-/// their canvas; the window only lets it tint, so those columns are left out.
-/// The triad, glow cap and sun position match the original to within a
-/// rounding step.
+/// Port of prismorphism's Chronos engine (js/chronos.mjs): the sun's real position and the
+/// three-color palette for it. Only the parts the window uses are ported. The triad, glow
+/// cap and sun position match the original to within rounding.
 enum Chronos {
     struct RGB: Equatable {
         var r, g, b: Int
@@ -25,40 +19,34 @@ enum Chronos {
     }
 
     struct State: Equatable {
-        /// Warm to cool: the original's `--chronos-1/2/3`.
+        /// Warm to cool, like the original's `--chronos-1/2/3`.
         var triad: [RGB]
-        /// 0...1. Glow scales by this, so nothing shimmers at night.
+        /// 0...1. Glow is scaled by this so it fades at night.
         var glowCap: Double
         var phase: Phase
         var elevation: Double
         var azimuth: Double
-        /// Where the sun sits as a point in a window, 0...1 from the leading
-        /// and top edges: east to west across, high to low down. The ambient
-        /// glow is centred here.
+        /// Sun position in a window, 0...1 from the leading and top edges (east to west, high
+        /// to low). The glow is centered here.
         var sunX: Double
         var sunY: Double
     }
 
-    /// The static prism the engine settles on when the sun is high, and the
-    /// fallback when there is no clock to follow.
+    /// The palette for a high sun, also used when there is no clock to follow.
     static let noon = State(triad: [RGB(r: 255, g: 30, b: 140),
                                     RGB(r: 26, g: 229, b: 229),
                                     RGB(r: 255, g: 232, b: 59)],
                             glowCap: 0.9, phase: .day, elevation: 90, azimuth: 180,
                             sunX: 0.5, sunY: 0.08)
 
-    /// Longitude from the clock offset at a temperate latitude, the way the
-    /// original's `tzGuess` does it: no location permission, and close enough
-    /// for a colour curve. During daylight saving the guess sits 15° east of
-    /// true, and `sunPosition` subtracts the same hour back out, so solar time
-    /// stays on the wall clock.
+    /// Guesses longitude from the UTC offset at latitude 40, like the original's `tzGuess`, so no
+    /// location permission is needed. During daylight saving the guess is 15 degrees east, and
+    /// `sunPosition` subtracts the same hour, so solar time still matches the wall clock.
     static func guess(_ timeZone: TimeZone, at date: Date) -> Coordinates {
         let hours = Double(timeZone.secondsFromGMT(for: date)) / 3600
         return Coordinates(lat: 40, lng: (hours * 15).rounded())
     }
 
-    /// The triad for a moment. With no coordinates, they are guessed from the
-    /// time zone.
     static func state(at date: Date, coordinates: Coordinates? = nil,
                       in timeZone: TimeZone = .current) -> State {
         let coords = coordinates ?? guess(timeZone, at: date)
@@ -81,8 +69,7 @@ enum Chronos {
 
     private static let rad = Double.pi / 180
 
-    /// NOAA's general solar position: elevation above the horizon and azimuth
-    /// clockwise from north, both in degrees.
+    /// NOAA solar position: elevation and azimuth (clockwise from north), in degrees.
     static func sunPosition(at date: Date, _ coords: Coordinates,
                             in timeZone: TimeZone) -> (elevation: Double, azimuth: Double) {
         var cal = Calendar(identifier: .gregorian)
@@ -127,7 +114,7 @@ enum Chronos {
              glow: glow)
     }
 
-    /// The original's DEFAULT_RISE, morning colours from deep night up.
+    /// The original's DEFAULT_RISE, from deep night up.
     static let rise: [Stop] = [
         stop(-14, [26, 35, 71], [28, 62, 80], [62, 46, 96], 0.35),
         stop(-7, [44, 74, 124], [46, 107, 125], [176, 120, 158], 0.50),
@@ -137,7 +124,7 @@ enum Chronos {
         stop(45, [255, 30, 140], [26, 229, 229], [255, 232, 59], 0.90),
     ]
 
-    /// The original's DEFAULT_SET, evening colours from high sun down.
+    /// The original's DEFAULT_SET, from high sun down.
     static let set: [Stop] = [
         stop(45, [255, 30, 140], [26, 229, 229], [255, 232, 59], 0.90),
         stop(14, [255, 160, 90], [255, 210, 140], [130, 165, 205], 0.88),
@@ -148,8 +135,7 @@ enum Chronos {
         stop(-14, [26, 35, 71], [28, 62, 80], [62, 46, 96], 0.35),
     ]
 
-    /// The ramp at an altitude: the end stops beyond either end, a mix of
-    /// the two stops around it in between.
+    /// Mixes the two stops around `el`, clamping to the end stops outside the range.
     static func sample(_ stops: [Stop], at el: Double) -> Stop {
         let asc = stops[0].el < stops[stops.count - 1].el ? stops : stops.reversed()
         guard let first = asc.first, let last = asc.last else { return set[0] }
@@ -166,9 +152,8 @@ enum Chronos {
 
     // MARK: OKLCH
 
-    /// Mix in OKLCH, so a transition stays luminous rather than passing
-    /// through a muddy midpoint. Hue takes the short way round; a near-grey
-    /// end has no hue to speak of and takes the other end's.
+    /// Mixes in OKLCH so a transition stays bright with no muddy midpoint. Hue takes the short
+    /// way around, and a near-gray end uses the other end's hue.
     static func mix(_ a: RGB, _ b: RGB, _ t: Double) -> RGB {
         let A = lab(a), B = lab(b)
         let ca = hypot(A.a, A.b), cb = hypot(B.a, B.b)
@@ -179,11 +164,8 @@ enum Chronos {
         return rgb(L: L, a: C * cos(h), b: C * sin(h))
     }
 
-    /// The same hue at a lightness clamped into `range` and at least
-    /// `minChroma` of colour, for a colour that has to show on a dark window:
-    /// night's navy is right for a faint web glow and reads as no colour at
-    /// all here. Already within both, it comes back untouched; a grey has no
-    /// hue to saturate and only moves in lightness.
+    /// Same hue with lightness clamped to `range` and chroma at least `minChroma`, so night's
+    /// navy still shows on a dark window. Grays only change lightness.
     static func withLightness(_ c: RGB, in range: ClosedRange<Double>, minChroma: Double = 0) -> RGB {
         let x = lab(c)
         let L = min(max(x.L, range.lowerBound), range.upperBound)

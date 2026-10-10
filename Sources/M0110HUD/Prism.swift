@@ -1,34 +1,25 @@
 import SwiftUI
 
-/// The prismatic triad of one moment, as the window draws it: prismorphism's
-/// colour layer, driven by `Chronos`.
-///
-/// Two ways to use it. `tints` are for glows, rims, shines and washes;
-/// `marks` for the few things that carry a value: a slider's fill, a switch
-/// that is on, the page stripes. Both keep the sky's hues but not its
-/// darkness. The original lets night's triad sink to navy, which on a
-/// near-black window is no colour at all, so tints are held to a middle
-/// lightness and marks to a light one, both with a floor of saturation:
-/// night comes out indigo, teal and violet rather than grey.
+/// The window's three-color palette for one moment, from `Chronos` (prismorphism's color layer).
+/// `tints` are for glows, rims and washes, and `marks` for things that show a value (slider
+/// fill, an on switch, page stripes). The original's night navy is invisible on a near-black
+/// window, so both keep the sky's hues but clamp lightness and add a minimum saturation.
 struct PrismPalette: Equatable {
     var state: Chronos.State
 
     init(_ state: Chronos.State = Chronos.noon) { self.state = state }
 
-    /// The sky over the user's time zone at a moment.
     static func at(_ date: Date) -> PrismPalette { PrismPalette(Chronos.state(at: date)) }
 
     /// 0...1, low at night.
     var glowCap: Double { state.glowCap }
 
-    /// What glows are multiplied by. The original scales them by the glow
-    /// cap outright, which leaves a third of the glow at night; this keeps
-    /// night calmer than day but still visibly prismatic.
+    /// The original scales glows by the glow cap directly, which leaves a third at night. This
+    /// keeps night calmer but still colored.
     var glowScale: Double { 0.6 + 0.4 * glowCap }
 
-    /// Where the ambient glow centres. The original parks a set sun on the
-    /// bottom corner, where most of its glow falls outside the window; held
-    /// in from the edges, the night glow stays on screen.
+    /// Center of the ambient glow, kept away from the edges. The original puts a set sun in the
+    /// bottom corner, where most of the glow falls outside the window.
     var sun: UnitPoint {
         UnitPoint(x: min(max(state.sunX, 0.15), 0.85), y: min(state.sunY, 0.72))
     }
@@ -46,19 +37,16 @@ struct PrismPalette: Equatable {
     }
 }
 
-/// How strongly each prismatic layer draws.
-///
-/// prismorphism's own tokens are for a web page: a 12% ambient, a 15% rim,
-/// a 5% wash. In a desktop window at arm's length those read as nothing at
-/// all, so everything here runs several times stronger.
+/// Layer strengths. prismorphism's web values (12% ambient, 15% rim, 5% wash) are too faint
+/// in a desktop window, so these are several times stronger.
 enum PrismTokens {
     /// The three ambient glows: at the sun, beside it, and low in the middle.
     static let ambient = (0.55, 0.4, 0.2)
     static let shine = 1.0
     static let rim = 0.9
-    /// The diagonal triad wash inside glass panels and the sidebar.
+    /// The diagonal wash inside glass panels and the sidebar.
     static let wash = 0.08
-    /// A selected segment or prominent pill: a triad wash under a triad rim.
+    /// A selected segment or prominent pill.
     static let selectedWash = 0.38
     static let selectedRim = 1.0
 }
@@ -84,8 +72,7 @@ extension EnvironmentValues {
     }
 }
 
-/// Puts the sky into the environment and keeps it current. A minute is the
-/// original's own cadence, and the colour barely moves in one.
+/// Puts the sky in the environment and updates it every minute, like the original.
 struct ChronosSky<Content: View>: View {
     @Environment(\.skyTime) private var pinned
     @ViewBuilder var content: () -> Content
@@ -97,15 +84,12 @@ struct ChronosSky<Content: View>: View {
     }
 }
 
-/// The triad as a gradient corner to corner, the direction prismorphism's
-/// rims and washes run.
+/// The triad as a corner-to-corner gradient, the direction prismorphism's rims and washes use.
 func prismDiagonal(_ colors: [Color]) -> LinearGradient {
     LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
-/// prismorphism's `pm-prismatic-shine`: a hairline of the triad along a
-/// surface's top edge, fading out before either end, where the corners curve
-/// away under it.
+/// prismorphism's `pm-prismatic-shine`: a 1 pt triad line on the top edge, faded at the ends.
 struct PrismShine: View {
     var inset: CGFloat = 0
     @Environment(\.prism) private var prism
@@ -125,8 +109,7 @@ struct PrismShine: View {
     }
 }
 
-/// prismorphism's `pm-prismatic`: the triad washed corner to corner across a
-/// glass surface.
+/// prismorphism's `pm-prismatic`: the triad washed corner to corner across a glass surface.
 struct PrismWash<S: Shape>: View {
     let shape: S
     var opacity = PrismTokens.wash
@@ -137,8 +120,7 @@ struct PrismWash<S: Shape>: View {
     }
 }
 
-/// prismorphism's `pm-prismatic-border-rounded`: a one-point rim running
-/// through the triad corner to corner.
+/// prismorphism's `pm-prismatic-border-rounded`: a 1 pt triad rim, corner to corner.
 struct PrismRim<S: InsettableShape>: View {
     let shape: S
     var opacity = PrismTokens.rim
@@ -150,9 +132,7 @@ struct PrismRim<S: InsettableShape>: View {
     }
 }
 
-/// A selected or prominent control: a faint triad wash inside a triad rim,
-/// prismorphism's tinted-glass button with the triad standing in for the
-/// brand accent.
+/// prismorphism's tinted-glass button, with the triad in place of the brand accent.
 struct PrismSelection<S: InsettableShape>: View {
     let shape: S
     @Environment(\.prism) private var prism

@@ -1,33 +1,23 @@
 import AppKit
 import SwiftUI
 
-/// What the menu's header shows. The app delegate keeps it current from the
-/// Bluetooth monitor and the Studio link, always on the main thread.
+/// What the menu header shows. Updated by the app delegate on the main thread.
 final class StatusModel: ObservableObject {
-    /// The one the menu shows, which the window reads too.
+    /// Shared by the menu and the window.
     static let shared = StatusModel()
     @Published var name = "M0110"
-    /// The Bluetooth link the HUD watches: is the keyboard typing to this Mac.
+    /// The Bluetooth link the HUD watches.
     @Published var linked = false
     @Published var battery: Int?
-    /// Which profile the keyboard types to, from its profile report. Nil
-    /// until the first report and after a disconnect, and always on firmware
-    /// that predates the report.
+    /// Nil until the first profile report, after a disconnect, and on older firmware.
     @Published var profile: ProfileState?
-    /// The Studio link the window edits the keymap over.
+    /// The Studio link the window uses to edit the keymap.
     @Published var editor: KeyboardController.Connection = .disconnected
 }
 
-/// The menu bar presence.
-///
-/// The app runs as a background agent with no Dock icon, so this is the only
-/// thing on screen when the keyboard is behaving: the HUD is transient, and the
-/// window is opened on demand rather than at launch.
-///
-/// It also carries "Show HUD". The connect and disconnect notifications fire on
-/// events that, on a keyboard that is never slept and never disconnects, almost
-/// never happen, so without a way to summon it the HUD is effectively
-/// invisible.
+/// The menu bar item. The app has no Dock icon, so this is its only permanent UI.
+/// "Show HUD" is here because connects and disconnects are rare on a keyboard that never
+/// sleeps, so the HUD would almost never appear otherwise.
 @MainActor
 final class StatusItemController {
     nonisolated let model = StatusModel.shared
@@ -43,8 +33,7 @@ final class StatusItemController {
         if let button = item.button {
             button.image = NSImage(systemSymbolName: "keyboard",
                                    accessibilityDescription: "M0110")
-            // A template image picks up the menu bar's own light/dark styling
-            // instead of being painted once and looking wrong in one of them.
+            // A template image follows the menu bar's light/dark styling.
             button.image?.isTemplate = true
         }
 
@@ -72,10 +61,8 @@ final class StatusItemController {
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
-/// The top of the menu, laid out like the accessory rows in Control Center:
-/// a glyph in a disc, the name, and one line of state beneath it, with the
-/// battery on the right. A second, quieter line says whether the keymap can
-/// be edited, since that link is separate from the one that types.
+/// Laid out like Control Center accessory rows. The last line shows whether the keymap can
+/// be edited, since that uses a separate link.
 private struct StatusHeader: View {
     static let width: CGFloat = 280
     @ObservedObject var model: StatusModel
@@ -147,8 +134,7 @@ private struct StatusHeader: View {
 }
 
 private extension NSMenu {
-    /// `addItem(withTitle:action:keyEquivalent:)` returns the item on macOS,
-    /// but not as a discardable result that can be configured inline.
+    /// Redeclared as `@discardableResult` so the returned item can be configured inline.
     @discardableResult
     func addItem(withTitle title: String, action: Selector, keyEquivalent: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)

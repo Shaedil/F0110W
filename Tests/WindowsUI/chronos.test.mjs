@@ -1,6 +1,4 @@
-// WindowsUI/chronos.js held to the same values as the Mac's ChronosTests,
-// which come from prismorphism's own engine. Run under New York time:
-//
+// Same expected values as the Mac's ChronosTests. Run with:
 //     TZ=America/New_York node --test Tests/WindowsUI
 
 import assert from 'node:assert/strict';
@@ -12,7 +10,7 @@ const local = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi);
 const near = (got, want, accuracy, what = '') =>
   assert.ok(Math.abs(got - want) <= accuracy, `${what} ${got} vs ${want}`);
 
-/** Channels within one step of the original's output. */
+/** Each channel may be off by one from the original. */
 function assertTriad(got, want) {
   assert.equal(got.length, want.length);
   got.forEach((g, i) => g.forEach((c, j) => near(c, want[i][j], 1, `${g} vs ${want[i]}`)));

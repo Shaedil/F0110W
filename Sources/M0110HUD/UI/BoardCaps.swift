@@ -1,30 +1,16 @@
 import SceneKit
 import CoreGraphics
 
-/// The keycaps as solids standing in the well, one box per key.
-///
-/// Until this existed the caps were painted onto the well floor, so the board
-/// had no keys in its silhouette: edge-on it was a smooth slab, and from above
-/// the caps had no thickness, no shadow between them, and nothing catching the
-/// light differently from the case. A keyboard whose keys do not stick up is
-/// the kind of wrong that survives every other correction.
-///
-/// Positions come from `M0110Layout.ansi`, the same table `BoardArtView` draws
-/// from, so the solid caps and the flat art cannot end up on different grids.
+/// The keycaps as 3D boxes standing in the well, one per key.
+/// Positions come from `M0110Layout.ansi`, the same table `BoardArtView` uses.
 enum BoardCaps {
-    /// Cap height, 19 mm, which with `BoardHull.wellDepth` at 34 leaves them
-    /// standing about 12.6 mm proud of the bezel.
-    ///
-    /// This is a balance between two views of the board, and both were checked.
-    /// In profile the caps should be roughly a third of the total height, which
-    /// 110 blew past -- at 21 mm they took about 60% and the board read as a
-    /// wedge of keycaps. But 70 went too far the other way: from above, where
-    /// the HUD actually shows the board, the caps lost their sides and the top
-    /// flattened out again. 55 was worse still, clearing the bezel by 4 mm.
+    /// Cap height, 19 mm. With `BoardHull.wellDepth` at 34, caps stand about 12.6 mm
+    /// above the bezel. Taller caps take over the side profile, and shorter ones
+    /// look flat from above, which is how the HUD shows the board.
     static let capHeight: CGFloat = 100
 
-    /// `deckY` gives the well floor's height at a depth, since the floor is
-    /// raked and every row sits a little higher than the one in front of it.
+    /// `deckY` gives the well floor's height at a depth, since the floor slopes
+    /// up toward the back.
     static func make(hull: BoardHull, u: CGFloat,
                      deckY: (CGFloat) -> CGFloat) -> [SCNNode] {
         let w = hull.footprint.width / u
@@ -35,10 +21,7 @@ enum BoardCaps {
         let top = BoardCase.Bezel.m0110.top
         let height = capHeight / u
 
-        // Darker than the case by a clear margin. The caps and the bezel used
-        // to sit within a few percent of each other, so at HUD size the keys
-        // dissolved into the plastic around them; the separation is doing more
-        // work here than the geometry is.
+        // Clearly darker than the case, or the keys blend into the bezel at HUD size.
         let top_ = SCNMaterial()
         top_.diffuse.contents = NSColor(srgbRed: 0.639, green: 0.643, blue: 0.604, alpha: 1)
         top_.lightingModel = .blinn
@@ -51,18 +34,15 @@ enum BoardCaps {
         skirt.specular.contents = NSColor(white: 0.14, alpha: 1)
         skirt.shininess = 0.06
 
-        // The caps stand perpendicular to the deck they are mounted on, not
-        // to the desk. Left upright on a raked floor they climb it as a
-        // staircase, and the board's profile reads as a ramp rather than as a
-        // case with keys on it.
+        // Tilt the caps to match the sloped deck. Upright caps on a slope look
+        // like stairs.
         let rake = atan2(hull.backHeight - hull.frontHeight, hull.footprint.height)
 
         return M0110Layout.ansi.map { key in
             let kw = (CGFloat(key.attrs.width) - gap) / u
             let kd = (CGFloat(key.attrs.height) - gap) / u
-            // Art coordinates: x grows right from the case's left edge, y grows
-            // toward the front. `BoardWedge` maps the art the same way, so the
-            // conversion to scene units is the same one its texture uses.
+            // Art coordinates: x grows right from the case's left edge and y grows
+            // toward the front, the same mapping `BoardWedge` uses for its texture.
             let artX = side + CGFloat(key.attrs.x) + CGFloat(key.attrs.width) / 2
             let artY = top + CGFloat(key.attrs.y) + CGFloat(key.attrs.height) / 2
             let x = xL + artX / u
@@ -75,9 +55,7 @@ enum BoardCaps {
 
             let node = SCNNode(geometry: box)
             node.eulerAngles = SCNVector3(rake, 0, 0)
-            // Raised along the deck's normal rather than straight up, so a
-            // tilted cap still meets the floor instead of sinking a corner
-            // into it.
+            // Offset along the deck's normal so a tilted cap sits flush on the floor.
             node.position = SCNVector3(x,
                                        deckY(z) + (height / 2) * cos(rake),
                                        z + (height / 2) * sin(rake))

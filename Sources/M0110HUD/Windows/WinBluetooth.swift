@@ -1,21 +1,18 @@
 import CM0110Win
 import Foundation
 
-/// UUIDs as the 16 bytes the C layer takes.
 private func uuid(_ string: String) -> [UInt8] {
     let u = UUID(uuidString: string)!.uuid
     return [u.0, u.1, u.2, u.3, u.4, u.5, u.6, u.7, u.8, u.9, u.10, u.11, u.12, u.13, u.14, u.15]
 }
 
-/// One characteristic, read and followed through the Win32 GATT API.
 private final class GattLink {
     private let gatt: OpaquePointer
     private let onValue: ([UInt8]) -> Void
     /// Holds this object for the C callback until closed.
     private var retained: Unmanaged<GattLink>?
 
-    /// Nil, with the HRESULT in `error`, if the service or the characteristic
-    /// is not there.
+    /// Nil if the service or characteristic is missing, with the HRESULT in `error`.
     init?(instance: String, service: [UInt8], characteristic: [UInt8], error: inout Int32,
           onValue: @escaping ([UInt8]) -> Void) {
         var status: Int32 = 0
@@ -27,7 +24,6 @@ private final class GattLink {
         self.onValue = onValue
     }
 
-    /// The value as the device has it now, or nil with the HRESULT.
     func read(capacity: Int = 64) -> Result<[UInt8], GattError> {
         var buffer = [UInt8](repeating: 0, count: capacity)
         let count = m0110_gatt_read(gatt, &buffer, UInt32(buffer.count))
@@ -35,8 +31,7 @@ private final class GattLink {
         return .success(Array(buffer.prefix(Int(count))))
     }
 
-    /// Calls `onValue` with every change, on a system thread. Returns 0 or an
-    /// HRESULT.
+    /// `onValue` runs on a system thread. Returns 0 or an HRESULT.
     func subscribe() -> Int32 {
         let me = Unmanaged.passRetained(self)
         let result = m0110_gatt_subscribe(gatt, { context, data, length in
@@ -52,7 +47,6 @@ private final class GattLink {
         return result
     }
 
-    /// A write the device answers. Returns 0 or an HRESULT.
     func write(_ bytes: [UInt8]) -> Int32 {
         m0110_gatt_write(gatt, bytes, UInt32(bytes.count))
     }
@@ -69,29 +63,21 @@ struct GattError: Error, CustomStringConvertible {
     var description: String { hex(code) }
 }
 
-/// The Windows counterpart of BluetoothMonitor: whether the keyboard is
-/// connected, its battery, and its profile report.
-///
-/// Presence is polled from the device's own connected state, which Windows
-/// keeps whoever holds the link. Battery and profile come from their GATT
-/// services, read on connect and followed by notification. The Win32 GATT
-/// calls block, sometimes for seconds, so they run on a queue of their own.
+/// Windows version of BluetoothMonitor. Presence is polled from the device's connected
+/// state, which Windows tracks no matter who holds the link. Battery and profile use GATT
+/// reads plus notifications on a separate queue, because Win32 GATT calls can block for seconds.
 final class WinBluetoothMonitor {
     static let batteryService = uuid("0000180F-0000-1000-8000-00805F9B34FB")
     static let batteryLevel = uuid("00002A19-0000-1000-8000-00805F9B34FB")
-    /// The firmware's profile report; see BluetoothMonitor.
     static let profileService = uuid("05B3A8EB-1160-4B0F-B56D-700006AAEFEB")
     static let profileState = uuid("05B3A8EC-1160-4B0F-B56D-700006AAEFEB")
-    /// The profiles' names, kept on the keyboard; see ProfileNamesWire.
     static let profileNames = uuid("05B3A8ED-1160-4B0F-B56D-700006AAEFEB")
     /// Five names of up to 24 bytes, with their lengths and a header.
     private static let namesCapacity = 256
 
-    /// Every second, not the Mac's two: there is no link of this app's own to
-    /// drop first and say the keyboard may be going.
+    /// Faster than the Mac's 2 s poll, since Windows has no link of its own that drops first.
     private let pollInterval = 1.0
     private let batteryWait = 1.5
-    /// How often to read the battery when it cannot be followed.
     private let batteryReread = 60.0
 
     private let config: Config
@@ -104,40 +90,33 @@ final class WinBluetoothMonitor {
     private var polling = false
     private var stopped = false
 
-    // The worker's own.
+    // Worker queue only.
     private var instance: String?
     private var lastLookup = -Double.infinity
     private var links: [GattLink] = []
     private var namesLink: GattLink?
 
-    // The app thread's.
-    /// The profile that is this PC, as reported since the links last opened.
-    /// A PC names only its own profile, so this is never carried over: it may
-    /// have been paired to another profile since.
+    // App thread only.
+    /// This PC's profile as reported since the links opened. Not kept across links, because
+    /// the PC may have been paired to another profile in between.
     private(set) var reportedOwn: Int?
-    /// Whether names can be written now: the firmware keeps them.
     private(set) var canWriteNames = false
     private var namesGeneration: UInt8?
     private var namesInFlight = 0
-    /// Whether name writes are still waiting on the keyboard's answer.
     var isWritingNames: Bool { namesInFlight > 0 }
 
     private(set) var battery: Int?
-    /// The name to announce: the configured one, which on Windows is also
-    /// what the device was paired as.
     var displayName: String { config.deviceName }
 
     var onConnect: ((String, Int?, Bool) -> Void)?
     var onDisconnect: ((String) -> Void)?
     var onBattery: ((String, Int) -> Void)?
     var onProfile: ((String, Int, Int?) -> Void)?
-    /// Every read of the profiles' names, one per profile, "" where none was
-    /// given, and which of them the keyboard read from the device.
+    /// One name per profile ("" if unset), and which ones came from the device.
     var onNames: (([String], Set<Int>) -> Void)?
-    /// The keyboard answered a name write: whether it took it.
+    /// The Bool is whether the keyboard accepted the write.
     var onNameWritten: ((ProfileNameSync.Write, Bool) -> Void)?
-    /// The keyboard's device instance as it connects, and nil as it leaves:
-    /// for the clipboard, which opens a GATT link of its own.
+    /// Device instance on connect, nil on disconnect. The clipboard opens its own GATT link with it.
     var onLink: ((String?) -> Void)?
 
     init(config: Config) {
@@ -176,8 +155,7 @@ final class WinBluetoothMonitor {
 
     /// Worker only.
     private func isConnected(firstPoll: Bool) -> Bool {
-        // Looked up again when it is unpaired, or every half minute while it is
-        // not found, in case it is paired meanwhile.
+        // Look it up again after unpairing, or every 30 s while not found, in case it gets paired.
         if instance == nil, Main.now - lastLookup >= 30 {
             lastLookup = Main.now
             var buffer = [UInt16](repeating: 0, count: 512)
@@ -219,7 +197,7 @@ final class WinBluetoothMonitor {
             worker.async { [self] in closeLinks() }
             onLink?(nil)
             if pendingConnect != nil {
-                // Gone before the connect was announced: say nothing either way.
+                // It left before the connect was announced, so announce neither.
                 cancelPendingConnect()
                 return
             }
@@ -237,8 +215,7 @@ final class WinBluetoothMonitor {
         }
     }
 
-    /// Hold the connect until this connect's battery read lands, as the Mac
-    /// does, rather than announcing a level from the last time.
+    /// Delays the connect HUD until this connection's battery read, so it does not show an old level.
     private func awaitBattery(isInitial: Bool) {
         pendingConnect = isInitial
         batteryTimeout = Main.after(batteryWait) { [weak self] in
@@ -329,8 +306,7 @@ final class WinBluetoothMonitor {
                 if result != 0 { log("profile names: keyboard refused profile \(name.index) (\(hex(result)))") }
                 onNameWritten?(name, result == 0)
             }
-            // The keyboard's answer can differ from what was sent, as when it
-            // numbers a name, so the names are read back rather than assumed.
+            // Read the names back, since the keyboard may change them (for example, numbering one).
             readNames()
         }
     }
@@ -383,8 +359,7 @@ final class WinBluetoothMonitor {
             + (report.own.map { "profile \($0)" } ?? "not bonded to one"))
         reportedOwn = report.own
         onProfile?(displayName, report.active, report.own)
-        // The third byte goes up whenever a name changes. The first report
-        // only sets it; the names are read as the links open.
+        // The third byte goes up on every name change. The first report only stores it.
         if value.count >= 3, value[2] != namesGeneration {
             if namesGeneration != nil { worker.async { [self] in readNames() } }
             namesGeneration = value[2]
@@ -403,15 +378,13 @@ final class WinBluetoothMonitor {
         onNames?(names, fromDevice)
     }
 
-    /// As BluetoothMonitor.parseProfileState: both 0-based, `own` nil when
-    /// this computer is not bonded to any profile.
+    /// Same as BluetoothMonitor.parseProfileState. Both 0-based, `own` nil when not bonded.
     static func parseProfileState(_ bytes: [UInt8]) -> (active: Int, own: Int?)? {
         guard bytes.count >= 2 else { return nil }
         return (Int(bytes[0]), bytes[1] == 0xFF ? nil : Int(bytes[1]))
     }
 }
 
-/// `--ble-probe`: what Windows says about the keyboard, step by step.
 enum BLEProbe {
     static func run(name: String) -> Int32 {
         print("looking for a paired Bluetooth LE device called \"\(name)\"")

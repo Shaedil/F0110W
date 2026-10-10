@@ -1,18 +1,11 @@
 import AppKit
 
-// The classic six-stripe Apple mark, drawn clean.
-//
-// It used to be deliberately pixelated: the glyph was rasterised onto a 26px
-// grid, its alpha hard-thresholded, and then upscaled with nearest-neighbour so
-// the blocks stayed square. That reads as a Mac OS 9 menu icon at 512px, which
-// is not what an app icon should look like on a Retina display.
-//
-// Now the mark is built once at high resolution and scaled down with smooth
-// interpolation, so every size in the iconset is crisp.
+// The six-stripe Apple logo, drawn once at high resolution and scaled down so
+// every icon size is sharp.
 
 let outDir = CommandLine.arguments[1]
 
-/// Top to bottom, as Apple ordered them from 1977.
+/// Top to bottom.
 let stripes: [NSColor] = [
     NSColor(srgbRed: 0.38, green: 0.73, blue: 0.27, alpha: 1),
     NSColor(srgbRed: 0.99, green: 0.75, blue: 0.13, alpha: 1),
@@ -22,9 +15,6 @@ let stripes: [NSColor] = [
     NSColor(srgbRed: 0.00, green: 0.62, blue: 0.87, alpha: 1),
 ]
 
-/// Resolution the mark is authored at. Every icon size is scaled from this one
-/// image rather than re-rasterising the glyph small, which is what keeps the
-/// stripe edges consistent between sizes.
 let authoringSide: CGFloat = 1024
 
 func context(side: CGFloat) -> CGContext? {
@@ -34,7 +24,6 @@ func context(side: CGFloat) -> CGContext? {
               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
 }
 
-/// The striped mark, at authoring resolution.
 func buildMark() -> CGImage? {
     guard let symbol = NSImage(systemSymbolName: "apple.logo", accessibilityDescription: nil) else {
         return nil
@@ -47,19 +36,17 @@ func buildMark() -> CGImage? {
     }
     ctx.interpolationQuality = .high
 
-    // The glyph is taller than it is wide, so centre it and keep its aspect.
     let glyphWidth = authoringSide * CGFloat(glyph.width) / CGFloat(max(glyph.height, 1))
     let glyphRect = CGRect(x: (authoringSide - glyphWidth) / 2, y: 0,
                            width: glyphWidth, height: authoringSide)
 
-    // Bands are painted only across the glyph's own rect. `destinationIn` keeps
-    // just the pixels the mask covers, so stripes laid outside that rect would
-    // survive as bars down the sides.
+    // Only paint stripes inside the glyph's rect. `destinationIn` does not touch
+    // pixels outside it, so stripes there would show as bars down the sides.
     let band = authoringSide / CGFloat(stripes.count)
     for (i, colour) in stripes.enumerated() {
         ctx.setFillColor(colour.cgColor)
-        // CGContext y grows upward, so the first stripe belongs at the top.
-        // Overlap by half a point each way; abutting fills leave a seam.
+        // CGContext y grows upward, so the first stripe goes at the top. Stripes
+        // overlap by half a point because touching fills leave a seam.
         let y = authoringSide - band * CGFloat(i + 1)
         ctx.fill(CGRect(x: glyphRect.minX, y: y - 0.5,
                         width: glyphRect.width, height: band + 1))
@@ -78,8 +65,7 @@ guard let mark = buildMark() else {
 func render(size side: CGFloat) -> NSImage? {
     guard let ctx = context(side: side) else { return nil }
     ctx.interpolationQuality = .high
-    // The mark sits inside the icon's own margin, the way a macOS app icon's
-    // artwork sits inside its tile.
+    // Leave a margin like the one around macOS app icon artwork.
     let inset = (side * 0.13).rounded()
     ctx.draw(mark, in: CGRect(x: inset, y: inset,
                               width: side - inset * 2, height: side - inset * 2))

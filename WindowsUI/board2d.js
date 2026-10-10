@@ -1,6 +1,5 @@
-// The flat drawing of the board, as the Mac's BoardCase and Keycap draw it,
-// in SVG. Everything is in the layout's units, hundredths of a key unit, and
-// the SVG's viewBox does the scaling.
+// SVG drawing of the flat board, ported from the Mac's BoardCase and Keycap.
+// Units are hundredths of a key unit. The viewBox handles scaling.
 
 const NS = 'http://www.w3.org/2000/svg';
 const BEZEL = { side: 125, top: 50, bottom: 50 };
@@ -9,8 +8,7 @@ const PLATE_INSET = KEY_GAP / 2;
 const PLATE_RADIUS = 13;
 const SHELL_RADIUS = 22;
 
-// Keycap walls: the face sits high and narrow on the cap, as the M0110's
-// sculpted caps do.
+// The face sits high and narrow on the cap, like the M0110's sculpted caps.
 const TOP_WALL = 3;
 const BOTTOM_WALL = 13;
 const SIDE_WALL = ((100 - KEY_GAP) - (100 - KEY_GAP - TOP_WALL - BOTTOM_WALL) / 1.2) / 2;
@@ -19,7 +17,7 @@ const FACE_RADIUS = 7;
 const LEGEND_PAD = 6;
 const LEGEND = { single: 26, pair: 25, word: 17 };
 const MIN_SCALE = { single: 0.5, pair: 0.5, word: 0.4 };
-/** Helvetica's ascent, for setting text from the top of its line as SwiftUI does. */
+/** Helvetica's ascent, used to place text from the top of its line like SwiftUI. */
 const ASCENT = 0.77;
 
 let ids = 0;
@@ -31,7 +29,6 @@ function el(name, attrs = {}, parent) {
   return node;
 }
 
-/** A closed polygon with every corner rounded by up to `radius`. */
 function roundedPolygon(points, radius) {
   const n = points.length;
   let d = '';
@@ -47,8 +44,7 @@ function roundedPolygon(points, radius) {
   return `${d}Z`;
 }
 
-/** The plate's outline: the well grown by half a gap, notched where the
- *  bottom row's bezel patches open into the case. */
+/** The plate is notched where the bottom row's bezel patches open into the case. */
 function plateOutline(well, patches) {
   const plate = { minX: well.x - PLATE_INSET, minY: well.y - PLATE_INSET,
                   maxX: well.x + well.w + PLATE_INSET, maxY: well.y + well.h + PLATE_INSET };
@@ -68,7 +64,7 @@ function plateOutline(well, patches) {
   return pts;
 }
 
-// An apple, drawn for the case's embossed badge: 100 wide, 120 tall.
+// Apple logo for the case badge, 100 wide by 120 tall.
 const APPLE = 'M52,32 C46,32 40,28 32,28 C18,28 8,40 8,58 C8,80 22,108 36,108 C42,108 46,104 52,104 '
   + 'C58,104 62,108 68,108 C80,108 90,90 94,78 C84,74 78,66 78,56 C78,46 84,40 90,36 C84,30 76,28 70,28 '
   + 'C62,28 58,32 52,32 Z M52,26 C52,16 60,8 70,6 C70,16 62,24 52,26 Z';
@@ -86,7 +82,7 @@ function appleBadge(svg, cell, defs) {
   el('rect', { x, y, width: side, height: side, rx: 16, fill: 'var(--case-emboss)' }, svg);
   el('rect', { x: x + stroke / 2, y: y + stroke / 2, width: side - stroke, height: side - stroke, rx: 16 - stroke / 2,
                fill: 'none', stroke: `url(#${id})`, 'stroke-width': stroke }, svg);
-  // The glyph at 72 % of the pocket, struck three times for relief.
+  // Draw the logo three times, offset, so it looks embossed.
   const h = side * 0.62, w = h * 100 / 120;
   const gx = x + (side - w) / 2, gy = y + (side - h) / 2;
   const relief = 1.4;
@@ -130,8 +126,8 @@ function legend(group, slot, face, ink) {
   text.dataset.top = top;
 }
 
-/** Shrinks legends that overrun their cap, as SwiftUI's minimumScaleFactor
- *  does. Needs the SVG in the document, to measure. */
+/** Shrinks legends that are too wide, like SwiftUI's minimumScaleFactor.
+ *  The SVG must be in the document so text can be measured. */
 function fitLegends(svg) {
   for (const text of svg.querySelectorAll('text[data-room]')) {
     const room = Number(text.dataset.room);
@@ -145,14 +141,8 @@ function fitLegends(svg) {
   }
 }
 
-/**
- * Draws the board into `host` at `width` CSS pixels.
- *
- * `board` is the app's BoardJSON; `slots` the active layer's slots by
- * position; `selected` the selected position or null; `onSelect(position)`
- * is called with a clicked cap's position. `plain` draws every cap at full
- * strength, for a board that is not being edited.
- */
+/** Draws the board `width` CSS pixels wide. `slots` is keyed by position.
+ *  `plain` draws every cap at full opacity, for a board that is not being edited. */
 export function drawBoard(host, { board, slots, selected, canEdit, width, onSelect, plain = false }) {
   const unitsW = board.unitsWide + BEZEL.side * 2;
   const unitsH = board.unitsHigh + BEZEL.top + BEZEL.bottom;

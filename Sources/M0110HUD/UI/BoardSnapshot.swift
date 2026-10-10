@@ -2,15 +2,10 @@ import AppKit
 import SceneKit
 import SwiftUI
 
-/// Renders the spinning board offscreen as a strip of frames through one turn.
-///
-/// The HUD is a borderless panel that lives for seven seconds, so the usual way
-/// to look at it is a screen capture with the timing guessed right. This draws
-/// the same scene straight to a PNG instead, with no keyboard, no screen
-/// recording permission, and every frame at a known angle.
+/// Renders the spinning board offscreen to a PNG strip of frames through one turn.
+/// The HUD only shows for seven seconds, so this is easier to check than a screen capture.
 @MainActor
 enum BoardSnapshot {
-    /// Frames across one full turn, evenly spaced.
     private static let frameCount = 6
     private static let frameSize = CGSize(width: 260, height: 180)
 
@@ -19,9 +14,7 @@ enum BoardSnapshot {
         let board = BoardScene()
         board.applyArt(colorScheme: scheme)
 
-        // SCNRenderer draws a scene with no view and no window attached, which
-        // is what this needs: SCNView.snapshot() has to be on screen to give
-        // anything but an empty frame.
+        // SCNView.snapshot() returns an empty frame unless the view is on screen.
         let renderer = SCNRenderer(device: nil, options: nil)
         renderer.scene = board.scene
         renderer.autoenablesDefaultLighting = false
@@ -29,16 +22,13 @@ enum BoardSnapshot {
         let strip = NSImage(size: CGSize(width: frameSize.width * CGFloat(frameCount),
                                          height: frameSize.height))
         strip.lockFocus()
-        // Flat ground so the cream case is visible; the HUD's own background is
-        // vibrancy, which cannot be reproduced offscreen anyway.
+        // Solid background, since the HUD's vibrancy can't be drawn offscreen.
         (scheme == .dark ? NSColor(white: 0.11, alpha: 1) : NSColor(white: 0.86, alpha: 1)).setFill()
         NSRect(origin: .zero, size: strip.size).fill()
 
         for i in 0..<frameCount {
             let angle = CGFloat(i) / CGFloat(frameCount) * 2 * .pi
-            // X, matching the barrel roll `SpinningBoardView` runs: a strip
-            // sampled about a different axis than the HUD turns on would be
-            // checking a rotation nobody ever sees.
+            // Roll about X, the same axis `SpinningBoardView` uses.
             board.boardNode.eulerAngles = SCNVector3(angle, 0, 0)
             let frame = renderer.snapshot(atTime: 0, with: frameSize,
                                           antialiasingMode: .multisampling4X)
@@ -64,9 +54,8 @@ enum BoardSnapshot {
     }
 }
 
-/// Renders the window's 3D stage at every focus as a grid, for the same
-/// reason as `BoardSnapshot`: the camera only lands on each part after a pane
-/// switch, which is awkward to screen-capture at the right moment.
+/// Renders the window's 3D stage at every focus as a grid, since each camera
+/// position only shows after a pane switch and is hard to screen-capture.
 @MainActor
 enum BoardStageSnapshot {
     private static let focuses: [BoardFocus] = [.editor, .overview, .gestures,
@@ -84,8 +73,7 @@ enum BoardStageSnapshot {
         NSColor(srgbRed: 0.12, green: 0.115, blue: 0.11, alpha: 1).setFill()
         NSRect(origin: .zero, size: sheet.size).fill()
         for (i, focus) in focuses.enumerated() {
-            // A fresh stage each time, so every frame shows a focus landed on
-            // from rest rather than mid-flight from the last one.
+            // A new stage per frame, so no camera move carries over from the last focus.
             guard let stage = BoardStage() else {
                 FileHandle.standardError.write("stage snapshot: M0110.usdz not found\n".data(using: .utf8)!)
                 return 1
@@ -94,13 +82,12 @@ enum BoardStageSnapshot {
             if focus == .editor { paintSample(stage) }
             stage.setBattery(72, low: 20, rearm: 30)
             stage.setFocus(focus, animated: false)
-            // Actions do not run in an offscreen render, so the gauge's fill is
-            // set directly: a new reading repaints it without animating.
+            // Actions don't run offscreen. A second reading repaints the gauge
+            // fill without animating.
             stage.setBattery(73, low: 20, rearm: 30)
             renderer.scene = stage.scene
             renderer.pointOfView = stage.cameraNode
-            // The editor is drawn in the Keyboard pane's wide box, so it is
-            // checked at that shape: 990 by 420.
+            // The editor uses the Keyboard pane's 990x420 shape.
             let size = focus == .editor ? CGSize(width: frameSize.width, height: frameSize.width * 420 / 990)
                                         : frameSize
             let frame = renderer.snapshot(atTime: 0, with: size,
@@ -129,7 +116,7 @@ enum BoardStageSnapshot {
         }
     }
 
-    /// The sample keymap's legends on the editor frame, with one key selected.
+    /// Paints the sample keymap onto the caps with one key selected.
     private static func paintSample(_ stage: BoardStage) {
         let controller = KeyboardController()
         controller.loadPreviewFixture()

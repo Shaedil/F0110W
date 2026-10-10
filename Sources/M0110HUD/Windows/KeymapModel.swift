@@ -1,11 +1,8 @@
 import Foundation
 
-// What the window's page is told about the keyboard and its keymap, in JSON.
-// The rules are the Mac editor's (KeyboardController's labels and legends,
-// M0110Layout's geometry, BehaviorBinding.sending for what can be rebound),
-// applied here so the page only draws.
+// Keymap JSON for the window's page. It applies the Mac editor's rules (KeyboardController,
+// M0110Layout, BehaviorBinding.sending) here, so the page only has to draw.
 
-/// A cap's printing, as CapLegend has it.
 struct LegendJSON: Encodable, Equatable {
     var kind: String
     var text: String?
@@ -22,25 +19,22 @@ struct LegendJSON: Encodable, Equatable {
     }
 }
 
-/// One keymap slot on one layer.
 struct SlotJSON: Encodable, Equatable {
     var legend: LegendJSON
-    /// Whether picking a keycode can rebind it.
     var editable: Bool
-    /// The firmware's name for its behaviour, as the picker's header shows it.
+    /// The firmware's behavior name, shown in the picker header.
     var behavior: String
-    /// The keycode it sends now, and that keycode's long name.
     var keycode: UInt32?
     var keycodeName: String?
 }
 
 struct LayerJSON: Encodable, Equatable {
     var name: String
-    /// By firmware position, as a string: JSON keys are strings.
+    /// Keyed by firmware position as a string, since JSON keys are strings.
     var slots: [String: SlotJSON]
 }
 
-/// The board's fixed geometry, in hundredths of a key unit.
+/// Board geometry, in hundredths of a key unit.
 struct BoardJSON: Encodable {
     struct Key: Encodable { var position: Int; var x: Int32; var y: Int32; var w: Int32; var h: Int32 }
     struct Rect: Encodable { var x: Double; var y: Double; var w: Double; var h: Double }
@@ -70,7 +64,6 @@ struct BoardJSON: Encodable {
     }()
 }
 
-/// The key picker's groups, as HIDKeycodes has them.
 struct PickerGroupJSON: Encodable {
     struct Key: Encodable { var value: UInt32; var label: String; var name: String }
     var name: String
@@ -84,7 +77,6 @@ struct PickerGroupJSON: Encodable {
 }
 
 enum KeymapModel {
-    /// Every layer's slots, for every position the board draws.
     static func layers(_ keymap: Keymap, behaviors: [Int32: BehaviorInfo]) -> [LayerJSON] {
         let positions = Set(M0110Layout.ansi.map(\.position))
         return keymap.layers.map { layer in
@@ -115,7 +107,7 @@ enum KeymapModel {
                         keycodeName: keycode.map { HIDKeycodes.name(for: $0) })
     }
 
-    /// KeyboardController.label(forKeyAt:).
+    /// Same as KeyboardController.label(forKeyAt:).
     static func label(_ binding: BehaviorBinding, _ info: BehaviorInfo?) -> String {
         guard let info else {
             return binding.param1 == 0 ? "·" : "0x\(String(binding.param1, radix: 16))"
@@ -131,7 +123,7 @@ enum KeymapModel {
         }
     }
 
-    /// KeyboardController.legend(forKeyAt:).
+    /// Same as KeyboardController.legend(forKeyAt:).
     static func legend(_ binding: BehaviorBinding, _ info: BehaviorInfo?) -> CapLegend {
         guard let info else { return CapLegend.forText(label(binding, nil)) }
         switch info.param1 {

@@ -1,21 +1,18 @@
 import CM0110Win
 import Foundation
 
-/// The HUD on Windows: a layered window in the corner by the tray that slides
-/// in, holds and fades, as the Mac's does under the menu bar. Showing it again
-/// while it is up changes it in place and restarts the hold.
+/// A layered window by the tray that slides in, holds and fades out. Showing it
+/// while it is up updates it in place and restarts the hold.
 final class WinHUD {
     var config: Config
     private let text = GDIText()
 
     private var content: HUDContent?
-    /// Where the window rests, and which way is towards the screen edge it
-    /// slides in from.
     private var rest = (x: 0, y: 0)
     private var towardsEdge: Float = 1
     private var shown = false
     private var alpha: Float = 0
-    /// How far from `rest` it is, towards the edge.
+    /// Distance from `rest`, toward the screen edge.
     private var offset: Float = 0
     private var scale: Float = 1
 
@@ -32,7 +29,7 @@ final class WinHUD {
     private var frameTimer: UInt32?
     private var holdTimer: UInt32?
 
-    /// The Mac's: a steep ease-out arriving, a plain ease leaving.
+    /// Same as the Mac: a steep ease-out coming in, a plain ease going out.
     private static let enter = 0.35
     private static let leave = 0.5
     private static func expoOut(_ t: Float) -> Float { t >= 1 ? 1 : 1 - pow(2, -10 * t) }
@@ -45,7 +42,7 @@ final class WinHUD {
     var isVisible: Bool { shown && alpha > 0.01 }
 
     private var theme: HUDTheme {
-        // System flyouts follow the taskbar's mode, not the apps'.
+        // Match the system flyouts, which follow the taskbar theme.
         let dark: Bool
         switch config.appearance {
         case "dark": dark = true
@@ -66,7 +63,7 @@ final class WinHUD {
             apply()
             animate(to: (1, 0), duration: reduced ? 0.2 : Self.enter, curve: Self.expoOut)
         } else if alpha < 0.99 || animation != nil {
-            // Caught fading out: come back up rather than starting over.
+            // It was fading out, so fade back in instead of starting over.
             animate(to: (1, 0), duration: 0.2, curve: Self.ease)
         }
         Main.cancel(holdTimer)
@@ -74,7 +71,6 @@ final class WinHUD {
         log("hud: \(kind.rawValue) \(name) \(battery.map { "\($0)%" } ?? "-")", verbose: config.verbose)
     }
 
-    /// A battery reading landed while a HUD is up: fill it in, saying the same.
     func updateBatteryIfVisible(name: String, battery: Int) {
         guard isVisible, var content else { return }
         content.name = name
@@ -92,17 +88,14 @@ final class WinHUD {
         }
     }
 
-    /// Draws `content` for the screen the user is on and puts it up, in
-    /// whatever state of its entrance or exit the HUD is in.
+    /// Redraws for the current screen without resetting the animation.
     private func present(_ content: HUDContent) {
         self.content = content
         let screen = m0110_current_screen()
         scale = Float(screen.dpi) / 96 * Float(config.scale)
         let image = HUDArt.render(content, metrics: WinHUDMetrics(scale: scale), theme: theme, text: text)
 
-        // In the corner by the tray: along the right unless the taskbar is on
-        // the left, at the bottom unless it is at the top, held off the edge
-        // and the taskbar by the Settings pane's insets, in pixels at 96 DPI.
+        // The corner by the tray, inset by the Settings values (pixels at 96 DPI).
         let dpi = Float(screen.dpi) / 96
         let side = Int((Float(config.insetX) * dpi).rounded())
         let gap = Int((Float(config.insetY) * dpi).rounded())

@@ -1,12 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Black graded into classic Macintosh beige, with translucent dark panels and a
-/// serif page title.
-///
-/// Because the ground runs from near-black to beige, no single ink colour is
-/// legible across all of it, so content sits on its own semi-opaque surfaces
-/// and takes its contrast from those rather than from the gradient behind.
+/// App colors and fonts. The background runs from near-black to beige, so content
+/// sits on semi-opaque panels to keep text readable.
 enum Theme {
     private static func dynamic(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
@@ -14,54 +10,41 @@ enum Theme {
         })
     }
 
-    /// Near-black through warm browns into Platinum-era beige.
+    /// Background colors, from near-black to beige.
     static let ink = Color(red: 0.043, green: 0.039, blue: 0.035)
     static let inkWarm = Color(red: 0.102, green: 0.086, blue: 0.071)
     static let sienna = Color(red: 0.290, green: 0.243, blue: 0.196)
     static let beige = Color(red: 0.839, green: 0.796, blue: 0.706)
 
-    /// Panels stay dark and semi-opaque so text keeps its contrast wherever the
-    /// gradient happens to be beneath them.
+    /// Dark and semi-opaque so text stays readable over any part of the gradient.
     static let panel = dynamic(light: NSColor(white: 0.09, alpha: 0.62),
                                dark: NSColor(white: 0.07, alpha: 0.58))
     static let panelStroke = dynamic(light: NSColor(srgbRed: 0.92, green: 0.88, blue: 0.80, alpha: 0.16),
                                      dark: NSColor(srgbRed: 0.92, green: 0.88, blue: 0.80, alpha: 0.14))
-    /// prismorphism's glass, for the content panels: white at a few percent
-    /// over the ground, so a panel reads a step lighter than what is behind
-    /// it, and lets the ambient glow through. The same in both appearances,
-    /// because the ground is near-black in both.
+    /// Glass for content panels: a few percent white, so a panel is a step lighter
+    /// than the background. Same in both appearances, since the background is dark in both.
     static let glass = Color.white.opacity(0.045)
     static let glassStroke = Color.white.opacity(0.10)
-    /// The floating sidebar's tint, laid over a real blur, so in dark mode it is
-    /// much more transparent than the docked sidebar it replaced: the blur
-    /// supplies the separation that opacity used to.
-    ///
-    /// In light mode it is white, as the system's own sidebars are. The window's
-    /// ground stays near-black in both appearances, so a light blur over it
-    /// still came out grey; only a nearly opaque white reads as white there.
+    /// Floating sidebar tint, drawn over a real blur. Light mode needs nearly opaque
+    /// white, because a light blur over the dark window still looks grey.
     static let sidebarFloating = dynamic(light: NSColor(white: 1, alpha: 0.96),
                                          dark: NSColor(white: 0.05, alpha: 0.38))
     static let sidebarFloatingStroke = dynamic(light: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.22),
                                                dark: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.18))
 
-    /// Ink for what sits on the sidebar. Dark mode keeps the page's own ink,
-    /// since the sidebar is dark glass like the panels. That ink would vanish on
-    /// the white light-mode sidebar, so there it turns to `onAccent`'s warm
-    /// near-black.
+    /// Sidebar text. Light mode uses dark ink because the sidebar is white there.
     static let sidebarText = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.92),
                                      dark: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.94))
     static let sidebarTextDim = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.62),
                                         dark: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.52))
-    /// The selected row and the toggle's keycap, as `key` and `keyStroke` are
-    /// on the content.
+    /// The selected sidebar row and the toggle's keycap.
     static let sidebarKey = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.08),
                                     dark: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.09))
     static let sidebarKeyStroke = dynamic(light: NSColor(srgbRed: 0.118, green: 0.102, blue: 0.082, alpha: 0.14),
                                           dark: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.18))
 
-    /// A pane's icon tint as drawn on the sidebar. The tints are pitched for a
-    /// dark ground and wash out on the white light-mode sidebar, so there they
-    /// are taken down to two thirds of their brightness.
+    /// A pane's icon tint on the sidebar, darkened in light mode so it doesn't
+    /// wash out on white.
     static func sidebarIcon(_ tint: Color) -> Color {
         let base = NSColor(tint).usingColorSpace(.sRGB) ?? .gray
         let shaded = NSColor(srgbRed: base.redComponent * 0.68, green: base.greenComponent * 0.68,
@@ -69,10 +52,7 @@ enum Theme {
         return dynamic(light: shaded, dark: base)
     }
 
-    /// The surround the drawn board sits in: a dark *beige*. The near-black
-    /// panel used everywhere else was the last black object left next to an
-    /// all-beige keyboard, and it framed the case like a photograph rather than
-    /// being part of the same object family.
+    /// Dark beige behind the drawn board, so the beige case isn't framed in black.
     static let boardSurround = dynamic(light: NSColor(srgbRed: 0.639, green: 0.612, blue: 0.533, alpha: 0.94),
                                        dark: NSColor(srgbRed: 0.612, green: 0.588, blue: 0.510, alpha: 0.94))
     static let boardSurroundStroke = dynamic(light: NSColor(srgbRed: 0.478, green: 0.451, blue: 0.380, alpha: 0.55),
@@ -86,16 +66,13 @@ enum Theme {
     static let keyInactive = dynamic(light: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.03),
                                      dark: NSColor(srgbRed: 0.96, green: 0.93, blue: 0.86, alpha: 0.03))
 
-    /// Warm off-white, so the ink leans beige rather than clinical grey.
+    /// Warm off-white text.
     static let text = dynamic(light: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.95),
                               dark: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.94))
     static let textDim = dynamic(light: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.55),
                                  dark: NSColor(srgbRed: 0.97, green: 0.955, blue: 0.925, alpha: 0.52))
 
-    /// Beige, the same family as the gradient's warm end.
-    ///
-    /// Being a light accent, anything sitting on it needs dark ink rather than
-    /// white, which is what `onAccent` is for.
+    /// Light beige accent. Use `onAccent` for anything drawn on top of it.
     static let accent = dynamic(light: NSColor(srgbRed: 0.886, green: 0.847, blue: 0.757, alpha: 1),
                                 dark: NSColor(srgbRed: 0.878, green: 0.839, blue: 0.749, alpha: 1))
     static let onAccent = Color(red: 0.118, green: 0.102, blue: 0.082)
@@ -106,32 +83,17 @@ enum Theme {
     static let warn = Color(red: 0.95, green: 0.72, blue: 0.25)
     static let bad = Color(red: 0.90, green: 0.35, blue: 0.30)
 
-    // ## Colour sources
-    //
-    // The case is Apple Beige, sourced from **Pantone 453** (#BFBB98), Jerry
-    // Manock's spec for both the Apple II and the Macintosh. It is used here
-    // lifted and desaturated a little: 453 straight is distinctly olive, while
-    // surviving boards read lighter and greyer, and the bezel has to stay
-    // clearly lighter than the caps.
-    //
-    // The keycaps are **Pantone Cool Gray 2 U** (#C7C8BD), which is the colour
-    // of the XDA Oblique set, an AEK-style keyset in a uniform XDA profile.
-    // That is the "industrial beige-grey": all but neutral, with a faint green
-    // cast, against a warm case. The original Apple caps were a warmer
-    // brown-grey; Cool Gray 2 is what is on this board.
-    //
-    // Between them sits the plate, which is black. It is the only thing in the
-    // drawing giving the caps a hard edge now that the bezel is flat.
+    // The case is based on Pantone 453 (#BFBB98), the Apple II and Mac beige,
+    // made a bit lighter and greyer to match surviving boards and to stay lighter
+    // than the caps. The keycaps are Pantone Cool Gray 2 U (#C7C8BD), the color
+    // of the XDA Oblique set on this board.
 
-    /// The bezel: one flat beige, slightly darker than the caps are light.
+    /// Flat beige for the bezel.
     static let caseFlat = dynamic(light: NSColor(srgbRed: 0.855, green: 0.839, blue: 0.780, alpha: 1),
                                   dark: NSColor(srgbRed: 0.839, green: 0.824, blue: 0.765, alpha: 1))
 
-    /// The underside's fittings, all from the reference photograph of the real
-    /// case. The feet are the grey-green translucent rubber Apple used, seated
-    /// in a moulded well; the label is the silver foil spec plate; the vents
-    /// read as shadow rather than as plastic, because that is what a slot into
-    /// an empty case looks like.
+    /// Underside parts, matched to a photo of the real case. The vents are dark
+    /// because they open into the empty case.
     static let footRubber = dynamic(light: NSColor(srgbRed: 0.282, green: 0.306, blue: 0.278, alpha: 1),
                                     dark: NSColor(srgbRed: 0.259, green: 0.282, blue: 0.255, alpha: 1))
     static let footRim = dynamic(light: NSColor(srgbRed: 0.639, green: 0.627, blue: 0.576, alpha: 1),
@@ -145,16 +107,13 @@ enum Theme {
     static let ventSlot = dynamic(light: NSColor(srgbRed: 0.196, green: 0.192, blue: 0.176, alpha: 1),
                                   dark: NSColor(srgbRed: 0.176, green: 0.173, blue: 0.157, alpha: 1))
 
-    /// The front face's sockets: the moulded recess, and the darker mouth of
-    /// the socket sitting inside it. Both read as shadow, because an opening
-    /// into an empty case is what they are.
+    /// Back panel sockets: the recess and the darker opening inside it.
     static let portRecess = dynamic(light: NSColor(srgbRed: 0.404, green: 0.396, blue: 0.365, alpha: 1),
                                     dark: NSColor(srgbRed: 0.380, green: 0.373, blue: 0.341, alpha: 1))
     static let portMouth = dynamic(light: NSColor(srgbRed: 0.071, green: 0.067, blue: 0.059, alpha: 1),
                                    dark: NSColor(srgbRed: 0.059, green: 0.055, blue: 0.047, alpha: 1))
 
-    /// The line where the case's two shells meet, and the shadowed walls of
-    /// the key well. Both are seen, not lit: a groove and a recess.
+    /// The seam between the case shells, and the walls of the key well.
     static let caseSeam = dynamic(light: NSColor(srgbRed: 0.518, green: 0.506, blue: 0.463, alpha: 1),
                                   dark: NSColor(srgbRed: 0.494, green: 0.482, blue: 0.443, alpha: 1))
 
@@ -162,33 +121,27 @@ enum Theme {
     static let plate = dynamic(light: NSColor(srgbRed: 0.075, green: 0.071, blue: 0.063, alpha: 1),
                                dark: NSColor(srgbRed: 0.063, green: 0.059, blue: 0.051, alpha: 1))
 
-    /// The floor of the Apple logo pocket, and the beige the logo is moulded
-    /// in, a shade above it.
+    /// Floor of the Apple logo recess, and the slightly lighter logo itself.
     static let caseEmboss = dynamic(light: NSColor(srgbRed: 0.784, green: 0.769, blue: 0.710, alpha: 1),
                                     dark: NSColor(srgbRed: 0.769, green: 0.753, blue: 0.694, alpha: 1))
     static let caseEmbossFace = dynamic(light: NSColor(srgbRed: 0.871, green: 0.855, blue: 0.796, alpha: 1),
                                         dark: NSColor(srgbRed: 0.855, green: 0.839, blue: 0.780, alpha: 1))
 
-    /// Keycap plastic: Pantone Cool Gray 2 U. `capTop` is the top face's own
-    /// colour, with the sheen laid over it doing the modelling, and `capSkirt`
-    /// the wall below it.
+    /// Keycap plastic, Pantone Cool Gray 2 U: the top face and the wall below it.
     static let capTop = dynamic(light: NSColor(srgbRed: 0.796, green: 0.800, blue: 0.757, alpha: 1),
                                 dark: NSColor(srgbRed: 0.780, green: 0.784, blue: 0.741, alpha: 1))
     static let capSkirt = dynamic(light: NSColor(srgbRed: 0.635, green: 0.639, blue: 0.604, alpha: 1),
                                   dark: NSColor(srgbRed: 0.620, green: 0.624, blue: 0.588, alpha: 1))
 
-    /// The spacebar is moulded a shade darker than the alphas on this board.
+    /// The spacebar is a shade darker than the other keys on this board.
     static let spacebarTop = dynamic(light: NSColor(srgbRed: 0.729, green: 0.733, blue: 0.694, alpha: 1),
                                      dark: NSColor(srgbRed: 0.714, green: 0.718, blue: 0.678, alpha: 1))
     static let spacebarSkirt = dynamic(light: NSColor(srgbRed: 0.573, green: 0.576, blue: 0.545, alpha: 1),
                                        dark: NSColor(srgbRed: 0.557, green: 0.561, blue: 0.529, alpha: 1))
 
-    /// Legend ink. The board prints in a cool near-black that goes slate
-    /// against the plastic; a warm brown ink looks painted on rather than
-    /// moulded.
+    /// Legend ink, a cool near-black. A warm brown looks painted on.
     static let capInk = Color(red: 0.243, green: 0.251, blue: 0.278)
-    /// A selected cap. Amber separates from every other cap by hue rather than
-    /// by darkness, which keeps it legible without introducing a second black.
+    /// A selected cap. Amber stands out by hue, so the legend stays readable.
     static let selectedCapTop = Color(red: 0.898, green: 0.765, blue: 0.478)
     static let selectedCapSkirt = Color(red: 0.729, green: 0.573, blue: 0.290)
     static let selectedCapInk = Color(red: 0.239, green: 0.176, blue: 0.075)
@@ -200,14 +153,13 @@ enum Theme {
     static let sectionTitle = Font.system(size: 13, weight: .semibold)
     static let body = Font.system(size: 12)
     static let small = Font.system(size: 11)
-    /// Sidebar rows: a step above body, as macOS sidebars run larger than content.
+    /// A step above body, since macOS sidebars use larger text than content.
     static let sidebarRow = Font.system(size: 14)
-    /// The Keyboard pane's toolbar, sized to sit with the sidebar rows.
+    /// The Keyboard pane's toolbar, sized to match the sidebar rows.
     static let toolbar = Font.system(size: 13)
 
-    /// Geneva, the bitmap face that shipped with the Mac this keyboard came
-    /// with. Used where the period matters: keycap legends and small readouts.
-    /// Chicago was the System font but Apple has never shipped it.
+    /// Geneva, the original Mac's bitmap font. Chicago would fit better, but it
+    /// doesn't ship with macOS.
     static func retro(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         if NSFontManager.shared.availableFontFamilies.contains("Geneva") {
             return .custom("Geneva", fixedSize: size).weight(weight)
@@ -218,9 +170,7 @@ enum Theme {
     static let keycap = retro(11)
     static let readout = retro(11)
 
-    /// Helvetica, which is what is printed on an M0110's keycaps. The app's own
-    /// chrome stays on Geneva, so the board is lettered like the board rather
-    /// than like the app around it.
+    /// Helvetica, the font printed on real M0110 keycaps.
     static func capLegend(_ size: CGFloat) -> Font {
         if NSFontManager.shared.availableFontFamilies.contains("Helvetica") {
             return .custom("Helvetica", fixedSize: size)
@@ -228,7 +178,7 @@ enum Theme {
         return .system(size: size)
     }
 
-    /// Faint 50% stipple, the 1-bit stand-in for grey, used here as grain.
+    /// 50% checkerboard pattern, used as faint grain.
     static let stipple: ImagePaint = {
         let image = NSImage(size: NSSize(width: 2, height: 2))
         image.lockFocus()
@@ -244,9 +194,7 @@ enum Theme {
 
 /// The stacked hairlines System 1 drew across its title bars.
 struct RacingStripes: View {
-    /// One ink for every dot. Without one they run through the triad, left to
-    /// right, so the stripes fade out of the prism the way they fade out of
-    /// black.
+    /// One color for every dot. If nil, the dots use the prism colors left to right.
     var colour: Color?
     @Environment(\.prism) private var prism
 
@@ -263,10 +211,8 @@ struct RacingStripes: View {
         .frame(height: 13)
     }
 
-    /// Two-point stripes fading out to the right, Atkinson-dithered to one
-    /// bit the way MacPaint printed a grey: each pixel passes six eighths of
-    /// its error on to the six neighbours ahead of it, and the rest is lost,
-    /// which keeps the light end crisp and the dark end clean.
+    /// Stripes fading out to the right, Atkinson-dithered to 1 bit like MacPaint.
+    /// Each pixel passes 6/8 of its error to six neighbours and drops the rest.
     private static func dots(width: Int, height: Int) -> [(Int, Int)] {
         guard width > 0, height > 0 else { return [] }
         var level = [Double](repeating: 0, count: width * height)
@@ -294,9 +240,8 @@ struct RacingStripes: View {
     }
 }
 
-/// A page title printed the way the stripes beside it are: one bit per
-/// point, Atkinson-dithered from solid at the top of the letters to half
-/// tone at their feet.
+/// A page title Atkinson-dithered to 1 bit, like the stripes next to it. It goes
+/// from solid at the top of the letters to half tone at the bottom.
 struct DitheredTitle: View {
     let text: String
 
@@ -314,7 +259,7 @@ struct DitheredTitle: View {
 
     @MainActor private static func render(_ text: String) -> CGImage? {
         if let image = cache[text] { return image }
-        // The letters at one pixel per point, as a coverage mask.
+        // Render at 1 pixel per point and use the alpha as coverage.
         let renderer = ImageRenderer(content: Text(text).font(Theme.pageTitle)
                                                        .foregroundStyle(.white))
         renderer.scale = 1
@@ -366,10 +311,8 @@ struct DitheredTitle: View {
     }
 }
 
-/// The window's ground: near-black with prismorphism's sun-tracking ambient
-/// in it, `pm-ambient-chronos`. Three soft glows of the triad, the strongest
-/// centred where the sun is, so it climbs the window through the morning and
-/// sets at the far edge, and all of them dim, though not out, at night.
+/// The window background: near-black with three soft glows, like prismorphism's
+/// `pm-ambient-chronos`. The brightest glow follows the sun's position.
 struct ThemeBackground: View {
     @Environment(\.prism) private var prism
 
@@ -402,17 +345,13 @@ struct ThemeBackground: View {
 }
 
 
-/// A glass card with the triad's shine along its top edge, after
-/// prismorphism's `pm-glass pm-prismatic-shine`.
+/// A glass card with a prism shine along its top edge, based on prismorphism's
+/// `pm-glass pm-prismatic-shine`.
 struct Panel<Content: View>: View {
     var padding: CGFloat = 16
-    /// Top and bottom inset, when it should differ from the sides. The board
-    /// pane uses this: its surround reads as part of the keyboard's framing,
-    /// and an even inset around a board that is three times wider than tall
-    /// leaves the top and bottom looking pinched.
+    /// Top and bottom inset, if different from the sides. The board pane sets
+    /// it because an even inset makes the wide board look pinched.
     var verticalPadding: CGFloat?
-    /// Surface colour. Defaults to glass; the board pane overrides it so the
-    /// drawn keyboard sits in a beige surround of its own family.
     var surface: Color = Theme.glass
     var stroke: Color = Theme.glassStroke
     @ViewBuilder var content: () -> Content
@@ -427,8 +366,7 @@ struct Panel<Content: View>: View {
                     .overlay(PrismWash(shape: RoundedRectangle(cornerRadius: Theme.corner,
                                                                style: .continuous)))
                     .overlay(
-                        // 1-bit grain, barely there: frosted glass, but glass
-                        // from 1984.
+                        // Faint 1-bit grain.
                         RoundedRectangle(cornerRadius: Theme.corner, style: .continuous)
                             .fill(Theme.stipple)
                             .opacity(0.045)
@@ -445,8 +383,8 @@ struct Panel<Content: View>: View {
 /// Pill button, subtle until hovered.
 struct PillButtonStyle: ButtonStyle {
     var prominent = false
-    /// Corner radius. The default is past half any button's height, which
-    /// SwiftUI clamps, so it draws a capsule; a small one gives a keycap.
+    /// The default is over half any button's height, which SwiftUI clamps to a
+    /// capsule. A small value gives a keycap shape.
     var cornerRadius: CGFloat = 100
     var verticalPadding: CGFloat = 5
     var font: Font = Theme.small.weight(.medium)
@@ -464,8 +402,7 @@ struct PillButtonStyle: ButtonStyle {
             .background {
                 if prominent { PrismSelection(shape: shape) } else { shape.fill(Theme.key) }
             }
-            // A faint edge: at full strength the outline read harsher than the
-            // fill it surrounds.
+            // Faint outline, since full strength looks harsher than the fill.
             .overlay(shape.strokeBorder(prominent ? .clear : Theme.keyStroke.opacity(0.4), lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : (isEnabled ? 1 : 0.4))
     }
@@ -499,7 +436,7 @@ struct SegmentPills<T: Hashable>: View {
     }
 }
 
-/// True while rendering offscreen; `ImageRenderer` cannot size a `ScrollView`.
+/// True while rendering offscreen, because `ImageRenderer` can't size a `ScrollView`.
 private struct SnapshotKey: EnvironmentKey { static let defaultValue = false }
 
 extension EnvironmentValues {
@@ -510,16 +447,14 @@ extension EnvironmentValues {
 }
 
 struct ClassicScroll<Content: View>: View {
-    /// False lays the content out as it is, with no scroller and no rubber
-    /// band, for a page made to fit the window.
+    /// False skips the scroll view, for pages that fit the window.
     var scrolls = true
     @Environment(\.classicSnapshot) private var snapshot
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         if snapshot || !scrolls {
-            // No minimum: content taller than the window is cut off at the
-            // bottom rather than growing the window to fit.
+            // Content taller than the window gets cut off instead of growing the window.
             content().frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped()
         } else {
             ScrollView { content() }
@@ -527,11 +462,8 @@ struct ClassicScroll<Content: View>: View {
     }
 }
 
-/// Slider drawn in SwiftUI rather than using AppKit's.
-///
-/// Aqua's control does not match this palette, and `Slider` is AppKit-backed on
-/// macOS so `ImageRenderer` cannot rasterise it: offscreen snapshots showed it
-/// as a yellow "unsupported" bar.
+/// Slider drawn in SwiftUI. `Slider` is AppKit-backed on macOS, so it doesn't match
+/// the palette and `ImageRenderer` draws it as a yellow "unsupported" bar.
 struct ThemeSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
@@ -551,8 +483,7 @@ struct ThemeSlider: View {
                     .fill(Theme.key)
                     .overlay(Capsule().strokeBorder(Theme.keyStroke, lineWidth: 1))
                     .frame(height: track)
-                // The whole triad across whatever is filled, as prismorphism's
-                // progress bars draw it.
+                // Prism gradient across the filled part, like prismorphism's progress bars.
                 Capsule()
                     .fill(LinearGradient(colors: prism.marks, startPoint: .leading, endPoint: .trailing))
                     .frame(width: knob / 2 + usable * fraction, height: track)
@@ -637,11 +568,8 @@ struct ThemeSwitch: View {
     }
 }
 
-/// AppKit's blur, for the floating sidebar.
-///
-/// SwiftUI's materials sample the window's backing and, over this theme's
-/// near-black gradient, resolve to a flat grey. `NSVisualEffectView` in
-/// `.withinWindow` mode blurs what is behind it.
+/// AppKit blur for the floating sidebar. SwiftUI materials turn flat grey over
+/// this dark background, but `NSVisualEffectView` in `.withinWindow` mode blurs it.
 struct VisualEffectBackground: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .sidebar
     var blending: NSVisualEffectView.BlendingMode = .withinWindow

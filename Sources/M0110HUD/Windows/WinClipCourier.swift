@@ -1,28 +1,22 @@
 import CM0110Win
 import Foundation
 
-/// What is on the clipboard, as the courier needs it.
 enum ClipboardRead: Equatable {
-    /// Another program held the clipboard throughout: try again shortly.
+    /// Another program held the clipboard open. Try again shortly.
     case busy
-    /// A password manager marked it not to be recorded or synced.
     case concealed
     case nothing
-    /// UTF-8 with LF line endings.
     case text([UInt8])
     case png(Data)
 }
 
-/// The Windows clipboard, behind a protocol so the tests can stand in for it.
 protocol ClipboardAccess: AnyObject {
-    /// Moves on whenever anything is put on the clipboard.
     var sequence: UInt32 { get }
     func read() -> ClipboardRead
     func write(text: [UInt8]) -> Bool
     func write(image: Data) -> Bool
 }
 
-/// The real one, through CM0110Win.
 final class WindowsClipboard: ClipboardAccess {
     var sequence: UInt32 { m0110_clip_sequence() }
 
@@ -49,8 +43,7 @@ final class WindowsClipboard: ClipboardAccess {
         return m0110_clip_write_image(m0110_app_window(), bytes, UInt32(bytes.count)) != 0
     }
 
-    /// `content` made to fit in `budget` bytes, scaled and re-encoded as JPEG
-    /// if it does not already: ClipImage.shrink on the Mac.
+    /// Scales and re-encodes as JPEG to fit `budget` bytes, if needed. Same as ClipImage.shrink on the Mac.
     static func shrink(_ content: ClipContent, toFit budget: Int) -> ClipContent? {
         if content.data.count <= budget { return content }
         let bytes = [UInt8](content.data)
@@ -63,47 +56,31 @@ final class WindowsClipboard: ClipboardAccess {
     }
 }
 
-/// Decides what crosses between this PC's clipboard and the keyboard, in
-/// both directions: the Mac's ClipCourier, and `helper/PROTOCOL.md`'s
-/// receiver and source, without the network.
-///
-/// Text goes into the keyboard itself. An image, or text longer than the
-/// keyboard holds, goes as an OFFER with nowhere to fetch it from, and the
-/// other helper then asks for it to be sent through the keyboard instead: the
-/// fallback the protocol has for helpers that cannot reach each other. The
-/// same in reverse for a copy made on the other computer.
-///
-/// Runs on the app thread throughout.
+/// Moves clips between this PC's clipboard and the keyboard, like the Mac's ClipCourier
+/// minus the network (see helper/PROTOCOL.md). Short text goes into the keyboard. Images
+/// and long text go as an OFFER with no address, so the other side asks for them to be
+/// sent through the keyboard instead. App thread only.
 final class WinClipCourier {
-    /// The most sent through the keyboard, whatever it has room for: at the
-    /// few kilobytes a second the link manages, more is not worth the wait.
+    /// Cap on bytes sent through the keyboard. The link runs a few KB/s, so more is not worth the wait.
     static let inlineLimit = 40_000
-    /// The least a keyboard must hold for an OFFER to fit.
+    /// Minimum keyboard capacity for an OFFER to fit.
     static let minOpaque = 256
-    /// When to look at the clipboard after the keyboard saw a copy shortcut.
     static let pokeChecks: [TimeInterval] = [0.03, 0.1, 0.25]
-    /// How long a paste is held for a fetch, and how long the content is
-    /// waited for, as the protocol sets them for a helper with no network.
+    /// Hold and wait times the protocol sets for a helper with no network.
     static let soonFor: TimeInterval = 2.5
     static let inlineWait: TimeInterval = 91.5
     static let deliveryIdle: TimeInterval = 3
 
     // MARK: Wiring
 
-    /// Queues one frame for the keyboard.
     var send: (Data) -> Void = { _ in }
-    /// Queues a clip, in place of any clip still queued.
     var sendClip: (_ payload: [UInt8], _ flags: UInt8) -> Void = { _, _ in }
     var dropQueuedClip: () -> Void = {}
-    /// The longest frame the link takes in one write.
     var frameCap: () -> Int = { 20 }
     var keyboardIsOnUSB: () -> Bool = { false }
-    /// Runs `work` after `delay` on the app thread; returns a token for
-    /// `cancel`. The tests run a clock of their own.
     var schedule: (_ delay: TimeInterval, _ work: @escaping () -> Void) -> UInt32 = { Main.after($0, $1) }
     var cancel: (UInt32) -> Void = { Main.cancel($0) }
-    /// Makes an image fit the keyboard, off the app thread, and hands the
-    /// result back on it.
+    /// Fits an image off the app thread and calls `done` back on it.
     var shrink: (_ content: ClipContent, _ budget: Int, _ done: @escaping (ClipContent?) -> Void) -> Void = {
         content, budget, done in
         DispatchQueue.global(qos: .userInitiated).async {
@@ -120,8 +97,7 @@ final class WinClipCourier {
 
     private(set) var running = false
     private var lastSequence: UInt32
-    /// The change this made itself when it put a delivered clip on the
-    /// clipboard, so that clip is not sent straight back as a new copy.
+    /// The sequence number from writing a delivered clip, so that clip is not sent straight back.
     private var ownSequence: UInt32?
 
     /// From the keyboard's STATUS frame.
@@ -132,7 +108,6 @@ final class WinClipCourier {
     private var assembler = ClipAssembler()
     private var deliveryHeard = Date.distantPast
 
-    /// The latest copy made here, if it has to be asked for.
     private struct Offered {
         let id: [UInt8]
         let content: ClipContent
@@ -140,7 +115,6 @@ final class WinClipCourier {
     }
     private var offered: Offered?
 
-    /// A copy made on another computer, being asked for.
     private final class Fetch {
         let id: [UInt8]
         let offerCRC: UInt32
@@ -153,11 +127,10 @@ final class WinClipCourier {
         }
     }
     private var fetch: Fetch?
-    /// The copy whose fetch was abandoned because something was copied here.
+    /// ID of a fetch dropped because something was copied here.
     private var abandoned: [UInt8]?
 
-    /// A delivery is arriving or a fetch is running: the periodic HELLO waits,
-    /// since the keyboard takes one to mean a helper that has just started.
+    /// While true, the periodic HELLO waits, since the keyboard reads a HELLO as a fresh helper.
     var busy: Bool {
         fetch != nil || (assembler.active && now().timeIntervalSince(deliveryHeard) < Self.deliveryIdle)
     }
@@ -167,9 +140,8 @@ final class WinClipCourier {
         lastSequence = clipboard.sequence
     }
 
-    /// The keyboard has been told a helper is here.
     func start() {
-        // Only copies made from here on are carried.
+        // Only sync copies made from now on.
         lastSequence = clipboard.sequence
         running = true
     }
@@ -192,13 +164,12 @@ final class WinClipCourier {
 
         let read = clipboard.read()
         if read == .busy {
-            // Not the same as nothing being there: look again shortly.
+            // Busy is different from empty, so check again shortly.
             _ = schedule(0.1) { [weak self] in self?.checkClipboard() }
             return
         }
-        // Reading a format its owner had only promised makes the owner render
-        // it, and that moves the number on: taken again, so the reading is not
-        // mistaken for another copy.
+        // Reading a delayed-render format makes its owner render it, which bumps the
+        // sequence number. Re-read it so this read is not taken as a new copy.
         lastSequence = clipboard.sequence
 
         if let fetch {
@@ -251,8 +222,6 @@ final class WinClipCourier {
         (0..<count).map { _ in UInt8.random(in: .min ... .max) }
     }
 
-    /// An OFFER with no port and no addresses: the other helper cannot fetch
-    /// it, and asks for it through the keyboard instead.
     private func offer(_ content: ClipContent) {
         let id = Self.random(ClipMessage.idLength)
         offered = Offered(id: id, content: content)
@@ -264,7 +233,7 @@ final class WinClipCourier {
 
     private func answerWant(id: [UInt8]) {
         guard let current = offered, current.id == id else {
-            // Something has been copied here since.
+            // Something was copied here since.
             send(ClipWire.relay(ClipDatagram.gone(id: id).encoded(room: relayRoom())))
             return
         }
@@ -273,7 +242,6 @@ final class WinClipCourier {
         sendInline(current.content, id: id)
     }
 
-    /// Sends the content through the keyboard, cut down to what that takes.
     private func sendInline(_ content: ClipContent, id: [UInt8]) {
         let budget = min(maxOpaque, Self.inlineLimit) - ClipMessage.inlineOverhead
         let deliver: (ClipContent?) -> Void = { [weak self] fitted in
@@ -321,7 +289,7 @@ final class WinClipCourier {
                 log("clipboard: keyboard refused the clip (code \(frame[1]))")
             }
         case .poke:
-            // The keyboard saw Ctrl-C or Ctrl-X go by.
+            // The keyboard saw Ctrl+C or Ctrl+X.
             for delay in Self.pokeChecks {
                 _ = schedule(delay) { [weak self] in self?.checkClipboard() }
             }
@@ -359,8 +327,7 @@ final class WinClipCourier {
 
     private func accept(text bytes: [UInt8], crc: UInt32) {
         endFetch()
-        // Text that cannot be put on the clipboard is left unacknowledged:
-        // the keyboard then types it, which is the next best thing.
+        // If the text cannot go on the clipboard, leave it unacknowledged so the keyboard types it.
         guard place(ClipContent(kind: .text, data: Data(bytes))) == .placed else { return }
         send(ClipWire.ack(crc: crc))
         log("clipboard: took delivery of \(bytes.count) bytes")
@@ -397,8 +364,6 @@ final class WinClipCourier {
 
     // MARK: - Asking for a copy made elsewhere
 
-    /// There is no network to fetch over, so the copy is asked for through the
-    /// keyboard at once, and pastes are held meanwhile.
     private func startFetch(_ new: Fetch) {
         endFetch()
         fetch = new
@@ -443,8 +408,8 @@ final class WinClipCourier {
         }
     }
 
-    /// Tells the keyboard there is nothing more to wait for. The HOLD repeats
-    /// stop first: the keyboard would take one after the ACK as a new request.
+    /// Tells the keyboard to stop waiting. The HOLD repeats stop first, because the
+    /// keyboard would read a HOLD after the ACK as a new request.
     private func giveUp(_ fetch: Fetch, because reason: String) {
         endFetch()
         send(ClipWire.hold(ClipWire.holdOff))
@@ -463,8 +428,7 @@ final class WinClipCourier {
     private enum Placed { case placed, superseded, unusable }
 
     private func place(_ content: ClipContent) -> Placed {
-        // Something copied here since the last look is newer than whatever
-        // has just arrived, and must not be written over.
+        // A local copy since the last check is newer than this delivery, so do not overwrite it.
         if clipboard.sequence != lastSequence {
             checkClipboard()
             return .superseded
@@ -478,8 +442,7 @@ final class WinClipCourier {
             written = clipboard.write(image: content.data)
         }
         guard written else {
-            // Text left unplaced is typed by the keyboard instead; an image
-            // has no such fallback and is acknowledged all the same.
+            // Unplaced text is typed by the keyboard instead. Images have no fallback, so ack them anyway.
             return content.kind == .text ? .superseded : .unusable
         }
         ownSequence = clipboard.sequence

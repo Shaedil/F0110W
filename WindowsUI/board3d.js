@@ -1,21 +1,12 @@
-// The 3D board: the Mac's BoardStage (SceneKit) in three.js, from the same
-// model. One instance serves both the Keyboard pane, where the caps carry
-// legends and can be clicked, and the side panes' stage, where the camera
-// flies to the part each pane is about and the case turns to glass.
-//
-// The model's nodes keep Blender's names. Parts the Mac builds in code (the
-// battery gauge, the Soli module, the waves) are built in Blender's Z-up
-// coordinates inside a group that turns them to three.js's Y-up, so the
-// Mac's numbers carry over unchanged.
+// A three.js port of the Mac's BoardStage (SceneKit), using the same model. Parts the Mac
+// builds in code go inside a zUp() group, so the Mac's Z-up numbers work unchanged.
 
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 
 const D = Math.PI / 180;
 
-// ---- Easing and a small tween clock ----
-
-/** A CSS cubic-bezier(x1, y1, x2, y2) as a function of t. */
+/** Same curve as CSS cubic-bezier(x1, y1, x2, y2). */
 function bezier(x1, y1, x2, y2) {
   const sample = (a1, a2, t) => ((1 - 3 * a2 + 3 * a1) * t + (3 * a2 - 6 * a1)) * t * t + 3 * a1 * t;
   return (x) => {
@@ -35,7 +26,7 @@ const smooth = (t) => t * t * (3 - 2 * t);
 const easeIn = (t) => t * t;
 const easeOut = (t) => 1 - (1 - t) * (1 - t);
 
-// ---- Model-wide constants, from BoardStage ----
+// ---- Constants copied from BoardStage ----
 
 const POSES = {
   editor: { target: [0, -0.004, -0.014], yaw: 0, pitch: 52, distance: 0.76 },
@@ -49,12 +40,11 @@ const BATTERY_HALF_HEIGHT = 0.003;
 const FACE_INSET = { side: 0.0021, front: 0.0030, back: 0.0014 };
 const SOLI_SCALE = 0.55;
 const SOLI_CHIP_HEIGHT = 0.018 * SOLI_SCALE / 2 + 0.0012 + 0.0025 * SOLI_SCALE;
-/** CapFace's drawing scale: points per metre, and its render scale. */
+/** Cap face drawing scale (points per metre, as in the Mac's CapFace) and render scale. */
 const POINTS_PER_METRE = 10000;
 const FACE_RENDER_SCALE = 1.5;
 const UNIT = 0.0001846 * POINTS_PER_METRE;
 
-/** A group in which Blender's Z-up coordinates read as they do in Blender. */
 function zUp() {
   const g = new THREE.Group();
   g.rotation.x = -Math.PI / 2;
@@ -67,8 +57,7 @@ function css(name) {
 
 // ---- Materials ----
 
-/** The x-ray glass the Mac's shader modifier draws, as a patch on a
- *  standard material: rim-lit blue glass, mixed in by `xray`. */
+/** Patches a material to fade into the Mac's rim-lit blue x-ray glass as `xray` goes from 0 to 1. */
 function xrayable(material, haze = 0.03) {
   const m = material.clone();
   m.userData.xray = { value: 0 };
@@ -104,8 +93,7 @@ function matte(colour, roughness = 0.6) {
 
 // ---- Cap faces ----
 
-/** CapFace: the cap's top colour, a sheen, the legend, and a skirt-coloured
- *  border that the clamped texture stretches down the walls. */
+/** Draws a cap face. The clamped texture stretches the skirt-coloured border down the cap's sides. */
 function paintFace(canvas, face, { legend, selected, editable, spacebar }) {
   const w = Math.max(8, Math.round(face.width * POINTS_PER_METRE * FACE_RENDER_SCALE));
   const h = Math.max(8, Math.round(face.height * POINTS_PER_METRE * FACE_RENDER_SCALE));
@@ -159,9 +147,8 @@ function paintFace(canvas, face, { legend, selected, editable, spacebar }) {
   }
 }
 
-/** Texture coordinates laid over a cap's top face, as BoardStage does:
- *  u across, v from the back of the cap, which is the top of the image. In
- *  the glTF's Y-up mesh, Blender's y (front to back) is -z. */
+/** Maps the texture onto a cap's top face. v = 1 is the back of the cap (the top
+ *  row of the canvas, after flipY). In the Y-up mesh, Blender's y is -z. */
 function topFaceUVs(geometry) {
   const position = geometry.attributes.position;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -176,7 +163,6 @@ function topFaceUVs(geometry) {
   const uv = new Float32Array(position.count * 2);
   for (let i = 0; i < position.count; i++) {
     uv[i * 2] = (position.getX(i) - x0) / (x1 - x0);
-    // flipY puts the canvas's top row at v = 1: the back.
     uv[i * 2 + 1] = (-position.getZ(i) - y0) / (y1 - y0);
   }
   const faced = geometry.clone();
@@ -184,7 +170,7 @@ function topFaceUVs(geometry) {
   return { geometry: faced, face: { width: x1 - x0, height: y1 - y0 } };
 }
 
-// ---- Waves, as BoardStage's waveDomes ----
+// ---- Waves ----
 
 function ribbon(points, width) {
   const vertices = [];
@@ -236,8 +222,6 @@ function waveDomes() {
   return domes;
 }
 
-// ---- The board ----
-
 export class Board3D {
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -278,7 +262,7 @@ export class Board3D {
     this.raycaster = new THREE.Raycaster();
     this.loop = this.loop.bind(this);
     this.running = false;
-    /** Called with the picked cap, { tag, position }, when the board is clicked. */
+    /** Called with { tag, position } when a cap is clicked. */
     this.onPick = null;
     let down = null;
     this.canvas.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
@@ -291,8 +275,7 @@ export class Board3D {
   }
 
   lights() {
-    // SceneKit's intensities are in thousandths of its default light; three's
-    // physically based lights take π for the same strength.
+    // SceneKit intensities divided by 1000, times PI to match three.js's physical lights.
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.26 * Math.PI));
     const key = new THREE.DirectionalLight(0xffffff, 0.95 * Math.PI);
     key.position.set(-0.305, 0.841, 0.446);
@@ -316,7 +299,6 @@ export class Board3D {
     let top = root;
     while (top.parent && top.parent !== gltf.scene) top = top.parent;
     this.board.add(top);
-    // Centred on its bounding box, as the Mac's pivot does.
     top.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(top);
     const centre = box.getCenter(new THREE.Vector3());
@@ -325,7 +307,7 @@ export class Board3D {
     this.board.updateMatrixWorld(true);
     this.collect(root);
     this.board.updateMatrixWorld(true);
-    // Before the first focus: the Gestures stage is built with it.
+    // Must load before the first focus, because the Gestures stage uses the hand.
     await this.loadHand();
   }
 
@@ -357,7 +339,7 @@ export class Board3D {
     for (const name of ['Upper', 'Lower']) {
       const shell = this.byName(name);
       if (!shell) continue;
-      // Only the shell's own mesh: the keys and switches hang off Upper.
+      // Skip the keys and switches, which are also children of Upper.
       const meshes = shell.isMesh ? [shell] : shell.children.filter((c) => c.isMesh && !c.name.startsWith('Key_'));
       for (const mesh of meshes) {
         mesh.material = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).map((m) => {
@@ -379,7 +361,7 @@ export class Board3D {
 
     root.traverse((node) => {
       if (!node.name.startsWith('Key_')) return;
-      // A cap is a mesh named Key_<tag>, or a group of them.
+      // A cap is a mesh named Key_<tag> or a group of them, so skip meshes inside the group.
       if (node.parent?.name === node.name) return;
       const tag = node.name.slice(4);
       const mesh = node.isMesh ? node : node.children.find((c) => c.isMesh);
@@ -391,8 +373,7 @@ export class Board3D {
         if (faced) {
           mesh.geometry = faced.geometry;
           face = faced.face;
-          // Painted blank at its final size before the first upload: WebGL
-          // cannot refill a texture at a different size than it was made.
+          // Paint at full size before the first upload. WebGL cannot resize a texture in place.
           const canvas = document.createElement('canvas');
           paintFace(canvas, faced.face, { legend: null, selected: false, editable: true,
                                           spacebar: tag === '71_0' });
@@ -440,7 +421,6 @@ export class Board3D {
     this.applyPalette();
   }
 
-  /** The case and plate in the theme's colours. */
   applyPalette() {
     const shell = new THREE.Color(css('--case-flat'));
     for (const m of this.caseMaterials) m.color.copy(shell);
@@ -493,7 +473,6 @@ export class Board3D {
     const t = (now - a.start) / 1000;
     this.gauge.forEach((segment, i) => {
       let on = i < a.lit && t >= 0.5 + i * 0.09;
-      // The last lit segment blinks while the battery is low.
       if (on && this.gaugeLow && i === a.lit - 1) {
         const since = t - (0.5 + i * 0.09);
         on = Math.floor(since / 0.5) % 2 === 0;
@@ -567,7 +546,7 @@ export class Board3D {
     }
     const period = 3.2;
     const start = performance.now();
-    // Frames can be stamped a moment before `start`, so phases wrap into 0...1.
+    // Frame times can be a little earlier than `start`, so wrap phases into 0 to 1.
     const phase = (x) => ((x % 1) + 1) % 1;
     this.waves = (now) => {
       const t = phase((now - start) / 1000 / period);
@@ -579,8 +558,7 @@ export class Board3D {
     };
     if (this.handScene) {
       const hand = new THREE.Group();
-      // The meshes in the sculpt's own Y-up space, as SceneKit reads the
-      // USDZ: the importer's turn to Z-up, kept from its HandModel node.
+      // Same rotation as the HandModel node in the Mac's USDZ.
       const model = new THREE.Group();
       model.rotation.x = Math.PI / 2;
       hand.add(model);
@@ -592,8 +570,7 @@ export class Board3D {
       stage.add(hand);
       const thumb = model.getObjectByName('Thumb');
       if (thumb) {
-        // Pivoting at the thumb's first knuckle, so its tip slides along the
-        // index finger.
+        // Pivot at the first knuckle so the thumb tip slides along the index finger.
         const pivot = new THREE.Group();
         pivot.position.set(-0.017, -0.039, -0.012);
         thumb.position.set(0.017, 0.039, 0.012);
@@ -680,8 +657,7 @@ export class Board3D {
     const from = this.currentPose();
     const to = this.pose(focus);
     const exploded = XRAY_FOCUSES.has(focus);
-    // The case top lifts up and back, out of the way of a camera looking
-    // down from the front, and settles again on the way out.
+    // Lift the case top up and back, out of the camera's way.
     const upperFrom = this.upper?.position.clone();
     let upperTo = this.upperRest;
     if (this.upper && exploded) {
@@ -702,7 +678,7 @@ export class Board3D {
       });
       if (this.upper && upperFrom) this.upper.position.lerpVectors(upperFrom, upperTo, e);
     });
-    // Glass on the way in; solid only once the camera has mostly pulled out.
+    // Turn to glass right away, but turn solid only after the camera has mostly pulled out.
     const target = exploded ? 1 : 0;
     const solidifying = target < this.xray;
     const xFrom = this.xray;
@@ -737,7 +713,7 @@ export class Board3D {
 
   // ---- Keys ----
 
-  /** One keystroke on the cap with `tag`, `delay` seconds from now. */
+  /** Times are in seconds. */
   press(tag, { delay = 0, down = 0.07, up = 0.18 } = {}) {
     const key = this.keys.get(tag);
     if (!key) return;
@@ -756,11 +732,7 @@ export class Board3D {
     });
   }
 
-  /**
-   * Paints the caps: `slots` by position as the page has them, or null for
-   * blank caps. `selected` is a position; `canEdit` dims what cannot be
-   * rebound, as the 2D board does.
-   */
+  /** `slots` is keyed by position, or null for blank caps. Keys that cannot be rebound are dimmed. */
   async paint(slots, selected, canEdit, spacebarPosition = 71) {
     await this.ready;
     this.applyPalette();
@@ -785,7 +757,6 @@ export class Board3D {
     this.wake();
   }
 
-  /** The firmware position of the cap under a pointer event, or null. */
   pick(event) {
     const box = this.canvas.getBoundingClientRect();
     const pointer = new THREE.Vector2(((event.clientX - box.left) / box.width) * 2 - 1,
@@ -816,7 +787,7 @@ export class Board3D {
     if (box.width < 2 || box.height < 2) return;
     this.renderer.setSize(box.width, box.height, false);
     this.camera.aspect = box.width / box.height;
-    // SceneKit's field of view here is horizontal: 34 degrees across.
+    // SceneKit's field of view is horizontal (34 degrees). three.js's is vertical.
     this.camera.fov = 2 * Math.atan(Math.tan(17 * D) / this.camera.aspect) / D;
     this.camera.updateProjectionMatrix();
     this.wake();
@@ -828,8 +799,7 @@ export class Board3D {
     requestAnimationFrame(this.loop);
   }
 
-  /** Whether anything is moving, which keeps the loop running; otherwise it
-   *  draws once and sleeps until woken. */
+  /** True while something animates. When false, the loop draws once and stops until wake(). */
   get busy() {
     const gauge = this.gaugeAnimation && performance.now() - this.gaugeAnimation.start < 2000;
     return this.tweens.size > 0 || !!this.waves || !!this.rings || !!this.thumb || !!gauge

@@ -1,32 +1,24 @@
 import CoreBluetooth
 import Foundation
 
-/// Tracks whether the target keyboard is connected to the system, reads its
-/// battery level from the standard Battery Service, and follows which
-/// Bluetooth profile it types to.
-///
-/// Presence comes from polling `retrieveConnectedPeripherals`, which reports
-/// peripherals connected to *the system*; the keyboard's HID link belongs to
-/// macOS, not to this app. Battery and profile come from its own GATT link,
-/// opened alongside that one. That link dropping is also the first sign the
-/// keyboard has gone; `Presence` decides whether it really has.
+/// Tracks the keyboard's connection, battery level and active Bluetooth profile. Presence
+/// comes from polling `retrieveConnectedPeripherals`, since macOS owns the HID link. Battery
+/// and profile come from a second GATT link opened by this app. When that link drops,
+/// `Presence` decides whether the keyboard really left.
 final class BluetoothMonitor: NSObject {
     static let batteryService = CBUUID(string: "180F")
     static let batteryLevelChar = CBUUID(string: "2A19")
     static let hidService = CBUUID(string: "1812")
-    /// The firmware's profile report; see `config/src/profile_report.c` on the
-    /// firmware branch. Firmware without it simply never reports a profile.
+    /// The firmware's profile report (`config/src/profile_report.c`). Older firmware never sends it.
     static let profileService = CBUUID(string: "05B3A8EB-1160-4B0F-B56D-700006AAEFEB")
     static let profileStateChar = CBUUID(string: "05B3A8EC-1160-4B0F-B56D-700006AAEFEB")
-    /// The profiles' names, kept on the keyboard; see `ProfileNamesWire`.
+    /// Profile names stored on the keyboard; see `ProfileNamesWire`.
     static let profileNamesChar = CBUUID(string: "05B3A8ED-1160-4B0F-B56D-700006AAEFEB")
 
     private static let savedIdentifierKey = "peripheralIdentifier"
     private let pollInterval: TimeInterval = 2
     private let reconnectDelay: TimeInterval = 3
-    /// How long a connect waits for its battery reading before it is announced
-    /// without one. The read normally lands within 200 ms of the keyboard
-    /// being seen.
+    /// How long a connect waits for its battery reading. The read usually arrives within 200 ms.
     private let batteryWait: TimeInterval = 1.5
 
     private var central: CBCentralManager!
@@ -34,57 +26,40 @@ final class BluetoothMonitor: NSObject {
     private var peripheral: CBPeripheral?
     private var presence: Presence
     private var linkPending = false
-    /// True until the first presence poll completes, so a keyboard that was
-    /// already connected at launch can be reported as pre-existing.
+    /// True until the first poll, so a keyboard already connected at launch is reported as such.
     private var awaitingFirstPoll = true
-    /// A connect seen but not yet announced, waiting on the battery read. Holds
-    /// the at-launch flag `onConnect` will carry.
+    /// A connect waiting on its battery read. Holds the at-launch flag for `onConnect`.
     private var pendingConnect: Bool?
     private var batteryTimeout: DispatchWorkItem?
-    /// Nil on firmware that does not keep names.
+    /// Nil on firmware that does not store names.
     private var namesChar: CBCharacteristic?
-    /// The profile report's names counter, last heard; a change means a name
-    /// changed and is read again.
+    /// Names counter from the profile report. A change means the names must be read again.
     private var namesGeneration: UInt8?
-    /// Name writes sent and not yet answered, oldest first. CoreBluetooth
-    /// answers writes to one characteristic in order.
+    /// Writes not yet answered, oldest first. CoreBluetooth answers writes to one
+    /// characteristic in order.
     private var namesInFlight: [ProfileNameSync.Write] = []
-    /// The profile that is this computer, as reported over the current link.
-    /// A computer names only its own profile, so this is never carried over
-    /// from an earlier link: the computer may have been paired to another
-    /// profile since.
+    /// This computer's profile, as reported over the current link. Not carried over between
+    /// links, since the computer may have been paired to another profile in between.
     private(set) var reportedOwn: Int?
 
     private let config: Config
     private(set) var battery: Int?
-    /// The name the device actually reports, which is what macOS shows in
-    /// Bluetooth settings. Falls back to the configured match string.
+    /// The name the device reports (what macOS shows in Bluetooth settings), or the configured name.
     private(set) var displayName: String
 
-    /// Fires when the keyboard appears, with the device's name and the battery
-    /// level read on this connect. It waits for that read, up to `batteryWait`,
-    /// and passes nil if the read has not landed by then; it never passes a
-    /// level from an earlier connect. The flag is true when the keyboard was
-    /// already connected at launch rather than having just connected.
+    /// Name, this connect's battery level (nil if not read within `batteryWait`, never an
+    /// old level), and whether the keyboard was already connected at launch.
     var onConnect: ((String, Int?, Bool) -> Void)?
     var onDisconnect: ((String) -> Void)?
-    /// Fires on every fresh battery reading.
     var onBattery: ((String, Int) -> Void)?
-    /// Fires on every profile report: the profile the keyboard types to, and
-    /// the one that is this computer (nil if it is not bonded to one), both
-    /// 0-based. Sent on every switch and sometimes when nothing moved, so the
-    /// receiver compares with what it last heard.
+    /// Active profile and this computer's (nil if not bonded), 0-based. May repeat unchanged.
     var onProfile: ((String, Int, Int?) -> Void)?
-    /// Fires on every read of the profiles' names, one per profile, "" where
-    /// none was given, and which of them the keyboard read from the device.
+    /// One name per profile ("" if unset), plus which names the keyboard read from the device.
     var onNames: (([String], Set<Int>) -> Void)?
-    /// Fires when the keyboard answers a name write: whether it took it.
+    /// The Bool is whether the keyboard accepted the write.
     var onNameWritten: ((ProfileNameSync.Write, Bool) -> Void)?
 
-    /// Whether names can be written now: the link is up and the firmware
-    /// keeps them.
     var canWriteNames: Bool { namesChar != nil && peripheral?.state == .connected }
-    /// Whether name writes are still waiting on the keyboard's answer.
     var isWritingNames: Bool { !namesInFlight.isEmpty }
 
     func write(_ name: ProfileNameSync.Write) {
@@ -100,7 +75,6 @@ final class BluetoothMonitor: NSObject {
         p.readValue(for: ch)
     }
 
-    /// Our link is gone, so is everything learnt over it.
     private func forgetLink() {
         namesChar = nil
         namesGeneration = nil
@@ -132,7 +106,7 @@ final class BluetoothMonitor: NSObject {
 
     private func matches(_ p: CBPeripheral) -> Bool {
         if let name = p.name, name == config.deviceName { return true }
-        // Name can come back nil; fall back to the identifier we matched before.
+        // The name can be nil, so fall back to the saved identifier.
         if let saved = UserDefaults.standard.string(forKey: Self.savedIdentifierKey) {
             return p.identifier.uuidString == saved
         }
@@ -168,8 +142,7 @@ final class BluetoothMonitor: NSObject {
             battery = nil
             forgetLink()
             if pendingConnect != nil {
-                // Gone before the connect was announced: there is nothing to
-                // take back, so say nothing either way.
+                // Left before the connect was announced, so say nothing.
                 cancelPendingConnect()
                 return
             }
@@ -186,23 +159,19 @@ final class BluetoothMonitor: NSObject {
             break
         }
 
-        // Still here, or back: make sure our own link is up.
         if presence.isPresent, let p = match {
             if peripheral == nil { peripheral = p; p.delegate = self }
             openLink()
         }
     }
 
-    /// Poll once more as a grace period ends, rather than up to a poll
-    /// interval after it.
+    /// Polls right when the grace period ends instead of up to one poll interval later.
     private func checkPresence(at time: Date) {
         let delay = max(0, time.timeIntervalSinceNow) + 0.05
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.poll() }
     }
 
-    /// Hold the connect until this connect's battery read lands. Announcing at
-    /// once meant announcing with the level from the last time the keyboard
-    /// was here, which can be days old, and correcting it a moment later.
+    /// Holds the connect until its battery read arrives, so the HUD never shows a stale level.
     private func awaitBattery(isInitial: Bool) {
         pendingConnect = isInitial
         let work = DispatchWorkItem { [weak self] in
@@ -214,7 +183,6 @@ final class BluetoothMonitor: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + batteryWait, execute: work)
     }
 
-    /// Fire the held connect, if there is one.
     private func announceConnect(battery: Int?) {
         guard let isInitial = pendingConnect else { return }
         cancelPendingConnect()
@@ -227,8 +195,6 @@ final class BluetoothMonitor: NSObject {
         batteryTimeout = nil
     }
 
-    /// Open our own GATT connection so we can read and subscribe to BAS and
-    /// the profile report.
     private func openLink() {
         guard let p = peripheral, !linkPending else { return }
         guard p.state != .connected && p.state != .connecting else {
@@ -242,7 +208,6 @@ final class BluetoothMonitor: NSObject {
 
     private static let services = [batteryService, profileService]
 
-    /// The characteristics wanted from each service.
     private static func characteristics(for service: CBUUID) -> [CBUUID] {
         switch service {
         case batteryService: return [batteryLevelChar]
@@ -263,16 +228,15 @@ final class BluetoothMonitor: NSObject {
         }
     }
 
-    /// Both 0-based; `own` is nil when this computer is not bonded to any
-    /// profile. Later firmware may append fields, which are ignored.
+    /// Byte 0 is the active profile, byte 1 this computer's (0xFF if not bonded), both 0-based.
+    /// Extra bytes from newer firmware are ignored.
     static func parseProfileState(_ data: Data) -> (active: Int, own: Int?)? {
         guard data.count >= 2 else { return nil }
         let bytes = [UInt8](data.prefix(2))
         return (Int(bytes[0]), bytes[1] == 0xFF ? nil : Int(bytes[1]))
     }
 
-    /// The third byte, which goes up whenever a name changes. Nil from
-    /// firmware that does not keep names.
+    /// Byte 2 goes up whenever a name changes. Nil on firmware that does not store names.
     static func parseNamesGeneration(_ data: Data) -> UInt8? {
         data.count >= 3 ? data[data.startIndex + 2] : nil
     }
@@ -317,8 +281,8 @@ extension BluetoothMonitor: CBCentralManagerDelegate {
         forgetLink()
         log("GATT link down: \(error?.localizedDescription ?? "clean")")
         guard presence.isPresent else { return }
-        // Usually the keyboard going, but our link can also drop on its own,
-        // so this only starts the clock and polling decides.
+        // Usually the keyboard leaving, but the link can also drop by itself, so this only
+        // starts the grace timer and polling decides.
         if case .leaving(let until)? = presence.linkDropped(at: Date()) {
             log("keyboard may have gone; checking again in \(presence.grace)s")
             checkPresence(at: until)
@@ -382,8 +346,7 @@ extension BluetoothMonitor: CBPeripheralDelegate {
             log("keyboard refused the name for Profile \(name.index + 1): \(error.localizedDescription)")
         }
         onNameWritten?(name, error == nil)
-        // The keyboard's answer can differ from what was sent, as when it
-        // numbers a name, so the names are read back rather than assumed.
+        // The keyboard may change a name (for example by numbering it), so read them back.
         if namesInFlight.isEmpty { readNames() }
     }
 
@@ -406,16 +369,14 @@ extension BluetoothMonitor: CBPeripheralDelegate {
             guard let data = characteristic.value, let report = Self.parseProfileState(data) else {
                 return log("profile report malformed")
             }
-            // Numbered from 1 here, as Settings names them; the raw bytes
-            // are 0-based.
+            // Logged 1-based to match Settings. The raw bytes are 0-based.
             log("profile report: Profile \(report.active + 1) active; this computer is "
                 + (report.own.map { "Profile \($0 + 1)" } ?? "not bonded to one")
                 + " (raw \(data.prefix(2).map { String(format: "%02x", $0) }.joined(separator: " ")))")
             reportedOwn = report.own
             onProfile?(displayName, report.active, report.own)
             if let generation = Self.parseNamesGeneration(data), generation != namesGeneration {
-                // The first report only sets the counter; discovery reads
-                // the names itself.
+                // The first report only sets the counter, since discovery reads the names itself.
                 if namesGeneration != nil { readNames() }
                 namesGeneration = generation
             }
@@ -427,7 +388,7 @@ extension BluetoothMonitor: CBPeripheralDelegate {
         guard (0...100).contains(level) else { return log("battery out of range: \(raw)") }
         battery = level
         log("battery \(level)%")
-        // The first reading on a connect is what the connect was waiting for.
+        // The held connect was waiting for this reading.
         announceConnect(battery: level)
         onBattery?(displayName, level)
     }

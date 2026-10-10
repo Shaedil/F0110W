@@ -1,7 +1,5 @@
-// The stage to the right of the side panes: the 3D board, turned to show
-// the part each pane is about, with a caption. Settings' Popup tab shows the
-// popup preview in its place. Where WebGL is missing, a flat drawing of the
-// board stands in.
+// The 3D board next to the side panes, turned to show the part each pane is
+// about. Without WebGL it shows the flat drawing instead.
 
 import { drawBoard } from './board2d.js';
 import { h } from './ui.js';
@@ -50,8 +48,7 @@ export class Stage {
     drawBoard(this.view, { board: this.board, slots: null, selected: null, plain: true, width });
   }
 
-  /** Which part of the board to show: editor, popup, gestures, battery,
-   *  radio, or null for no stage. */
+  /** One of editor, popup, gestures, battery, radio, or null to hide the stage. */
   focus(name) {
     this.focusName = name;
     this.column.hidden = name == null;
@@ -76,7 +73,6 @@ export class Stage {
   }
 }
 
-/** BoardStage's battery line. */
 function batteryDetail(app) {
   const device = app.state?.device;
   const settings = app.state?.settings ?? { lowThreshold: 20, rearmThreshold: 30 };

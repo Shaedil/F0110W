@@ -24,8 +24,8 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(ProfileNamesWire.parse(data), ["Desk", "", "Café"])
     }
 
-    /// After the names, a bit per profile whose name the keyboard read from
-    /// the device itself; firmware from before it sends no such byte.
+    /// After the names comes one bit per profile whose name came from the
+    /// device. Older firmware leaves this byte out.
     func testReadsWhichNamesCameFromTheDevice() {
         let names: [UInt8] = [1, 3, 4] + Array("Desk".utf8) + [0, 2] + Array("S9".utf8)
         XCTAssertEqual(ProfileNamesWire.fromDevice(Data(names + [0b100])), [2])
@@ -48,7 +48,7 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(ProfileNamesWire.write(.auto, index: 0, name: ""), Data([2, 0]))
     }
 
-    /// Names are cut to what the keyboard keeps, never inside a character.
+    /// Names are trimmed to the keyboard's limit without splitting a character.
     func testCleanFitsTheKeyboard() {
         XCTAssertEqual(ProfileNamesWire.clean("  Desk\t\n "), "Desk")
         XCTAssertEqual(ProfileNamesWire.clean(String(repeating: "a", count: 30)),
@@ -81,7 +81,6 @@ final class ProfileNameSyncTests: XCTestCase {
             [write(.auto, 1, "MacBook Air M4")])
     }
 
-    /// A profile called "Profile N" is as good as unnamed.
     func testReplacesThePlaceholder() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["", "Profile 2"], pending: [:], own: 1,
@@ -100,7 +99,6 @@ final class ProfileNameSyncTests: XCTestCase {
             [])
     }
 
-    /// Without knowing which profile is this computer it names nothing.
     func testNoOwnProfileNoName() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["", ""], pending: [:], own: nil,
@@ -112,8 +110,7 @@ final class ProfileNameSyncTests: XCTestCase {
             [], "a profile the keyboard does not have")
     }
 
-    /// A computer that is not one of the keyboard's profiles cannot name
-    /// anything, so its renames wait rather than being refused.
+    /// Renames wait until this computer's profile is known. They are not dropped.
     func testNothingSentUntilOwnProfileKnown() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["", ""], pending: [1: "TV"], own: nil,
@@ -129,7 +126,6 @@ final class ProfileNameSyncTests: XCTestCase {
             [write(.set, 0, "New"), write(.set, 2, "TV")])
     }
 
-    /// Clearing this computer's name hands it back its own.
     func testClearingOwnNameRenamesIt() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["Work"], pending: [0: ""], own: 0,
@@ -137,8 +133,7 @@ final class ProfileNameSyncTests: XCTestCase {
             [write(.set, 0, ""), write(.auto, 0, "Windows 11 PC")])
     }
 
-    /// The keyboard named this computer after itself before this app did:
-    /// that is a stand-in, which this computer's own name replaces.
+    /// A name the keyboard read from the device is replaced by this app's name.
     func testReplacesTheDevicesOwnName() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["Galaxy S9", "DESKTOP-7F3K2"], pending: [:], own: 1,
@@ -150,7 +145,7 @@ final class ProfileNameSyncTests: XCTestCase {
             [], "the phone's is left to the phone")
     }
 
-    /// A rename made here wins, even one that reads the same as the device's.
+    /// A rename made here wins, even if it matches the device's name.
     func testRenameHereBeatsTheDevicesName() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["DESKTOP-7F3K2"], pending: [0: "DESKTOP-7F3K2"],
@@ -179,7 +174,7 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(ProfileNames.name(for: 1, in: defaults), "Profile 2")
     }
 
-    /// A rename on its way to the keyboard is not undone by an older read.
+    /// A pending rename is not undone by an older read from the keyboard.
     func testStoreKeepsARenameUntilAnswered() {
         let store = ProfileNameStore(defaults: defaults)
         store.edit(0, "Studio")
@@ -193,8 +188,7 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(store.local(count: 1), ["Studio"])
     }
 
-    /// A rename to what the keyboard already has is never sent, so it is
-    /// settled by the read instead of waiting forever.
+    /// A rename to the name the keyboard already has is never sent, so the read clears it.
     func testStoreSettlesARenameTheKeyboardHas() {
         let store = ProfileNameStore(defaults: defaults)
         store.edit(0, " Desk ")
@@ -206,7 +200,6 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(store.local(count: 1), ["Renamed elsewhere"])
     }
 
-    /// An answer to an earlier rename does not drop a later one.
     func testStoreKeepsANewerRename() {
         let store = ProfileNameStore(defaults: defaults)
         store.edit(0, "Stu")
@@ -255,7 +248,6 @@ final class ProfileNameSyncTests: XCTestCase {
         XCTAssertEqual(DeviceName.windows(build: 19045), "Windows 10 PC")
     }
 
-    /// This Mac's name fits the keyboard with room for a number.
     func testThisMacsNameFits() {
         let name = DeviceName.current()
         XCTAssertFalse(name.isEmpty)

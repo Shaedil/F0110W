@@ -1,6 +1,5 @@
-// Settings' preview: the corner of a Windows desktop with the popup arriving,
-// holding and leaving at the current settings, through the Mac's three
-// samples. The popup is drawn as the Windows HUD draws itself (HUDRaster).
+// Settings preview: the popup on a corner of a Windows desktop, using the
+// current settings. It is drawn the same way as HUDRaster in the Windows HUD.
 
 import { h } from './ui.js';
 
@@ -12,7 +11,7 @@ const ROWS = [
   [-100, 98, 149, 818, 140, 95],
 ];
 
-/** The HUD's little M0110, as HUDArt.board draws it. */
+/** The small M0110 drawing, copied from HUDArt.board. */
 function boardGlyph(width) {
   const unit = width / 1580;
   const height = 580 * unit;
@@ -84,7 +83,7 @@ export class PopupPreview {
     if (active) this.timer = setTimeout(() => this.play(), 700);
   }
 
-  update() { /* The next sample picks the settings up. */ }
+  update() { /* The next sample reads the new settings. */ }
 
   settings() {
     const base = this.app.state?.settings ?? { scale: 1, insetX: 12, insetY: 12, hudDuration: 7, lowThreshold: 20 };
@@ -107,7 +106,6 @@ export class PopupPreview {
     popup.style.opacity = 0;
     popup.style.transform = `translateX(${26 * s.scale}px)`;
     this.desk.replaceChildren(popup);
-    // Shrink the whole corner if the popup would not fit in it.
     const room = this.desk.clientWidth;
     const needed = popup.offsetWidth + s.insetX + 8;
     this.desk.style.zoom = needed > room ? room / needed : 1;

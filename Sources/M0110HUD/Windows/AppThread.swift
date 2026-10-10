@@ -1,9 +1,8 @@
 import CM0110Win
 import Foundation
 
-/// The app thread's work queue and timers, run by the Win32 message loop in
-/// CM0110Win. Stands in for the main dispatch queue, which nothing drains on
-/// Windows while a Win32 loop owns the thread.
+/// Work queue and timers for the app thread, driven by the Win32 message loop. Used
+/// instead of the main dispatch queue, which nothing drains while a Win32 loop owns the thread.
 enum Main {
     private static let lock = NSLock()
     private static var queued: [() -> Void] = []
@@ -18,7 +17,7 @@ enum Main {
         m0110_app_wake()
     }
 
-    /// Runs `work` once, `seconds` from now. App thread only.
+    /// One-shot timer. App thread only.
     @discardableResult
     static func after(_ seconds: Double, _ work: @escaping () -> Void) -> UInt32 {
         let id = nextTimer
@@ -34,7 +33,6 @@ enum Main {
         m0110_timer_stop(id)
     }
 
-    /// Wired to CM0110Win's callbacks.
     static func drain() {
         lock.lock()
         let work = queued
@@ -47,23 +45,21 @@ enum Main {
         timers.removeValue(forKey: id)?()
     }
 
-    /// Seconds on a clock that only goes forward.
+    /// Monotonic seconds.
     static var now: Double { ProcessInfo.processInfo.systemUptime }
 }
 
 extension String {
-    /// NUL-terminated UTF-16, as the C layer takes strings.
+    /// NUL-terminated UTF-16 for the C layer.
     var wide: [UInt16] { Array(utf16) + [0] }
 
-    /// A NUL-terminated UTF-16 buffer the C layer filled in.
     init(wide buffer: [UInt16]) {
         self.init(decoding: buffer.prefix { $0 != 0 }, as: UTF16.self)
     }
 }
 
-/// Timestamped lines for --verbose, as the Mac app prints them. Every line
-/// is also kept among the last few, which hang.log shows when the app stops
-/// answering.
+/// Prints a timestamped line with --verbose. Every line also goes to the trace
+/// buffer that hang.log shows.
 func log(_ message: String, verbose: Bool) {
     m0110_trace(message)
     guard verbose else { return }
@@ -72,7 +68,6 @@ func log(_ message: String, verbose: Bool) {
     print("[\(f.string(from: Date()))] \(message)")
 }
 
-/// A Win32 or HRESULT code as Windows prints it.
 func hex(_ code: Int32) -> String {
     String(format: "0x%08X", UInt32(bitPattern: code))
 }

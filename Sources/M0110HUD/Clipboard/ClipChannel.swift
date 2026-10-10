@@ -2,33 +2,26 @@ import CryptoKit
 import Foundation
 import Network
 
-/// The sealed record stream content travels in between two helpers; see "The
-/// stream" in `helper/PROTOCOL.md`.
-///
-/// Each record is `last:u8 n:u32 sealed[n]`, sealed with ChaCha20-Poly1305
-/// under the copy's one-time key. The record's number is the nonce, and its
-/// `last` byte is authenticated, so records cannot be reordered, replayed or
-/// cut off without the stream failing to open.
+/// Encrypted record stream between helpers (see "The stream" in `helper/PROTOCOL.md`).
+/// Each record is `last:u8 n:u32 sealed[n]`, sealed with ChaCha20-Poly1305 under
+/// the copy's one-time key. The nonce is the record number and `last` is
+/// authenticated, so reordered, replayed or cut-off records fail to open.
 enum ClipStream {
     static let chunk = 65536
     static let tagLength = 16
     static let headerLength = 5
-    /// More than this is refused, so a peer cannot make the app buffer without
-    /// bound.
+    /// Bigger content is refused so a peer cannot make the app buffer without limit.
     static let maxContent = 256 << 20
-    /// What the receiver sends back once it has opened the final record. A
-    /// connection that merely closes says nothing about whether the content
-    /// was taken.
+    /// Sent back after the final record opens. A plain close does not prove delivery.
     static let taken: UInt8 = 1
 
     private static func nonce(_ counter: UInt64) -> ChaChaPoly.Nonce {
         var bytes = [UInt8](repeating: 0, count: 4)
         bytes += (0..<8).map { UInt8((counter >> (8 * UInt64($0))) & 0xFF) }
-        // Twelve bytes is the one length the initialiser accepts.
+        // Nonce(data:) only accepts 12 bytes, so this cannot throw.
         return try! ChaChaPoly.Nonce(data: bytes)
     }
 
-    /// Every record of `content`, concatenated.
     static func seal(_ content: Data, id: [UInt8], key: [UInt8]) -> Data {
         let key = SymmetricKey(data: key)
         var out = Data()
@@ -39,8 +32,7 @@ enum ClipStream {
             let end = min(offset + chunk, content.count)
             let last: UInt8 = end == content.count ? 1 : 0
             let piece = content.subdata(in: (content.startIndex + offset)..<(content.startIndex + end))
-            // Sealing only fails for a malformed key or nonce, and both are
-            // made here.
+            // Sealing only fails for a bad key or nonce, and both are made here.
             let box = try! ChaChaPoly.seal(piece, using: key, nonce: nonce(counter),
                                            authenticating: id + [last])
             let sealed = box.ciphertext + box.tag
@@ -55,7 +47,6 @@ enum ClipStream {
         return out
     }
 
-    /// Opens records as they arrive.
     struct Opener {
         private let key: SymmetricKey
         private let id: [UInt8]
@@ -69,8 +60,7 @@ enum ClipStream {
             self.limit = limit
         }
 
-        /// The sealed length a record header announces, or nil if it is not
-        /// one a sender following the format would write.
+        /// Sealed length from a record header, or nil if the header is invalid.
         static func sealedLength(header: Data) -> Int? {
             let bytes = [UInt8](header)
             guard bytes.count == headerLength, bytes[0] <= 1 else { return nil }
@@ -78,7 +68,6 @@ enum ClipStream {
             return (tagLength...(chunk + tagLength)).contains(length) ? length : nil
         }
 
-        /// Adds a record's content. Returns false if it does not open.
         mutating func open(last: UInt8, sealed: Data) -> Bool {
             guard sealed.count >= tagLength,
                   content.count + sealed.count - tagLength <= limit,
@@ -96,46 +85,35 @@ enum ClipStream {
     }
 }
 
-/// The network side of passing content between helpers: one listening port,
-/// and the connections made to another helper's.
-///
-/// Whoever connects says which copy it is about and which way the content is
-/// to flow, so that either computer can be the one that accepts the
-/// connection. That matters when one of them sits behind a firewall that only
-/// lets it connect out.
-///
-/// Everything runs on the main queue, like the bridge that owns it.
+/// Network transfer between helpers: one listening port, plus outgoing
+/// connections. The side that connects names the copy and the direction, so
+/// either side can accept, which helps when one is behind a firewall that
+/// only allows outgoing connections. Runs on the main queue.
 final class ClipChannel {
     private static let magic: [UInt8] = Array("M0CB".utf8) + [1]
     private static let helloLength = magic.count + 1 + ClipMessage.idLength
     private static let roleGet: UInt8 = 1
     private static let rolePut: UInt8 = 2
 
-    /// How long a connection attempt gets before the next way is tried.
+    /// Time a connection attempt gets before the next route is tried.
     static let connectTimeout: TimeInterval = 1
-    /// How long a peer that has connected gets to say what for.
     var helloTimeout: TimeInterval = 5
-    /// How long a stream may make no progress, in either direction, before
-    /// it is given up on. A peer that hangs, or a network that drops without
-    /// a word, would otherwise hold a transfer open for ever.
+    /// A stream with no progress for this long is dropped, so a hung peer or
+    /// a silently dropped network cannot hold it open forever.
     var idleTimeout: TimeInterval = 10
-    /// The most content accepted in one stream.
     var maxContent = ClipStream.maxContent
-    /// How much of a stream is handed to the network at a time, which is how
-    /// often progress on it is seen.
+    /// Bytes per send. The idle timer resets after each one.
     private static let writePiece = 256 << 10
 
     private let log: (String) -> Void
     private var listener: NWListener?
 
-    /// The port other helpers connect to, once the listener is up.
     private(set) var port: UInt16?
 
-    /// The copy this computer is offering, served to whoever asks for it by
-    /// `id`. `content` is called when it is needed, not before.
+    /// The offered copy. `content` is only called when someone asks for it.
     var offering: (id: [UInt8], key: [UInt8], content: () -> Data?)?
 
-    /// The copy this computer is waiting to be handed.
+    /// The copy this computer is waiting to be sent.
     var expecting: (id: [UInt8], key: [UInt8], received: (Data) -> Void)?
 
     init(log: @escaping (String) -> Void = { _ in }) {
@@ -180,8 +158,7 @@ final class ClipChannel {
 
     // MARK: - Connecting out
 
-    /// The connections of one attempt, so that it can be called off whether
-    /// it is still connecting or already has a stream going.
+    /// The connections of one attempt, so it can be cancelled while connecting or mid-stream.
     private final class Attempt {
         var connections: [NWConnection] = []
         var over = false
@@ -192,10 +169,9 @@ final class ClipChannel {
         }
     }
 
-    /// Fetches the copy `id` from whichever of `addresses` answers first.
-    /// `completion` gets the content, or nil if none answered in time or the
-    /// stream failed. Returns a way to call the attempt off, after which
-    /// `completion` is not called.
+    /// Fetches copy `id` from the first of `addresses` that answers.
+    /// `completion` gets nil on timeout or stream failure. The returned
+    /// closure cancels the attempt, after which `completion` is not called.
     @discardableResult
     func fetch(id: [UInt8], key: [UInt8], from addresses: [ClipAddress], port: UInt16,
                completion: @escaping (Data?) -> Void) -> () -> Void {
@@ -216,8 +192,7 @@ final class ClipChannel {
         return attempt.callOff
     }
 
-    /// Hands the copy `id` to whichever of `addresses` answers first.
-    /// `completion` says whether one did and took all of it.
+    /// Sends copy `id` to the first address that answers. `completion` says if it took it all.
     @discardableResult
     func push(id: [UInt8], key: [UInt8], content: Data, to addresses: [ClipAddress], port: UInt16,
               completion: @escaping (Bool) -> Void) -> () -> Void {
@@ -237,8 +212,7 @@ final class ClipChannel {
         return attempt.callOff
     }
 
-    /// Tries every address at once and hands back the first connection that
-    /// comes up, or nil after `connectTimeout`.
+    /// Tries every address at once. Returns the first to connect, or nil after `connectTimeout`.
     private func connect(_ attempt: Attempt, to addresses: [ClipAddress], port: UInt16,
                          completion: @escaping (NWConnection?) -> Void) {
         var settled = false
@@ -275,14 +249,12 @@ final class ClipChannel {
                 case .ready:
                     connection.stateUpdateHandler = nil
                     if settled || attempt.over {
-                        // Another got there first, or it was called off.
                         connection.cancel()
                     } else {
                         settle(connection)
                     }
                 case .failed, .waiting:
-                    // Waiting is "no route for now"; for this purpose that is
-                    // a no.
+                    // .waiting means no route for now. Treat it as a failure.
                     connection.cancel()
                 default:
                     break
@@ -334,8 +306,7 @@ final class ClipChannel {
                 }
                 Self.readStream(connection, id: id, key: expecting.key, idle: self.idleTimeout,
                                 limit: self.maxContent) { [weak self] content in
-                    // Still the copy being waited for, and nobody else got
-                    // there first.
+                    // Check it is still the expected copy and nothing else delivered it first.
                     guard let content, let now = self?.expecting, now.id == id else { return }
                     now.received(content)
                 }
@@ -360,7 +331,7 @@ final class ClipChannel {
         }
     }
 
-    /// Calls `expired` if `arm` has not been called again within `idle`.
+    /// Calls `expired` if `arm` is not called again within `idle`.
     private final class Watchdog {
         private let idle: TimeInterval
         private let expired: () -> Void
@@ -384,9 +355,8 @@ final class ClipChannel {
         }
     }
 
-    /// Reads records until the final one, says it has them, and closes.
-    /// `completion` gets the content, or nil if the stream was cut short,
-    /// stalled, or a record did not open.
+    /// Reads records up to the final one, sends the taken byte, and closes.
+    /// `completion` gets nil if the stream was cut short, stalled, or a record did not open.
     private static func readStream(_ connection: NWConnection, id: [UInt8], key: [UInt8],
                                    idle: TimeInterval, limit: Int,
                                    completion: @escaping (Data?) -> Void) {
@@ -437,8 +407,8 @@ final class ClipChannel {
         next()
     }
 
-    /// Writes `stream` and waits to be told it was taken. `completion` gets
-    /// false if the other end closes without saying so, or stops reading.
+    /// Writes `stream` and waits for the taken byte. `completion` gets false
+    /// if the other end closes without it or stops reading.
     private static func writeStream(_ connection: NWConnection, _ stream: Data,
                                     idle: TimeInterval, completion: @escaping (Bool) -> Void) {
         var offset = 0
@@ -482,9 +452,7 @@ final class ClipChannel {
 
     // MARK: - This computer's addresses
 
-    /// Whether an address is one another computer could connect to: not
-    /// loopback, and not link-local, which only means anything together with
-    /// the interface it is on.
+    /// False for loopback and link-local (useless without its interface).
     static func reachable(_ address: ClipAddress) -> Bool {
         let bytes = address.bytes
         if address.isIPv4 {
@@ -494,9 +462,8 @@ final class ClipChannel {
         return !loopback && !(bytes[0] == 0xFE && bytes[1] & 0xC0 == 0x80)
     }
 
-    /// The addresses another computer on the same network could reach this one
-    /// at: every interface that is up, leaving out loopback and link-local
-    /// ones, IPv4 first.
+    /// Addresses another computer on the network could reach: every interface
+    /// that is up, minus loopback and link-local, IPv4 first.
     static func localAddresses() -> [ClipAddress] {
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0 else { return [] }

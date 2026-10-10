@@ -1,18 +1,11 @@
 import Foundation
 
-/// The app's own record of what it saw and decided, for working out after
-/// the fact why a HUD did or did not show.
-///
-/// The last lines are kept in memory for the Logs tab in Settings, and every
-/// line is appended to `~/Library/Logs/M0110HUD/M0110HUD.log`, so a copy
-/// started at login, whose stdout goes nowhere, still leaves a trail. With
-/// `--verbose` each line is printed as well.
-///
-/// Lines come from any thread: the Bluetooth monitor's arrive on the main
-/// queue, the clipboard's and the Studio link's on their own.
+/// The app's log, for finding out later why a HUD did or did not show.
+/// Recent lines stay in memory for the Logs tab. Every line also goes to
+/// `~/Library/Logs/M0110HUD/M0110HUD.log`, since a copy started at login has no stdout.
+/// Lines can come from any thread.
 final class DebugLog: ObservableObject {
-    /// Writes to the file only once the app turns that on: snapshots and
-    /// tests drive the same code with made-up state.
+    /// File writes stay off until the app turns them on, since snapshots and tests use made-up state.
     static let shared = DebugLog(file: DebugLog.defaultFile, persists: false)
 
     static var defaultFile: URL {
@@ -20,9 +13,9 @@ final class DebugLog: ObservableObject {
             .appendingPathComponent("Library/Logs/M0110HUD/M0110HUD.log")
     }
 
-    /// Where a line came from, which the Logs tab filters on.
+    /// The Logs tab filters on this.
     enum Source: String, CaseIterable {
-        /// The HUD's own decisions: what it showed, and why it showed nothing.
+        /// What the HUD showed, or why it showed nothing.
         case app
         case bluetooth
         case clipboard
@@ -44,27 +37,23 @@ final class DebugLog: ObservableObject {
         let source: Source
         let message: String
 
-        /// One line as written to the file and copied out of the Logs tab.
+        /// Format used in the file and when copying from the Logs tab.
         var line: String {
             "\(DebugLog.stamp.string(from: date)) [\(source.rawValue)] \(message)"
         }
     }
 
-    /// The last `capacity` lines, oldest first, for the Logs tab. Updated on
-    /// the main thread, a moment after the lines arrive.
+    /// Last `capacity` lines, oldest first. Updated on the main thread shortly after lines arrive.
     @Published private(set) var entries: [Entry] = []
 
-    /// Print each line too, for `--verbose`.
     var echo = false
-    /// Whether lines go to the file. Off for the debug panel and UI dev runs,
-    /// whose events are made up and would read there as if the keyboard had
-    /// done them.
+    /// Off for the debug panel and UI dev runs, whose made-up events would look real in the file.
     var persists: Bool
 
     let file: URL?
     let capacity: Int
-    /// Past this the file is moved aside to `.1.log`, replacing the last one,
-    /// so the two never take more than twice this.
+    /// Past this size the file is renamed to `.1.log`, replacing the old one, so the two files
+    /// never take more than twice this.
     let maxFileBytes: Int
 
     private let lock = NSLock()
@@ -83,7 +72,7 @@ final class DebugLog: ObservableObject {
     }
 
     func add(_ source: Source, _ message: String, at date: Date = Date()) {
-        // The clipboard names itself in its own messages; the tag says it once.
+        // The clipboard puts its name in its messages. Drop it, since the tag already shows it.
         let prefix = "\(source.rawValue): "
         let text = message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message
 
@@ -98,18 +87,18 @@ final class DebugLog: ObservableObject {
 
         if echo { print("[\(Self.clock.string(from: date))] \(source.rawValue): \(text)") }
         if persists, file != nil { io.async { self.write(entry.line) } }
-        // One publish per burst, rather than one per line.
+        // Publish once per burst instead of once per line.
         if schedule { DispatchQueue.main.async { self.publish() } }
     }
 
-    /// What is held now, without waiting for the main thread to catch up.
+    /// Current lines, without waiting for the main thread.
     func snapshot() -> [Entry] {
         lock.lock()
         defer { lock.unlock() }
         return buffer
     }
 
-    /// Forget the lines held in memory. The file keeps them.
+    /// Clears memory only. The file keeps the lines.
     func clear() {
         lock.lock()
         buffer.removeAll()
@@ -117,7 +106,6 @@ final class DebugLog: ObservableObject {
         DispatchQueue.main.async { self.publish() }
     }
 
-    /// Wait for the lines added so far to reach the file.
     func flush() {
         io.sync {}
     }

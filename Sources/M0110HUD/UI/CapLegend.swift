@@ -1,22 +1,10 @@
 import Foundation
 
-/// How an M0110 keycap is printed.
+/// How an M0110 keycap is printed. A word (`Tab`, `Shift`) sits small in the
+/// top-left corner, a pair puts the shifted glyph above the base one, a single
+/// letter is centered and larger, and the spacebar is blank.
 ///
-/// The board prints each kind of cap differently, and using one treatment for
-/// everything is most of what makes a drawn keyboard look generic rather than
-/// like this keyboard:
-///
-///   * a **word** (`Tab`, `Caps Lock`, `Shift`, `Option`, `Return`,
-///     `Backspace`, `Enter`) set small in the cap's top-left corner
-///   * a **pair**, the number row and the punctuation keys, with the shifted
-///     glyph above the unshifted one, left-aligned as a column
-///   * a **single** glyph, the letters, centred and larger
-///
-/// The spacebar is blank.
-///
-/// Pairs and words are derived from the HID usage rather than written out per
-/// key, so a cap rebound in the picker reprints itself correctly instead of
-/// keeping the legend of whatever used to be bound there.
+/// Legends come from the HID usage, so a rebound cap shows its new legend.
 enum CapLegend: Equatable {
     case blank
     case single(String)
@@ -32,9 +20,8 @@ enum CapLegend: Equatable {
         0x64: "|",
     ]
 
-    /// What the board prints in words, which is not always what the app calls
-    /// the key elsewhere: the M0110's delete key is printed `Backspace`, and
-    /// the command key carries the looped square on its own with no text.
+    /// Words as printed on the board. The delete key says `Backspace`, and
+    /// Command shows only the looped square.
     private static let printedWords: [UInt32: String] = [
         0x28: "Return", 0x29: "Esc", 0x2A: "Backspace", 0x2B: "Tab",
         0x39: "Caps Lock", 0x58: "Enter",
@@ -42,7 +29,6 @@ enum CapLegend: Equatable {
         0xE4: "Control", 0xE5: "Shift", 0xE6: "Option", 0xE7: "\u{2318}",
     ]
 
-    /// The spacebar.
     private static let spaceUsage: UInt32 = 0x2C
 
     static func forUsage(_ usage: UInt32) -> CapLegend {
@@ -52,19 +38,16 @@ enum CapLegend: Equatable {
             return .pair(shifted: shifted, base: base)
         }
         guard let label = HIDKeycodes.keyboard[usage] else { return .blank }
-        // One glyph is a letter and gets centred; anything longer is a word.
         return label.count == 1 ? .single(label) : .word(label)
     }
 
-    /// A legend for text the keymap produced that is not a plain HID usage:
-    /// `FN`, `BT1`, a raw parameter. Short enough to centre, otherwise a word.
+    /// For keymap text that is not a HID usage, like `FN`, `BT1` or a raw
+    /// parameter.
     static func forText(_ text: String) -> CapLegend {
         if text.isEmpty { return .blank }
         return text.count == 1 ? .single(text) : .word(text)
     }
 
-    /// Plain text, for anything that needs the legend as a string, such as a
-    /// tooltip or an accessibility label.
     var plain: String {
         switch self {
         case .blank: return ""

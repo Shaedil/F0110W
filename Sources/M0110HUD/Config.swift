@@ -3,72 +3,50 @@ import Foundation
 /// Runtime settings, resolved from CLI flags then UserDefaults then defaults.
 struct Config {
     var deviceName = "M0110"
-    /// Battery percentage at or below which the low-battery HUD fires once.
+    /// The low-battery HUD fires once at or below this percentage.
     var lowThreshold = 20
-    /// Percentage the battery must climb back to before the alert re-arms.
+    /// The alert rearms once the battery climbs back to this percentage.
     var rearmThreshold = 30
-    /// Announce the battery each time it drops through a multiple of this.
-    /// Zero turns milestones off, leaving only the single low-battery alert.
+    /// Announce each drop through a multiple of this. 0 turns milestones off.
     var batteryMilestone = 10
-    /// Seconds the HUD stays fully visible before fading out.
-    ///
-    /// Seven, not the three it was: the HUD's own reason for existing is the
-    /// wake-from-sleep reconnect, where the keyboard is picked up, typed on,
-    /// and only answers a few seconds later. A three second hold was routinely
-    /// over before the user had looked up, and seven still was.
+    /// Seconds the HUD stays fully visible before fading. Long because it mostly shows on
+    /// wake from sleep, and shorter holds ended before the user looked up.
     var hudDuration = 7.0
     var showDisconnect = true
-    /// Seconds the keyboard must stay gone before a disconnect is announced.
-    /// The link drops and re-forms in under two seconds several times a day,
-    /// and calling each of those a disconnect and a connect would be noise.
+    /// Seconds the keyboard must stay gone before a disconnect is announced. The link drops
+    /// and recovers in under 2 s several times a day.
     var disconnectGrace = 3.0
-    /// Suppress the HUD for a keyboard that was already connected at launch.
+    /// No HUD for a keyboard already connected at launch.
     var suppressInitial = false
-    /// Show a sample HUD immediately and exit-on-nothing; for tweaking the look.
     var previewOnly = false
-    /// Hold one HUD on screen and flip the app's appearance under it, to prove a
-    /// live theme change reaches an already-visible panel.
+    /// Flip the app's appearance under a visible HUD to test live theme changes.
     var themeCycle = false
-    /// Verify the ZMK Studio RPC link from the command line, then exit.
     var studioProbe = false
-    /// Open the editor window at launch. Off by default: the app is a menu bar
-    /// agent, and the window is opened from there when it is wanted.
+    /// Off by default since the app is a menu bar agent.
     var openWindow = false
-    /// Render the UI offscreen to this path, then exit.
     var snapshotPath: String?
-    /// Render the spinning 3D board offscreen to this path, then exit.
     var boardSnapshotPath: String?
-    /// Render the window's 3D stage at every focus to this path, then exit.
     var stageSnapshotPath: String?
     var snapshotPane: String?
-    /// The time of day a snapshot's sky is taken at, "HH:MM" today; the clock
-    /// when unset.
+    /// "HH:MM" today for the snapshot's sky. Nil uses the current time.
     var snapshotTime: String?
     var verbose = false
-    /// Multiplies every HUD dimension; 1.0 is the tuned default.
+    /// Multiplies every HUD dimension.
     var scale = 1.0
-    /// Inset of the HUD's right edge from the right screen edge.
     var insetX = 110.0
-    /// Gap between the menu bar and the top of the HUD.
     var insetY = 6.0
-    /// Force the HUD's appearance instead of following the system: "light" or
-    /// "dark". Mainly for checking both themes without changing System Settings.
+    /// "light" or "dark" to override the system, for checking both themes.
     var appearance: String? = nil
     /// Vibrancy material name; see HUDController.material(named:).
     var material = "toolTip"
-    /// Transparency of the HUD as a 0...1 level, 1 being full vibrancy. `nil`
-    /// follows System Settings; see SystemTransparency.
+    /// 0...1, where 1 is full vibrancy. Nil follows System Settings (see SystemTransparency).
     var transparency: Double? = nil
-    /// Show one sample HUD, hold it for the full duration, then quit.
     var testHUD = false
-    /// Run the clipboard bridge at all. The Settings switch turns carrying on
-    /// and off while the app runs; this keeps the bridge from starting.
+    /// False keeps the clipboard bridge from starting. The Settings switch only pauses it.
     var clipboard = true
-    /// Open the debug panel: drive the HUD's state machine by hand, with no
-    /// Bluetooth and no clipboard. What tools/hud-dev.sh launches.
+    /// Debug panel that drives the HUD by hand, with no Bluetooth or clipboard (tools/hud-dev.sh).
     var debug = false
-    /// Open the main window on fixture data, with no Bluetooth, no Studio link
-    /// and no HUD. What tools/ui-dev.sh launches.
+    /// Main window on fixture data, with no Bluetooth, Studio link or HUD (tools/ui-dev.sh).
     var uiDev = false
 
     static func resolve(_ args: [String]) -> Config {

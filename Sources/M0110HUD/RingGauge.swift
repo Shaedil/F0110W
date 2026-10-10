@@ -1,8 +1,7 @@
 import AppKit
 
-/// Circular battery ring with the level printed inside, matching the gauge macOS
-/// uses in its own accessory popups: a faint full-circle track under a colored
-/// arc that sweeps clockwise from twelve o'clock.
+/// Battery ring with the level inside, like the gauge in macOS accessory popups: a faint
+/// full track under a colored arc that runs clockwise from 12 o'clock.
 final class RingGauge: NSView {
     var level: Int? {
         didSet {
@@ -11,8 +10,7 @@ final class RingGauge: NSView {
         }
     }
 
-    /// Only the arc colour reacts to this; the number and the device glyph keep
-    /// their neutral tint, the way macOS draws it.
+    /// Only the arc color changes. The number and glyph stay neutral, as in macOS.
     var isLow = false {
         didSet { needsDisplay = true }
     }
@@ -59,8 +57,8 @@ final class RingGauge: NSView {
         guard let level, level > 0 else { return }
         let fraction = CGFloat(min(max(level, 0), 100)) / 100
 
-        // AppKit angles run counterclockwise from 3 o'clock, so start at 90° and
-        // sweep clockwise to put the origin at the top.
+        // AppKit angles run counterclockwise from 3 o'clock, so start at 90 degrees and go
+        // clockwise to begin at the top.
         let start: CGFloat = 90
         let arc = NSBezierPath()
         arc.appendArc(withCenter: center,

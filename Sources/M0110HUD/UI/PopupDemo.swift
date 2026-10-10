@@ -1,12 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The Popup tab's preview: the top-right corner of the screen at actual size,
-/// with the real `HUDView` arriving and leaving on a loop at the settings the
-/// sliders beside it are making.
-///
-/// The settings themselves are read at launch, so without this the only way to
-/// see what a slider did was to relaunch and wait for the keyboard to connect.
+/// Popup tab preview: the screen's top-right corner at actual size, with the
+/// real `HUDView` looping at the current slider settings.
 struct PopupDemoView: View {
     /// False while hidden, so the loop and the HUD's board stop.
     var active = true
@@ -18,12 +14,10 @@ struct PopupDemoView: View {
     @AppStorage("deviceName") private var deviceName: String = "M0110"
     @Environment(\.classicSnapshot) private var snapshot
 
-    /// About the height of the popup's own controls beside it: enough for
-    /// the menu bar and the popup at the default scale.
+    /// Fits the menu bar and the popup at the default scale.
     static let height: CGFloat = 200
 
     @State private var visible = false
-    /// Which sample the loop is on; each pass shows the next one.
     @State private var step = 0
 
     private struct Sample {
@@ -49,9 +43,8 @@ struct PopupDemoView: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         GeometryReader { geo in
-            // Actual size unless the HUD would run off the left or the
-            // bottom; then the whole corner shrinks together so it stays in
-            // view.
+            // Actual size, unless the HUD would run off the left or bottom.
+            // Then the whole corner shrinks to fit.
             let hudWidth = 240 * scale
             let hudBottom = menuBarHeight + insetY + 46 * scale + 20 * scale
             let zoom = min(1, (geo.size.width - 24) / (insetX + hudWidth + 24),
@@ -90,14 +83,12 @@ struct PopupDemoView: View {
         .frame(height: Self.height)
         .clipShape(shape)
         .overlay(shape.strokeBorder(Theme.panelStroke, lineWidth: 1))
-        // The wallpaper is laid out at the screen's full size and only
-        // clipped to the panel, and clipping does not stop hit-testing: left
-        // alone, its invisible overhang sat on top of the sliders.
+        // Clipping does not stop hit-testing, so the wallpaper's hidden
+        // overhang would cover the sliders.
         .allowsHitTesting(false)
         .task(id: active) { await loop() }
     }
 
-    /// Arrive, hold for the configured time, fade out, pause, next sample.
     private func loop() async {
         guard active else { visible = false; return }
         while !Task.isCancelled {
@@ -113,8 +104,7 @@ struct PopupDemoView: View {
         }
     }
 
-    /// The desktop picture, laid out at the screen's size and anchored to its
-    /// top-right, so this panel is a window onto that corner.
+    /// The desktop picture at screen size, anchored top-right.
     @ViewBuilder private var wallpaper: some View {
         let size = screen?.frame.size ?? CGSize(width: 1512, height: 982)
         if let screen, let url = NSWorkspace.shared.desktopImageURL(for: screen),
@@ -131,7 +121,6 @@ struct PopupDemoView: View {
         }
     }
 
-    /// The right end of a menu bar: the status items and the clock.
     private var menuBar: some View {
         HStack(spacing: 16) {
             Spacer(minLength: 0)
@@ -154,9 +143,8 @@ struct PopupDemoView: View {
     }
 }
 
-/// The HUD's own view in a capsule of vibrancy, as `HUDController` builds it,
-/// minus the panel: blurring what is behind it in this window instead of
-/// behind the window.
+/// `HUDView` with vibrancy as `HUDController` builds it, but without the
+/// panel, so it blurs this window's content.
 private struct HUDPreview: NSViewRepresentable {
     let kind: HUDKind
     let battery: Int?
@@ -164,7 +152,7 @@ private struct HUDPreview: NSViewRepresentable {
     let name: String
     let scale: Double
     let playing: Bool
-    /// How long the sample stays up, which a crumble times its end to.
+    /// How long the sample stays up. The crumble animation ends on this.
     let hold: TimeInterval
 
     final class Host: NSView {
@@ -211,8 +199,8 @@ private struct HUDPreview: NSViewRepresentable {
                            lowThreshold: lowThreshold, detail: detail,
                            canMoveBack: kind == .movedAway)
         host.invalidateIntrinsicContentSize()
-        // Start the board's motion each time the HUD arrives, as the real one
-        // does, and let it rest while it is away.
+        // Like the real HUD, start the board's motion on each arrival and
+        // stop it while hidden.
         if playing && !host.playing {
             let style = HUDStyle.defaults[kind]!
             host.hud.setSpinning(true)

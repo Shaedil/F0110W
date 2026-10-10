@@ -5,29 +5,17 @@
 # ///
 """Clipboard helper for the M0110 converter, for Windows and Linux.
 
-The keyboard carries what was copied on one paired computer to the next one it
-is switched to, but it cannot read a clipboard, so the computer that is copied
-from has to hand it over. On a Mac the M0110HUD app does that. This script is
-the same thing for Windows and Linux: it watches the clipboard, writes each
-new text clip to the keyboard's clipboard service, and puts clips the keyboard
-is carrying from another computer onto this one's clipboard.
-
-An image, or text longer than the keyboard holds, does not go through the
-keyboard. The keyboard carries a short message to the helper on the other
-computer saying where to fetch it, and the two helpers pass it between
-themselves over the network. Only when they cannot reach each other does the
-content itself come through the keyboard, cut down to fit.
-
-A computer that is only ever pasted into does not need this script for text:
-with no helper there, the keyboard types the clip out instead. An image can
-only arrive where a helper is running.
+The keyboard cannot read a clipboard, so a helper sends each new copy to it and
+places clips that arrive from other computers (M0110HUD does this on a Mac).
+Images and long text go between helpers over the network, or through the
+keyboard cut down to fit if the helpers cannot connect. Without a helper, the
+keyboard types text out and images do not arrive.
 
     uv run m0110_clipboard.py            # or: pip install bleak cryptography pillow
     uv run m0110_clipboard.py --verbose
 
-The keyboard must already be paired with this computer. The frames exchanged
-with the keyboard are the ones in the firmware's config/clipboard/clip_proto.h;
-what the helpers say to each other is in PROTOCOL.md next to this file.
+The keyboard must already be paired. Keyboard frames are in the firmware's
+config/clipboard/clip_proto.h, and the helper-to-helper protocol is in PROTOCOL.md.
 """
 
 from __future__ import annotations
@@ -65,56 +53,50 @@ STATUS, RESULT, POKE = 0x10, 0x11, 0x12
 USB_KNOWN, USB_LOCAL, OPAQUE = 0x01, 0x02, 0x04
 HOLD_SOON, HOLD_OFF = 0x01, 0x02
 UNREACHABLE = 3
-# The longest RELAY frame the keyboard passes on, type byte included.
+# Longest RELAY frame the keyboard passes on, including the type byte.
 RELAY_MAX = 64
 
-# What the helpers say to each other; see PROTOCOL.md.
+# Helper-to-helper messages, see PROTOCOL.md.
 KIND_TEXT, KIND_PNG, KIND_JPEG = 1, 2, 3
 OFFER, INLINE = 0x01, 0x02
 WANT, GONE, CANCEL = 0x01, 0x02, 0x03
 GET, PUT = 1, 2
 MAGIC = b"M0CB\x01"
-# What the receiver of a stream sends back once it has opened the final record.
+# Sent back by the receiver once it has decrypted the final record.
 TAKEN = b"\x01"
 RECORD_MAX = 65536
 TAG_LENGTH = 16
 MAX_ADDRESSES = 6
-# The least a keyboard must hold for an OFFER with every address to fit.
+# Smallest keyboard buffer that fits an OFFER with every address.
 MIN_OPAQUE = 256
-# A bound on what a misbehaving peer can make this script buffer.
+# Caps how much a bad peer can make this script buffer.
 MAX_CONTENT = 256 * 1024 * 1024
-# The most an INLINE may come to, whatever the keyboard has room for: beyond
-# this the wait for it to trickle through stops being worth it.
+# Largest INLINE to send. Anything bigger takes too long to get through the keyboard.
 INLINE_BUDGET = 40000
 
 # ZMK's default USB IDs, which this firmware keeps.
 USB_VENDOR, USB_PRODUCT = "1d50", "615e"
 
 POLL_SECONDS = 0.4
-# After the keyboard says a copy shortcut was just pressed: how often, and how
-# many times, to look at the clipboard before going back to the slow poll.
+# After a copy shortcut, poll this fast for POKE_LOOKS rounds.
 POKE_SECONDS = 0.05
 POKE_LOOKS = 6
 HELLO_SECONDS = 30
 RETRY_SECONDS = 5
-# How long firmware with no clipboard service is left alone before another look.
 UNSUPPORTED_SECONDS = 60
 CONNECT_SECONDS = 1.0
 PUT_WAIT_SECONDS = 1.5
 INLINE_WAIT_SECONDS = 90
 HOLD_SECONDS = 0.4
-# How long a helper that has connected gets to say what for.
+# How long a connecting helper gets to send its opening bytes.
 HELLO_WAIT_SECONDS = 5
-# How long a stream may make no progress, in either direction, before it is
-# given up on.
+# A stream that makes no progress for this long is given up.
 IDLE_SECONDS = 10
-# How long a delivery may go without another frame before it is taken to have
-# been abandoned.
+# A delivery with no new frame for this long is treated as abandoned.
 DELIVERY_IDLE_SECONDS = 3
-# How often an image on a clipboard with no change counter is read again to
-# see whether it is still the same one.
+# How often to re-read an image on a clipboard that has no change counter.
 IMAGE_POLL_SECONDS = 2.0
-# A bound on what a misbehaving peripheral can make this script buffer.
+# Caps how much a bad peripheral can make this script buffer.
 MAX_INCOMING = 65535
 
 verbose = False
@@ -129,11 +111,6 @@ last_said = ""
 
 
 def log_once(message: str) -> None:
-    """Logs a line unless it repeats the last one said this way.
-
-    A condition that holds across many tries is reported when it starts
-    rather than every time.
-    """
     global last_said
     if message != last_said:
         last_said = message
@@ -145,11 +122,7 @@ def describe(error: BaseException) -> str:
 
 
 def text_bytes(text: str) -> bytes:
-    """Text as it is carried: UTF-8 with LF line endings.
-
-    What comes off a Windows clipboard can hold half of a surrogate pair,
-    which has no UTF-8 form; it goes as a question mark rather than raising.
-    """
+    """UTF-8 with LF endings. A lone surrogate from a Windows clipboard becomes a question mark."""
     return text.replace("\r\n", "\n").encode("utf-8", errors="replace")
 
 
@@ -157,7 +130,6 @@ def text_bytes(text: str) -> bytes:
 
 
 def transfer(payload: bytes, flags: int, frame_cap: int) -> list[bytes]:
-    """Every frame needed to send `payload` over a link taking `frame_cap` bytes a write."""
     crc = zlib.crc32(payload)
     frames = [bytes([BEGIN, flags]) + len(payload).to_bytes(2, "little") + crc.to_bytes(4, "little")]
     room = max(1, frame_cap - 3)
@@ -168,11 +140,7 @@ def transfer(payload: bytes, flags: int, frame_cap: int) -> list[bytes]:
 
 
 class Assembler:
-    """Reassembles a clip the keyboard is delivering.
-
-    DATA must arrive in order. A gap, an overrun or a checksum mismatch fails
-    the whole clip at END rather than yielding part of one.
-    """
+    """Rebuilds a delivered clip. DATA must arrive in order, and any error drops the whole clip."""
 
     def __init__(self) -> None:
         self.active = False
@@ -207,7 +175,6 @@ class Assembler:
         self.data += payload
 
     def end(self) -> tuple[bytes, int, int] | None:
-        """The verified clip, its checksum and its BEGIN flags, or None."""
         ok = (
             self.active
             and not self.poisoned
@@ -220,11 +187,11 @@ class Assembler:
         return result
 
 
-# ---- What the helpers say to each other ----
+# ---- Helper-to-helper messages ----
 
 
 def pack_addresses(addresses: list[str], room: int) -> bytes:
-    """`count { family addr }*` for as many of `addresses` as fit in `room` bytes."""
+    """Packs as many addresses as fit in `room` bytes as `count { family addr }*`."""
     packed = b""
     count = 0
     for address in addresses:
@@ -252,8 +219,6 @@ def unpack_addresses(data: bytes) -> list[str] | None:
 
 
 class Offer:
-    """Where to fetch a copy that does not fit through the keyboard."""
-
     def __init__(self, kind: int, ticket: bytes, key: bytes, port: int, addresses: list[str]) -> None:
         self.kind = kind
         self.ticket = ticket
@@ -262,7 +227,6 @@ class Offer:
         self.addresses = addresses
 
     def encode(self, room: int = MAX_INCOMING) -> bytes | None:
-        """The OFFER, with as many addresses as fit in `room` bytes, or None if it cannot."""
         head = bytes([OFFER, self.kind]) + self.ticket + self.key + self.port.to_bytes(2, "little")
         if len(head) + 1 > room:
             return None
@@ -280,7 +244,6 @@ class Offer:
 
 
 def encode_want(ticket: bytes, port: int, addresses: list[str], room: int) -> bytes:
-    """A WANT with as many addresses as fit in `room` bytes."""
     head = bytes([WANT]) + ticket + port.to_bytes(2, "little")
     return head + pack_addresses(addresses, room - len(head))
 
@@ -295,7 +258,6 @@ def parse_want(payload: bytes) -> tuple[bytes, int, list[str]] | None:
 
 
 def shrink(image: bytes, room: int) -> bytes | None:
-    """`image` scaled down and re-encoded as a JPEG of at most `room` bytes."""
     from PIL import Image
 
     picture = flatten(opened(image))
@@ -322,17 +284,14 @@ def shrink(image: bytes, room: int) -> bytes | None:
 
 
 def encode_inline(kind: int, ticket: bytes, content: bytes, room: int) -> bytes | None:
-    """The content as an INLINE of at most `room` bytes, or None if it cannot be made to fit.
-
-    Text either fits or it does not. An image is scaled down until it does.
-    """
+    """Builds an INLINE of at most `room` bytes. Text must fit as is, and an image is scaled down to fit."""
     room -= 10
     if len(content) > room:
         if kind == KIND_TEXT:
             return None
         try:
             content = shrink(content, room)
-        except Exception:  # Pillow raises a variety of things on a bad image
+        except Exception:  # Pillow can raise many error types on a bad image
             content = None
         if content is None:
             return None
@@ -341,7 +300,6 @@ def encode_inline(kind: int, ticket: bytes, content: bytes, room: int) -> bytes 
 
 
 def parse_inline(payload: bytes) -> tuple[int, bytes, bytes] | None:
-    """The kind, the ticket and the content of an INLINE."""
     if len(payload) < 10 or payload[0] != INLINE:
         return None
     return payload[1], payload[2:10], payload[10:]
@@ -351,12 +309,10 @@ def parse_inline(payload: bytes) -> tuple[int, bytes, bytes] | None:
 
 
 def opened(image: bytes):
-    """Decodes an image the way it is meant to be seen, in a mode every format here can hold.
+    """Decodes an image upright, in a mode PNG can save.
 
-    A camera says which way up its picture goes in a tag, not in the pixels,
-    and the tag is lost when the picture is encoded again. Sixteen-bit grey
-    has to be scaled down to eight, since converting it clips instead and
-    everything comes out white. CMYK and the like have no place in a PNG.
+    Cameras store rotation in an EXIF tag that re-encoding drops, so it is applied
+    here. 16-bit grey is scaled to 8 bits, because a plain convert clips it to white.
     """
     from PIL import Image, ImageOps
 
@@ -370,7 +326,6 @@ def opened(image: bytes):
 
 
 def flatten(picture):
-    """`picture` as plain RGB, with anything transparent put on white."""
     from PIL import Image
 
     if picture.mode in ("RGBA", "LA") or "transparency" in picture.info:
@@ -381,9 +336,7 @@ def flatten(picture):
 
 
 def to_png(kind: int, image: bytes) -> bytes:
-    """The image as a PNG, which is what every clipboard takes."""
     if kind == KIND_PNG:
-        # Passed on as it is, once it has been seen to be one at all.
         if not image.startswith(b"\x89PNG\r\n\x1a\n"):
             raise ValueError("not a PNG")
         return image
@@ -394,7 +347,6 @@ def to_png(kind: int, image: bytes) -> bytes:
 
 
 def dib_to_png(dib: bytes) -> bytes:
-    """A Windows device-independent bitmap, as found on its clipboard, as a PNG."""
     from PIL import BmpImagePlugin
 
     out = io.BytesIO()
@@ -403,23 +355,23 @@ def dib_to_png(dib: bytes) -> bytes:
 
 
 def png_to_dib(png: bytes) -> bytes:
-    """The other way: a BMP file is a 14-byte file header and then the bitmap."""
+    """A DIB is a BMP file without its 14-byte file header."""
     out = io.BytesIO()
     flatten(opened(png)).save(out, "BMP")
     return out.getvalue()[14:]
 
 
 def trim_png(data: bytes) -> bytes:
-    """Cuts off what follows the PNG's last chunk; clipboard memory is rounded up in size."""
+    """Drops bytes after IEND. Clipboard memory is rounded up in size, so there can be padding."""
     end = data.rfind(b"IEND")
     return data[: end + 8] if end >= 0 else data
 
 
-# ---- The stream between two helpers ----
+# ---- Helper-to-helper stream ----
 
 
 class TransferError(Exception):
-    """A stream that ended early, stalled, did not open, or ran past any sensible size."""
+    """A stream ended early, stalled, failed to decrypt or got too big."""
 
 
 def hello(role: int, ticket: bytes) -> bytes:
@@ -427,7 +379,6 @@ def hello(role: int, ticket: bytes) -> bytes:
 
 
 def seal(key: bytes, ticket: bytes, content: bytes):
-    """Yields `content` as the records of a stream."""
     cipher = ChaCha20Poly1305(key)
     count = max(1, -(-len(content) // RECORD_MAX))
     for number in range(count):
@@ -439,11 +390,7 @@ def seal(key: bytes, ticket: bytes, content: bytes):
 
 
 async def read_exactly(reader: asyncio.StreamReader, count: int) -> bytes:
-    """Reads `count` bytes, giving up if none at all arrive for a while.
-
-    The wait is on each piece, not on the whole: a large transfer that keeps
-    moving may take as long as it takes.
-    """
+    """Reads `count` bytes. The timeout is per read, so a large transfer that keeps moving has no time limit."""
     data = bytearray()
     while len(data) < count:
         piece = await asyncio.wait_for(reader.read(count - len(data)), IDLE_SECONDS)
@@ -454,7 +401,6 @@ async def read_exactly(reader: asyncio.StreamReader, count: int) -> bytes:
 
 
 async def read_content(reader: asyncio.StreamReader, writer, key: bytes, ticket: bytes) -> bytes:
-    """Reads a stream to its final record, says so to the sender, and returns what it sealed."""
     cipher = ChaCha20Poly1305(key)
     content = bytearray()
     number = 0
@@ -478,8 +424,7 @@ async def read_content(reader: asyncio.StreamReader, writer, key: bytes, ticket:
     except (asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
         raise TransferError("the stream stalled or ended before its final record") from None
 
-    # Until it hears this the sender does not count the content as taken. A
-    # connection that merely closes tells it nothing.
+    # The sender only counts the content as taken once it gets this byte.
     if writer is not None:
         try:
             writer.write(TAKEN)
@@ -490,18 +435,15 @@ async def read_content(reader: asyncio.StreamReader, writer, key: bytes, ticket:
 
 
 async def write_content(reader, writer, key: bytes, ticket: bytes, content: bytes) -> bool:
-    """Writes `content` as a stream. True only if the far end says it took all of it."""
+    """Sends `content` as a stream. Returns True only if the receiver replies TAKEN."""
     try:
-        # Whether the stream is moving is judged by whether there is room to
-        # write more. A small buffer underneath keeps that honest: with a
-        # large one, megabytes can sit unsent while everything looks done.
+        # Progress is measured by drain() returning. With a large send buffer,
+        # megabytes can still be unsent when it returns, so keep the buffer small.
         link = writer.get_extra_info("socket")
         if link is not None:
             link.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, RECORD_MAX)
         for record in seal(key, ticket, content):
             writer.write(record)
-            # Returns at once while the far end keeps reading, and not at
-            # all if it has stopped.
             await asyncio.wait_for(writer.drain(), IDLE_SECONDS)
         return await asyncio.wait_for(reader.read(1), IDLE_SECONDS) == TAKEN
     except (asyncio.TimeoutError, OSError):
@@ -532,11 +474,7 @@ def usable(addresses: list[str]) -> list[str]:
 
 
 def routed_addresses() -> list[str]:
-    """This computer's addresses on the interfaces its routes lead out of.
-
-    Connecting a UDP socket sends nothing. It only makes the system choose
-    the address it would send from.
-    """
+    """Connecting a UDP socket sends nothing. It only makes the system pick a source address."""
     probes = [(socket.AF_INET, target) for target in ("192.168.255.254", "172.31.255.254", "10.255.255.254", "8.8.8.8")]
     probes.append((socket.AF_INET6, "2001:4860:4860::8888"))
     found = []
@@ -551,7 +489,6 @@ def routed_addresses() -> list[str]:
 
 
 def parse_interfaces(listing: str) -> list[str]:
-    """The addresses in the output of `ip -j addr`, on every interface that is up."""
     found = []
     for link in json.loads(listing):
         flags = link.get("flags", [])
@@ -564,7 +501,6 @@ def parse_interfaces(listing: str) -> list[str]:
 
 
 def interface_addresses() -> list[str] | None:
-    """Every interface's addresses, where there is an `ip` to ask; None where not."""
     if not shutil.which("ip"):
         return None
     try:
@@ -575,13 +511,7 @@ def interface_addresses() -> list[str] | None:
 
 
 def local_addresses() -> list[str]:
-    """This computer's own addresses, as far as they can be found without asking for more software.
-
-    The one the default route leaves by comes first, as the likeliest to be
-    reached. Then every interface's: from `ip` on Linux, and from the host
-    name on Windows, where that gives them all. On Linux the host name often
-    gives only a loopback address, so it is the last resort there.
-    """
+    """Default route first. The host name is a last resort on Linux, where it is often only loopback."""
     found = routed_addresses()
     listed = interface_addresses()
     if listed is None:
@@ -593,7 +523,6 @@ def local_addresses() -> list[str]:
 
 
 def listening_socket() -> socket.socket:
-    """One socket on one port for both IPv4 and IPv6 where the system can, IPv4 alone where not."""
     if socket.has_dualstack_ipv6():
         try:
             return socket.create_server(("", 0), family=socket.AF_INET6, dualstack_ipv6=True)
@@ -603,12 +532,7 @@ def listening_socket() -> socket.socket:
 
 
 class Offering:
-    """The latest copy made here, on offer to the other computers.
-
-    The content is produced when first asked for, off the event loop, since
-    turning a large bitmap into a PNG takes a moment the OFFER should not wait
-    for.
-    """
+    """The latest copy made here. Content is made on first request, since converting a big bitmap to PNG is slow."""
 
     def __init__(self, kind: int, produce, ticket: bytes | None = None, key: bytes | None = None) -> None:
         self.kind = kind
@@ -626,11 +550,7 @@ class Offering:
 
 
 class Endpoint:
-    """This helper's end of the network: one listener, and the connections it makes itself.
-
-    `dial` and `addresses` are what tests swap out to stand for a network
-    that does not let the two helpers reach each other.
-    """
+    """One listener plus outgoing connections. Tests replace `dial` and `addresses`."""
 
     def __init__(self, dial=None, addresses=None) -> None:
         self.dial = dial or asyncio.open_connection
@@ -638,8 +558,7 @@ class Endpoint:
         self.port = 0
         self.server = None
         self.offering: Offering | None = None
-        # A copy this helper has asked to be sent: its id, its key, and what
-        # to call with the content.
+        # (ticket, key, callback) for a copy this helper asked to have PUT here.
         self.awaiting: tuple[bytes, bytes, object] | None = None
 
     async def start(self) -> None:
@@ -655,7 +574,6 @@ class Endpoint:
             self.port = 0
 
     async def accept(self, reader, writer) -> None:
-        """Serves one connection: a GET for the copy on offer, or a PUT of one asked for."""
         try:
             opening = await asyncio.wait_for(reader.readexactly(len(MAGIC) + 9), HELLO_WAIT_SECONDS)
             role, ticket = opening[len(MAGIC)], opening[len(MAGIC) + 1 :]
@@ -669,13 +587,12 @@ class Endpoint:
                 awaiting = self.awaiting
                 if awaiting and awaiting[0] == ticket:
                     content = await read_content(reader, writer, awaiting[1], ticket)
-                    # Still the copy being waited for, and nobody else got
-                    # there first.
+                    # Only if this copy is still wanted and no other PUT delivered it first.
                     if self.awaiting is awaiting:
                         awaiting[2](content)
         except (TransferError, asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
             pass
-        except Exception as error:  # producing the content can fail in its own ways
+        except Exception as error:  # producing the content can raise anything
             log(f"could not serve a copy ({describe(error)})")
         finally:
             close(writer)
@@ -702,14 +619,13 @@ class Endpoint:
                         winner = attempt.result()
             return winner
         finally:
-            # Whether one won, time ran out, or this was itself cancelled
-            # part way: none of the others is left to dangle.
+            # In every case, including cancellation, stop the other attempts
+            # and close any that already connected.
             for attempt in attempts:
                 attempt.add_done_callback(discard)
                 attempt.cancel()
 
     async def get(self, offer: Offer) -> bytes | None:
-        """Fetches the copy `offer` names from the helper that made it."""
         link = await self.connect(offer.addresses, offer.port)
         if link is None:
             return None
@@ -723,10 +639,6 @@ class Endpoint:
             close(writer)
 
     async def put(self, addresses: list[str], port: int, offering: Offering) -> bool:
-        """Takes the copy on offer to a helper that could not come for it.
-
-        True only if that helper said it took all of it.
-        """
         content = await offering.content()
         link = await self.connect(addresses, port)
         if link is None:
@@ -739,17 +651,15 @@ class Endpoint:
             close(writer)
 
 
-# ---- This computer's clipboard ----
+# ---- Clipboard ----
 
 
 class Clip:
-    """What is on the clipboard: text or an image, and whether it must not be carried.
+    """What is on the clipboard: text or an image, and whether it is private.
 
-    `form` says what the image bytes are: "png", "jpeg", or "dib" for a
-    Windows bitmap that has yet to be turned into a PNG. `owner` is who put
-    it there, where the system can say, and `after` is the clipboard's
-    change marker as it stood once the reading was done, where reading can
-    itself move it.
+    `form` is "png", "jpeg", or "dib" (a Windows bitmap not yet converted to PNG).
+    `owner` is who put it there, if the system says. `after` is the change marker
+    taken after reading, for systems where reading can move it.
     """
 
     def __init__(
@@ -772,11 +682,11 @@ class Clip:
         return KIND_JPEG if self.form == "jpeg" else KIND_PNG
 
     def content(self) -> bytes:
-        """The image in the form it is sent in. Slow for a large bitmap."""
+        """The image as it is sent. Slow for a large bitmap."""
         return dib_to_png(self.image) if self.form == "dib" else self.image
 
     def fingerprint(self) -> bytes:
-        """Tells this content from other content, without keeping it."""
+        """A hash of the content, so the content itself is not kept."""
         if self.private:
             return b"private"
         if self.text:
@@ -791,8 +701,6 @@ def fingerprint(kind: int, content: bytes) -> bytes:
 
 
 class WindowsClipboard:
-    """The Win32 clipboard through ctypes."""
-
     CF_DIB = 8
     CF_UNICODETEXT = 13
     GMEM_MOVEABLE = 0x0002
@@ -806,8 +714,8 @@ class WindowsClipboard:
         kernel32 = self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
         def declare(function, result, *arguments) -> None:
-            # Handles are pointer-sized; left undeclared, ctypes would pass
-            # and return them as int and cut them short.
+            # Handles are pointer-sized. Without these declarations ctypes
+            # treats them as 32-bit ints and truncates them.
             function.restype = result
             function.argtypes = list(arguments)
 
@@ -844,14 +752,13 @@ class WindowsClipboard:
         declare(kernel32.GlobalSize, ctypes.c_size_t, wintypes.HGLOBAL)
         declare(kernel32.Sleep, None, wintypes.DWORD)
 
-        # How a password manager says "keep this out of clipboard history and
-        # cloud sync". The same wish applies to a keyboard. Some set the
-        # first; some only set the other two, to zero.
+        # Password managers set these formats to keep secrets out of clipboard
+        # history and cloud sync, and the keyboard should not carry them either.
+        # Some set the first one. Others only set the other two, to zero.
         self.exclude_format = user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")
         self.history_format = user32.RegisterClipboardFormatW("CanIncludeInClipboardHistory")
         self.cloud_format = user32.RegisterClipboardFormatW("CanUploadToCloudClipboard")
-        # What browsers and image editors put next to the bitmap, and the
-        # only one of the two that keeps transparency.
+        # Browsers and image editors add PNG next to the bitmap. Only PNG keeps transparency.
         self.png_format = user32.RegisterClipboardFormatW("PNG")
 
     def marker(self, fresh: bool = False) -> object:
@@ -866,7 +773,6 @@ class WindowsClipboard:
         return False
 
     def _bytes(self, kind: int) -> bytes | None:
-        """What the open clipboard holds in one format."""
         if not kind or not self.user32.IsClipboardFormatAvailable(kind):
             return None
         handle = self.user32.GetClipboardData(kind)
@@ -895,17 +801,13 @@ class WindowsClipboard:
             return True
         for kind in (self.history_format, self.cloud_format):
             value = self._bytes(kind)
-            # A DWORD: zero is "no, it may not".
+            # The value is a DWORD, and zero means not allowed.
             if value is not None and not any(value[:4]):
                 return True
         return False
 
     def read(self) -> Clip | None:
-        """What is on the clipboard, or None if it could not be looked at.
-
-        Not being able to look, because another program has the clipboard
-        open, is not the same as there being nothing on it.
-        """
+        """Returns None if another program has the clipboard open, which differs from an empty clipboard."""
         if not self._open(None, 10):
             return None
         try:
@@ -915,8 +817,7 @@ class WindowsClipboard:
             else:
                 text = self._text()
                 png = None if text else self._bytes(self.png_format)
-                # Windows makes this one out of whichever bitmap format was
-                # put there, so it covers them all.
+                # Windows creates CF_DIB from any bitmap format, so this one covers them all.
                 dib = None if text or png else self._bytes(self.CF_DIB)
                 if text:
                     clip = Clip(text)
@@ -930,14 +831,13 @@ class WindowsClipboard:
             self.user32.CloseClipboard()
 
         clip.owner = owner
-        # Asking for a format its owner had only promised makes the owner
-        # render it, and that moves the number on. Taken again here, so the
-        # reading is not mistaken for another copy.
+        # Reading a format the owner only promised makes the owner render it,
+        # which bumps the sequence number. Read the number again so this read
+        # is not mistaken for a new copy.
         clip.after = self.user32.GetClipboardSequenceNumber()
         return clip
 
     def _put(self, kind: int, data: bytes) -> bool:
-        """Gives the open clipboard `data` in one format."""
         handle = self.kernel32.GlobalAlloc(self.GMEM_MOVEABLE, len(data))
         if not handle:
             return False
@@ -954,18 +854,16 @@ class WindowsClipboard:
         return True
 
     def _write(self, formats: list[tuple[int, bytes]]) -> bool:
-        """Replaces what is on the clipboard, most descriptive format first.
+        """Replaces the clipboard contents, most descriptive format first.
 
-        Emptying a clipboard opened with no window leaves it with no owner,
-        and setting data then fails. So a window is made to own it, and is
-        gone again before this returns: all of it in one call on one thread,
-        with never a window left whose messages nobody is reading.
+        SetClipboardData fails after emptying a clipboard opened with no window,
+        so a temporary window owns it. The window is destroyed before returning.
         """
         window = self.user32.CreateWindowExW(0, "STATIC", None, 0, 0, 0, 0, 0, None, None, None, None)
         if not window:
             return False
         try:
-            # About a second: a paste is waiting on this.
+            # About one second, since a paste is waiting on this.
             if not self._open(window, 100):
                 return False
             try:
@@ -988,36 +886,27 @@ class WindowsClipboard:
     def write_image(self, png: bytes) -> bool:
         try:
             dib = png_to_dib(png)
-        except Exception:  # Pillow raises a variety of things on a bad image
+        except Exception:  # Pillow can raise many error types on a bad image
             return False
-        # The bitmap is what most programs paste. The PNG is for the ones
-        # that would otherwise lose the transparency.
+        # Most programs paste the bitmap. The PNG keeps transparency for those that read it.
         formats = [(self.png_format, png)] if self.png_format else []
         return self._write(formats + [(self.CF_DIB, dib)])
 
 
 class LinuxClipboard:
-    """wl-clipboard on Wayland, xclip or xsel on X11.
+    """wl-clipboard on Wayland, xclip or xsel on X11. None of them has a change counter.
 
-    None of them has a change counter to ask for, and how a new copy is
-    noticed depends on what the session offers:
-
-    - A Wayland compositor with the data-control protocol: `wl-paste --watch`
-      runs alongside and says each time the clipboard changes.
-    - X11: the clipboard is looked at on every poll. Text is read each time.
-      An image is told apart by the timestamp its owner gives the selection,
-      so it is read once per copy; an owner that gives none has its image
-      read again every so often instead.
-    - A Wayland compositor without data-control, GNOME's among them: every
-      look by wl-paste opens a window that takes the focus for a moment. So
-      xclip is used through XWayland where it is there, and where it is not,
-      the clipboard is only looked at when the keyboard says a copy shortcut
-      was pressed.
+    - Wayland with data-control: `wl-paste --watch` reports each change.
+    - X11: checked every poll. An image is read once per copy, using the
+      selection's TIMESTAMP, or re-read every so often if there is none.
+    - Wayland without data-control (GNOME, for example): each wl-paste call takes
+      focus for a moment, so xclip through XWayland is used if installed. If not,
+      the clipboard is only checked after a copy shortcut.
     """
 
     # Set by KeePassXC and others on items that should not be recorded.
     PRIVATE_TYPE = "x-kde-passwordManagerHint"
-    # In order of preference. The first one the owner offers is asked for.
+    # In order of preference.
     TEXT_TYPES = ("text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "TEXT")
     IMAGE_TYPES = (("image/png", "png"), ("image/jpeg", "jpeg"))
     NOTHING = hashlib.sha256(b"").digest()
@@ -1025,21 +914,18 @@ class LinuxClipboard:
     def __init__(self, environ=None, which=shutil.which) -> None:
         environ = os.environ if environ is None else environ
         self.tool = ""
-        # wl-paste is saying when the clipboard changes, and how many times
-        # it has.
+        # `wl-paste --watch` is running, and the number of changes it has reported.
         self.watching = False
         self.watcher = None
         self.changes = 0
-        # Nothing says when it changes, and looking costs too much to do
-        # unasked.
+        # No change events, and checking is too costly to do on every poll.
         self.poke_only = False
         self.last: object = (False, self.NOTHING)
 
-        # The image last seen and when, for an owner that gives no timestamp.
+        # Last image hash and read time, for owners that give no timestamp.
         self.image_seen: tuple[str, bytes] | None = None
         self.image_read = 0.0
-        # An owner whose timestamp keeps moving though its image does not
-        # is not to be believed.
+        # Stop trusting an owner whose timestamp changes while its image stays the same.
         self.stamps_trusted = True
         self.stamp_strikes = 0
         self.read_stamp: bytes | None = None
@@ -1068,7 +954,6 @@ class LinuxClipboard:
             sys.exit("Install wl-clipboard (Wayland), or xclip or xsel (X11).")
 
     def _watch(self) -> bool:
-        """Starts wl-paste in watch mode. False if this compositor will not have it."""
         try:
             child = subprocess.Popen(
                 ["wl-paste", "--watch", "echo"],
@@ -1078,20 +963,19 @@ class LinuxClipboard:
             )
         except OSError:
             return False
-        # Without the data-control protocol it says so and exits at once.
+        # Without the data-control protocol, wl-paste exits right away.
         try:
             child.wait(timeout=0.5)
             return False
         except subprocess.TimeoutExpired:
             pass
         self.watcher = child
-        # It would otherwise outlive the helper, watching for nobody.
+        # Otherwise wl-paste keeps running after the helper exits.
         atexit.register(self.close)
         threading.Thread(target=self._count, args=(child,), daemon=True).start()
         return True
 
     def close(self) -> None:
-        """Stops what was started to watch the clipboard."""
         child, self.watcher = self.watcher, None
         if child is not None and child.poll() is None:
             child.terminate()
@@ -1099,8 +983,7 @@ class LinuxClipboard:
     def _count(self, child) -> None:
         for _line in child.stdout:
             self.changes += 1
-        # It has gone, with the compositor or without. The clipboard is
-        # looked at on every poll from here on.
+        # wl-paste exited. Fall back to checking the clipboard on every poll.
         self.watching = False
 
     def _types_command(self) -> list[str] | None:
@@ -1121,8 +1004,7 @@ class LinuxClipboard:
         if self.tool == "wl":
             return ["wl-copy", "--type", kind]
         if self.tool == "xclip":
-            # With no type named xclip serves text under every name a
-            # program might ask for it by.
+            # With no -t, xclip offers text under all the usual text target names.
             return ["xclip", "-selection", "clipboard", "-i"] + ([] if kind.startswith("text/") else ["-t", kind])
         return ["xsel", "--clipboard", "--input"]
 
@@ -1140,32 +1022,23 @@ class LinuxClipboard:
         return done.stdout if done.returncode == 0 else None
 
     def _offered(self) -> list[str]:
-        """The types the clipboard's owner offers it in."""
         command = self._types_command()
         listing = self._run(command) if command else None
         lines = listing.decode("utf-8", errors="replace").splitlines() if listing else []
         return [line.strip() for line in lines if line.strip()]
 
     def _text(self, offered: list[str]) -> bytes | None:
-        """The clipboard's text, if it holds any.
-
-        Asking is not enough to find out. Some owners, xclip among them,
-        answer a request for text with whatever they hold, and an image
-        piped to xclip by a screenshot script would be read as text. So where
-        the types can be listed, text is asked for only if it is among them,
-        and by the first acceptable name the owner gives it.
-        """
+        """Asks only for a listed text type, since xclip answers any request with whatever it holds."""
         if self.tool == "xsel":
             return self._run(self._paste_command("")) or None
         if offered:
             wanted = next((name for name in self.TEXT_TYPES if name in offered), None)
         else:
-            # The owner would not say. Ask the usual way, in case.
+            # The owner did not list its types. Try the usual name anyway.
             wanted = self.TEXT_TYPES[0] if self.tool == "wl" else "UTF8_STRING"
         return (self._run(self._paste_command(wanted)) or None) if wanted else None
 
     def _image(self, offered: list[str]) -> tuple[bytes, str] | None:
-        """The clipboard's image and its form, if it holds one this can read."""
         if self.tool == "xsel":
             return None
         for mime, form in self.IMAGE_TYPES:
@@ -1176,12 +1049,7 @@ class LinuxClipboard:
         return None
 
     def _stamp(self, offered: list[str]) -> bytes | None:
-        """When the owner took the selection, by its own account.
-
-        An X11 owner that follows the conventions answers TIMESTAMP with the
-        time it became the owner, which is new with every copy. Only asked of
-        one that lists it: xclip, as an owner, would answer with its content.
-        """
+        """The selection's TIMESTAMP. Only asked if listed, since xclip would reply with its content."""
         if self.tool != "xclip" or "TIMESTAMP" not in offered or not self.stamps_trusted:
             return None
         return self._run(self._paste_command("TIMESTAMP")) or None
@@ -1199,8 +1067,8 @@ class LinuxClipboard:
 
         stamp = self._stamp(offered)
         if stamp and self.read_stamp and stamp != self.read_stamp and image[0] == self.read_image:
-            # Once is the same image copied again. More than that is a
-            # timestamp that means nothing.
+            # Once can be the same image copied again. Repeated changes mean
+            # the timestamp is useless.
             self.stamp_strikes += 1
             if self.stamp_strikes >= 3:
                 self.stamps_trusted = False
@@ -1211,11 +1079,7 @@ class LinuxClipboard:
         return Clip(None, image=image[0], form=image[1])
 
     def marker(self, fresh: bool = False) -> object:
-        """Stands in for the change counter there is none of.
-
-        `fresh` says a copy shortcut was just pressed, so that it is worth
-        looking even where looking is costly.
-        """
+        """Stand-in for a change counter. `fresh` means a copy shortcut was just pressed."""
         if self.watching:
             return ("changes", self.changes)
         if self.poke_only and not fresh:
@@ -1224,7 +1088,7 @@ class LinuxClipboard:
         return self.last
 
     def _look(self, fresh: bool) -> object:
-        """A marker made from the clipboard's content, hashed so that the last clip is not kept around in the clear."""
+        """A marker made from a hash of the content, so the clip itself is not kept in memory."""
         offered = self._offered()
         if self.PRIVATE_TYPE in offered:
             return (True, self.NOTHING)
@@ -1241,8 +1105,7 @@ class LinuxClipboard:
         if stamp:
             return ("image", hashlib.sha256(listing.encode() + stamp).digest())
 
-        # Fetching an image makes the program that owns it encode it all
-        # over again, so it is not done on every poll.
+        # Fetching an image makes its owner encode it again, so it is not done on every poll.
         stale = time.monotonic() - self.image_read >= IMAGE_POLL_SECONDS
         if fresh or stale or self.image_seen is None or self.image_seen[0] != listing:
             image = self._image(offered)
@@ -1251,8 +1114,7 @@ class LinuxClipboard:
         return ("image", self.image_seen[1])
 
     def _hand_over(self, command: list[str], data: bytes) -> bool:
-        # xclip and wl-copy stay alive to serve the selection and would
-        # never return.
+        # xclip and wl-copy keep running to serve the selection, so do not wait for them.
         try:
             child = subprocess.Popen(
                 command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -1274,11 +1136,9 @@ class LinuxClipboard:
 
 
 def keyboard_on_usb(name: str) -> int:
-    """BEGIN flags saying whether the keyboard is also plugged into this computer.
+    """BEGIN flags saying whether the keyboard is also on this computer's USB.
 
-    The firmware cannot tell on its own that its USB port and one of its
-    Bluetooth profiles are the same computer. Where this cannot be determined
-    the flags say so, and the keyboard then leaves pastes over USB alone.
+    The firmware cannot tell this itself. If unknown, the keyboard leaves USB pastes alone.
     """
     if not sys.platform.startswith("linux"):
         return 0
@@ -1287,7 +1147,7 @@ def keyboard_on_usb(name: str) -> int:
             with open(f"{device}/idVendor") as vendor, open(f"{device}/idProduct") as product:
                 if vendor.read().strip() != USB_VENDOR or product.read().strip() != USB_PRODUCT:
                     continue
-            # The IDs are shared by every ZMK keyboard; the name says it is ours.
+            # Every ZMK keyboard has these IDs, so check the product name too.
             with open(f"{device}/product") as label:
                 if name.lower() in label.read().lower():
                     return USB_KNOWN | USB_LOCAL
@@ -1300,11 +1160,7 @@ def keyboard_on_usb(name: str) -> int:
 
 
 def find_address(name: str) -> str | None:
-    """The Bluetooth address of the paired keyboard called `name`.
-
-    It is connected for HID and not advertising, so it cannot be scanned for;
-    the operating system's list of paired devices is asked instead.
-    """
+    """Looks up the keyboard in the OS paired-device list, since it does not advertise while connected."""
     if sys.platform == "win32":
         script = (
             "Get-PnpDevice -Class Bluetooth | "
@@ -1335,13 +1191,9 @@ DEVICE_INTERFACE = "org.bluez.Device1"
 
 
 def bluez_device(objects: dict, name: str, address: str | None) -> tuple[str, str, dict] | None:
-    """Picks the keyboard out of what BlueZ's object manager knows of.
+    """Picks the keyboard from GetManagedObjects as the (address, name, details) of a BLEDevice.
 
-    `objects` is path to interface to properties, as GetManagedObjects gives
-    it. Returns what bleak's BLEDevice is made of on Linux: the address, the
-    name, and the details its client reads the D-Bus path and the device's
-    properties from. A device that is connected is preferred, then one that
-    is paired, in case the name has been used more than once.
+    If more than one device matches, a connected one wins, then a paired one.
     """
     found = []
     for path, interfaces in objects.items():
@@ -1362,24 +1214,19 @@ def bluez_device(objects: dict, name: str, address: str | None) -> tuple[str, st
 
 
 def ble_device(address: str, name: str, details):
-    """A BLEDevice for a keyboard that was not scanned for.
+    """Builds a BLEDevice so bleak skips the scan, which cannot find a connected keyboard.
 
-    Given an address, bleak scans for the device before connecting, and a
-    keyboard that is connected to its computer does not advertise: it is never
-    found. Given a BLEDevice it connects without looking. Its WinRT client
-    reads only the address from one; its BlueZ client reads `details["path"]`
-    and `details["props"]`.
+    WinRT reads only the address. BlueZ reads `details["path"]` and `details["props"]`.
     """
     from bleak.backends.device import BLEDevice
 
     try:
         return BLEDevice(address, name, details)
-    except TypeError:  # before bleak 1.0 a signal strength was wanted too
+    except TypeError:  # bleak before 1.0 also wants an RSSI
         return BLEDevice(address, name, details, 0)
 
 
 async def find_device(name: str, address: str | None):
-    """The keyboard as a BLEDevice, or None if this computer does not have it connected."""
     if sys.platform == "win32":
         address = address or await asyncio.to_thread(find_address, name)
         if not address:
@@ -1389,14 +1236,12 @@ async def find_device(name: str, address: str | None):
 
     from bleak.backends.bluezdbus.manager import get_global_bluez_manager
 
-    # Its picture of BlueZ comes from the object manager and from the signals
-    # that follow. No discovery is started to get it.
+    # This reads BlueZ's object manager. It does not start a scan.
     manager = await get_global_bluez_manager()
     objects = getattr(manager, "_properties", None)
     found = bluez_device(objects, name, address) if isinstance(objects, dict) else None
     if found is None and not isinstance(objects, dict):
-        # A bleak that keeps it somewhere else. The path can be worked out,
-        # given the address.
+        # A bleak version that stores this elsewhere. Build the path from the address.
         address = address or await asyncio.to_thread(find_address, name)
         if address:
             adapter = manager.get_default_adapter()
@@ -1408,8 +1253,7 @@ async def find_device(name: str, address: str | None):
         log_once(f"no paired keyboard named {name!r}; pair it first, or pass --address")
         return None
     if not found[2]["props"].get("Connected"):
-        # Connecting is the system's business, as it is for typing. This
-        # only joins a link that is already there.
+        # The OS connects the keyboard for typing. This helper only joins an existing link.
         log_once("the keyboard is not connected to this computer just now")
         return None
     return ble_device(*found)
@@ -1418,16 +1262,8 @@ async def find_device(name: str, address: str | None):
 async def release(client) -> bool:
     """Lets go of the keyboard without disconnecting it.
 
-    On Windows bleak's disconnect closes its own session with the device and
-    the objects it holds, and the system's link to the keyboard stays. On
-    Linux it calls Device1.Disconnect, which drops the whole link, typing
-    included. So there this does what that disconnect does apart from that
-    one call: it stops the notifications, ends the task that would send the
-    Disconnect if it were ever cancelled, lets go of the watcher, and closes
-    the D-Bus connection, at which BlueZ forgets this client.
-
-    Returns False if bleak has changed underneath and it could not be done,
-    in which case the client is simply dropped.
+    On Linux bleak's disconnect calls Device1.Disconnect, which drops the whole link,
+    so this does the rest of it by hand. Returns False if bleak's internals changed.
     """
     if sys.platform == "win32":
         try:
@@ -1458,16 +1294,16 @@ async def release(client) -> bool:
             backend._bus = None
         backend._is_connected = False
         return True
-    except Exception as error:  # private parts of bleak, which may move
+    except Exception as error:  # bleak internals, which can change between versions
         log(f"could not let go of the keyboard cleanly ({describe(error)})")
         return False
 
 
-# ---- The link ----
+# ---- Keyboard link ----
 
 
 def beside(work) -> asyncio.Task:
-    """Runs `work` as a task whose failure is logged rather than left lying."""
+    """Starts `work` as a task and logs it if it fails."""
 
     def finished(task: asyncio.Task) -> None:
         if not task.cancelled() and task.exception() is not None:
@@ -1489,35 +1325,27 @@ async def gone(task: asyncio.Task | None) -> None:
 
 
 class Fetch:
-    """A copy made on another computer that is being fetched."""
-
     def __init__(self, offer: Offer, crc: int, started: float) -> None:
         self.offer = offer
-        # Checksum of the OFFER, which is what the keyboard is told has been
-        # dealt with.
+        # CRC of the OFFER clip, which is what gets ACKed to the keyboard.
         self.crc = crc
         self.started = started
         self.wants = 0
         self.events: asyncio.Queue[tuple] = asyncio.Queue()
         self.task: asyncio.Task | None = None
-        # The HOLD repeats. They outlast the task when the content arrives
-        # through the keyboard, and stop only as the ACK goes out.
+        # Task repeating HOLD. If the content comes through the keyboard, it
+        # keeps running after the fetch ends, until the ACK is sent.
         self.holding: asyncio.Task | None = None
 
 
-# What became of content that was to be put on the clipboard.
+# Results of Bridge.place.
 PLACED, FAILED, STALE = "placed", "failed", "stale"
 
 
 class Bridge:
-    """One connection to the keyboard, and everything that passes over it.
+    """One connection to the keyboard.
 
-    Two loops run side by side. `listen` takes the keyboard's frames in the
-    order they come. `watch` looks at the clipboard and sends what is copied
-    here. Neither waits on the other, so a slow clipboard does not hold up an
-    acknowledgement the keyboard is waiting for. What has to wait on the
-    network runs as tasks beside them: fetching a copy another computer has
-    offered, and getting a copy made here to a helper that could not fetch it.
+    `listen` and `watch` never wait on each other, so a slow clipboard cannot delay an ACK.
     """
 
     def __init__(self, client, clipboard, name: str, endpoint: Endpoint) -> None:
@@ -1526,8 +1354,7 @@ class Bridge:
         self.name = name
         self.endpoint = endpoint
         self.assembler = Assembler()
-        # When the last frame of a delivery arrived, and whether one that
-        # has arrived whole is still being put on the clipboard.
+        # Time of the last delivery frame, and whether a complete delivery is still being placed.
         self.delivery_heard = 0.0
         self.accepting = False
 
@@ -1540,29 +1367,26 @@ class Bridge:
         self.quick_looks = 0
         self.poked = asyncio.Event()
 
-        # What the clipboard looked like when it was last dealt with.
+        # Clipboard marker as of the last check.
         self.seen: object = None
-        # What was last sent from here, and whose it was, so that the same
-        # thing is not sent again because its marker moved; and what this
-        # helper last put on the clipboard itself, so that is not sent back.
+        # The last clip sent (fingerprint and owner) and the last one placed here,
+        # so neither is sent again just because the marker moved.
         self.sent: tuple[bytes, object] | None = None
         self.placed: bytes | None = None
-        # Held across a write to the clipboard and the reading of its marker
-        # afterwards, so the poll never sees the one without the other.
+        # Held across a clipboard write and the marker read after it, so the
+        # poll never sees one without the other.
         self.board = asyncio.Lock()
-        # Clipboard calls run on other threads, so that a slow one does not
-        # hold up the link, and one whose caller was cancelled runs to its
-        # end there regardless. This keeps the next from starting before it.
+        # Clipboard calls run on worker threads and keep running if their caller
+        # is cancelled. This lock stops the next call from starting before then.
         self.board_thread = threading.Lock()
 
-        # Counts the clips sent, so one overtaken by a newer copy stops.
+        # Bumped for each clip sent, so a send stops when a newer copy overtakes it.
         self.serial = 0
         self.sending = asyncio.Lock()
         self.pushing: asyncio.Task | None = None
 
         self.fetch: Fetch | None = None
-        # The copy whose fetch was abandoned because something was copied
-        # here instead. If its content turns up anyway, it is not wanted.
+        # Ticket of a fetch dropped for a local copy. Its content is not placed if it arrives.
         self.abandoned: bytes | None = None
         self.answering: asyncio.Task | None = None
 
@@ -1582,7 +1406,7 @@ class Bridge:
             self.incoming.put_nowait(bytes(data))
 
     async def send_clip(self, payload: bytes, flags: int) -> bool:
-        """Sends one clip, unless a newer copy overtakes it on the way."""
+        """Sends one clip. Returns False if a newer copy overtakes it partway."""
         self.serial += 1
         serial = self.serial
         async with self.sending:
@@ -1593,8 +1417,7 @@ class Bridge:
         return True
 
     async def clear(self) -> None:
-        # Told to drop what it has, the keyboard can never go on to deliver
-        # something older than the most recent copy.
+        # Drops the keyboard's clip so it never delivers one older than the latest copy here.
         self.serial += 1
         await self.send(bytes([CLEAR]))
 
@@ -1602,8 +1425,6 @@ class Bridge:
         await self.send(bytes([RELAY]) + datagram)
 
     async def on_board(self, call, *arguments):
-        """Makes one call on the clipboard, off the event loop."""
-
         def alone():
             with self.board_thread:
                 return call(*arguments)
@@ -1611,24 +1432,19 @@ class Bridge:
         return await asyncio.to_thread(alone)
 
     async def own_addresses(self) -> list[str]:
-        """This computer's addresses, without letting a slow name lookup hold a copy up."""
+        """Local addresses, or only the routed ones if a slow host name lookup takes too long."""
         try:
             return await asyncio.wait_for(asyncio.to_thread(self.endpoint.addresses), 0.5)
         except asyncio.TimeoutError:
             return usable(routed_addresses())
 
     def can_offer(self) -> bool:
-        """Whether the keyboard passes an OFFER on."""
         return self.version >= 2 and self.max_opaque >= MIN_OPAQUE
 
     def busy(self) -> bool:
-        """A delivery is arriving or being dealt with, or a fetch is running.
+        """True while a delivery or fetch is in progress. A HELLO then would restart the delivery.
 
-        The periodic HELLO is held off meanwhile: the keyboard takes one to
-        mean a helper that has only just started, and would begin the delivery
-        again. A delivery only counts as arriving while frames keep coming.
-        The keyboard can abandon one without a word, and a helper that then
-        never said HELLO again would never be delivered to again.
+        A delivery only counts while frames keep coming, since the keyboard can drop one silently.
         """
         arriving = (
             self.assembler.active
@@ -1636,33 +1452,26 @@ class Bridge:
         )
         return self.fetch is not None or arriving or self.accepting
 
-    # -- This computer's clipboard, outbound --
-
     def same_as_before(self, clip: Clip) -> bool:
-        """Whether `clip` is only what was already sent from here or put here.
+        """Whether `clip` was already sent from here or written here.
 
-        Windows moves its clipboard number on when a format is rendered that
-        had only been promised, and this helper's own reading can be what has
-        it rendered. A move with the same owner and the same content is that,
-        not a copy.
+        Windows bumps its counter when this helper's own read renders a promised format.
         """
         mark = clip.fingerprint()
         return mark == self.placed or (clip.owner is not None and (mark, clip.owner) == self.sent)
 
     async def check_clipboard(self, poked: bool) -> None:
-        """Looks for a new copy on this computer, and sends it if there is one."""
         async with self.board:
             marker = await self.on_board(self.clipboard.marker, poked)
             if marker == self.seen:
                 return
             clip = await self.on_board(self.clipboard.read)
             if clip is None:
-                # Could not look: another program has the clipboard open. It
-                # is not marked as seen, and so is looked at again next time.
+                # Another program has the clipboard open. Leave `seen` so the next poll retries.
                 return
             self.seen = marker if clip.after is None else clip.after
 
-        # A copy shortcut the keyboard saw is a copy, whatever it copied.
+        # After a copy shortcut, send even if the content is unchanged.
         if not poked and self.same_as_before(clip):
             return
         self.quick_looks = 0
@@ -1671,28 +1480,25 @@ class Bridge:
         await self.local_copy(clip)
 
     async def local_copy(self, clip: Clip) -> None:
-        """Something was copied here: it is the latest copy now, in place of anything in hand."""
+        """Something was copied here. It replaces any fetch or offer in progress."""
         fetch = self.fetch
         if fetch:
             await self.end_fetch()
             self.abandoned = fetch.offer.ticket
             if fetch.wants:
-                # The computer it was copied on may be about to send it
-                # through the keyboard, which would replace this copy there.
-                # Said before the copy itself goes, while the keyboard still
-                # knows where to pass it.
+                # Tell the other computer not to send its content through the keyboard, where it
+                # would replace this copy. Sent first, while the keyboard can still route it.
                 await self.relay(bytes([CANCEL]) + fetch.offer.ticket)
             await self.send(bytes([HOLD, HOLD_OFF]))
             log("stopped fetching: something was copied here")
 
-        # Only the latest copy is on offer, whatever kind it turns out to be.
+        # Only the latest copy is ever on offer.
         self.endpoint.offering = None
         await gone(self.answering)
         await gone(self.pushing)
         self.pushing = beside(self.push(clip))
 
     async def push(self, clip: Clip) -> None:
-        """Hands the keyboard what was just copied here."""
         payload = text_bytes(clip.text) if clip.text else b""
 
         if clip.private:
@@ -1715,10 +1521,10 @@ class Bridge:
         await self.clear()
 
     async def offer(self, kind: int, produce, what: str) -> None:
-        """Puts a copy on offer and sends the keyboard the message that says where."""
+        """Puts a copy on offer and sends the OFFER through the keyboard."""
         offering = Offering(kind, produce)
-        # With no port to be reached at, the other helper still gets to hear
-        # of the copy, and asks for it another way.
+        # Even with no listening port, the OFFER goes out so the other helper
+        # can ask for the copy with a WANT.
         port = self.endpoint.port
         addresses = await self.own_addresses() if port else []
         message = Offer(kind, offering.ticket, offering.key, port, addresses).encode(self.max_opaque)
@@ -1727,14 +1533,10 @@ class Bridge:
         await self.send_clip(message, keyboard_on_usb(self.name) | OPAQUE)
 
     async def answer(self, offering: Offering, port: int, addresses: list[str]) -> None:
-        """Gets the copy on offer to a helper that could not come for it.
-
-        Over the network if this side can connect where the other could not,
-        and otherwise through the keyboard, cut down to fit.
-        """
+        """Sends the offered copy to a helper that could not fetch it, by PUT or else as an INLINE."""
         try:
             content = await offering.content()
-        except Exception as error:  # Pillow raises a variety of things on a bad image
+        except Exception as error:  # Pillow can raise many error types on a bad image
             log(f"could not read the copy on offer ({describe(error)})")
             await self.relay(bytes([GONE]) + offering.ticket)
             return
@@ -1756,7 +1558,6 @@ class Bridge:
         await self.send_clip(message, keyboard_on_usb(self.name) | OPAQUE)
 
     async def on_relay(self, datagram: bytes) -> None:
-        """A datagram from the helper at the other end of the clip."""
         if not datagram:
             return
         ticket = datagram[1:9]
@@ -1768,8 +1569,7 @@ class Bridge:
             return
 
         if datagram[0] == CANCEL and len(datagram) >= 9:
-            # Something newer was copied on the computer that asked. An
-            # INLINE now would replace that in the keyboard.
+            # The asking computer has a newer copy. An INLINE now would replace it in the keyboard.
             if offering and offering.ticket == ticket:
                 self.endpoint.offering = None
                 await gone(self.answering)
@@ -1781,33 +1581,25 @@ class Bridge:
             return
         ticket, port, addresses = want
         if offering is None or offering.ticket != ticket:
-            # Something has been copied here since. Saying so spares the
-            # other helper a long wait for content that is not coming.
+            # Something newer was copied here. GONE saves the other helper a long wait.
             await self.relay(bytes([GONE]) + ticket)
             return
         if self.answering and not self.answering.done():
             return
         self.answering = beside(self.answer(offering, port, addresses))
 
-    # -- Another computer's clip, inbound --
-
     async def place(
         self, kind: int, content: bytes, crc: int, how: str, holding: asyncio.Task | None = None
     ) -> str:
-        """Puts delivered content on the clipboard and acknowledges it.
+        """Puts delivered content on the clipboard and ACKs it.
 
-        `how` is the log line, with `{}` where the size goes. `holding` is
-        the task repeating HOLD, if one is: it runs on through the making of
-        the image and the writing of it, which can take a while, and is
-        stopped only as the acknowledgement goes out. A HOLD after the
-        acknowledgement would have the keyboard keeping pastes back again.
+        `holding` (the HOLD task, if any) runs until the ACK goes out, since writing
+        an image can be slow. A HOLD after the ACK would hold pastes again.
         """
         try:
             async with self.board:
-                # Something copied here since the last look is newer than
-                # what has just arrived, and must not be written over. Before
-                # the first look there is nothing to compare with: whatever
-                # is there was copied before this helper was listening.
+                # A copy made here since the last check is newer and must not be
+                # overwritten. Before the first check there is nothing to compare.
                 marker = await self.on_board(self.clipboard.marker, False)
                 if self.seen is not None and marker != self.seen:
                     current = await self.on_board(self.clipboard.read)
@@ -1823,7 +1615,7 @@ class Bridge:
                         png = await asyncio.to_thread(to_png, kind, content)
                         mark = fingerprint(KIND_PNG, png)
                         written = await self.on_board(self.clipboard.write_image, png)
-                except Exception as error:  # Pillow raises a variety of things on a bad image
+                except Exception as error:  # Pillow can raise many error types on a bad image
                     log(f"could not make sense of what arrived ({describe(error)})")
                     written = False
                 if not written:
@@ -1832,15 +1624,13 @@ class Bridge:
 
                 await gone(holding)
                 holding = None
-                # The acknowledgement is what tells the keyboard to let the
-                # paste through instead of typing the clip.
+                # The ACK tells the keyboard to let the paste through instead of typing the clip.
                 await self.send(bytes([ACK]) + crc.to_bytes(4, "little"))
                 self.placed = mark
                 log(how.format(len(content)))
                 await asyncio.sleep(0.1)  # let the clipboard settle before reading its marker
-                # Not a fresh look: where looking is costly it is not worth
-                # one, and if the marker moves late, what is then read is
-                # recognised as this.
+                # Not a fresh look, since looking can be costly. If the marker
+                # moves later, same_as_before still recognizes this clip.
                 self.seen = await self.on_board(self.clipboard.marker, False)
                 return PLACED
         finally:
@@ -1848,9 +1638,8 @@ class Bridge:
                 holding.cancel()
 
     async def accept(self, payload: bytes, crc: int, flags: int) -> None:
-        """A whole clip has arrived from the keyboard."""
         if not flags & OPAQUE:
-            # A different clip from the one being fetched, if one was.
+            # Plain text replaces any fetch in progress.
             await self.end_fetch()
             await self.place(KIND_TEXT, payload, crc, "took delivery of {} bytes")
             return
@@ -1862,20 +1651,16 @@ class Bridge:
             self.start_fetch(offer, crc)
         elif inline:
             kind, ticket, content = inline
-            # Whether or not a fetch here was waiting for exactly this, it
-            # has arrived whole and there is nothing left to fetch. If one
-            # was, its HOLD repeats run on until this is on the clipboard.
+            # Nothing is left to fetch. Any HOLD repeats keep going until this is placed.
             holding = await self.end_fetch(keep_holding=True)
             if ticket == self.abandoned:
-                # Asked for before something was copied here instead. The
-                # acknowledgement still goes, so a paste is not held for it.
+                # This was asked for before a newer local copy. ACK it anyway so pastes are not held.
                 await gone(holding)
                 await self.send(bytes([ACK]) + crc.to_bytes(4, "little"))
                 return
             await self.place(kind, content, crc, "took delivery of {} bytes through the keyboard", holding)
         else:
-            # From a newer helper than this one. Acknowledged all the same,
-            # so that a paste here is not kept waiting on it.
+            # From a newer helper version. ACK it anyway so a paste here is not kept waiting.
             await self.end_fetch()
             await self.send(bytes([ACK]) + crc.to_bytes(4, "little"))
             log("the other computer sent something this version cannot read")
@@ -1887,14 +1672,9 @@ class Bridge:
         fetch.task = beside(self.run_fetch(fetch))
 
     async def keep_holding(self, fetch: Fetch) -> None:
-        """Asks the keyboard, over and over, to keep pastes back while the fetch runs.
+        """Repeats HOLD so a paste waits for the fetch instead of pasting the old clipboard.
 
-        Said at once and then repeated, so that a paste pressed meanwhile
-        waits instead of putting down whatever the clipboard held before. If
-        the copy has not come by the time both ways over the network have had
-        their chance, it is coming the slow way or as a long download, and a
-        paste is not worth holding for either: from then on the keyboard is
-        told to drop pastes instead.
+        Once the fast network routes have had their time, it tells the keyboard to drop pastes.
         """
         loop = asyncio.get_running_loop()
         slow_from = fetch.started + CONNECT_SECONDS + PUT_WAIT_SECONDS
@@ -1906,7 +1686,6 @@ class Bridge:
             await self.send(bytes([HOLD, HOLD_SOON if soon else 0]))
 
     async def run_fetch(self, fetch: Fetch) -> None:
-        """Fetches the copy an OFFER names, by whichever way works; see PROTOCOL.md."""
         try:
             found = await self.find(fetch)
 
@@ -1918,16 +1697,13 @@ class Bridge:
             await gone(fetch.holding)
 
             if outcome == STALE:
-                # Something was copied here while it was on its way. The
-                # watch loop sends that; all there is to say here is that
-                # nothing is being fetched any more.
+                # Something was copied here meanwhile and the watch loop sends it, so only end the HOLD.
                 await self.send(bytes([HOLD, HOLD_OFF]))
             elif outcome == FAILED:
                 await self.send(bytes([HOLD, HOLD_OFF]))
                 await self.send(bytes([ACK]) + fetch.crc.to_bytes(4, "little"))
         except asyncio.CancelledError:
-            # Ended from outside, which also decides what becomes of the
-            # HOLD repeats.
+            # Cancelled by end_fetch, which decides what happens to the HOLD task.
             raise
         except Exception:
             if fetch.holding:
@@ -1940,12 +1716,9 @@ class Bridge:
                 self.fetch = None
 
     async def find(self, fetch: Fetch):
-        """Goes through the ways a copy can come until one of them works.
+        """Tries each route in turn. Returns the arguments for `place`, or a failure reason string.
 
-        Returns what `place` takes: the kind, the content, the checksum to
-        acknowledge and the wording for the log. Or, if none worked, the
-        reason as a string. Content that comes through the keyboard arrives
-        as a clip like any other, and `accept` ends the fetch when it does.
+        An INLINE arrives as a normal clip instead, and `accept` ends the fetch.
         """
         offer = fetch.offer
 
@@ -1953,9 +1726,8 @@ class Bridge:
         if content is not None:
             return offer.kind, content, fetch.crc, "fetched {} bytes over the network"
 
-        # Nothing answered where the copy was offered, or the stream failed.
-        # The computer it was made on may still be able to connect here, and
-        # if not, it can send the content through the keyboard.
+        # GET failed. Ask the other helper to PUT it here, or else to send it
+        # as an INLINE through the keyboard.
         def brought(content: bytes) -> None:
             fetch.events.put_nowait(("put", content))
 
@@ -1980,17 +1752,13 @@ class Bridge:
             if event[0] == "unreachable":
                 if fetch.wants > 1:
                     return "the computer it was copied on is out of reach"
-                # It may only have been too long for the link at the other
-                # end. With no addresses in it, it is as short as it gets.
+                # The WANT may have been too long for the other end's link.
+                # Retry once with no addresses, the shortest form.
                 fetch.wants += 1
                 await self.relay(encode_want(offer.ticket, port, [], room))
 
     async def end_fetch(self, keep_holding: bool = False) -> asyncio.Task | None:
-        """Stops fetching, without a word to the keyboard.
-
-        With `keep_holding` the HOLD repeats are left running and handed
-        back, for the caller to stop when it has an acknowledgement to send.
-        """
+        """Stops fetching silently. With `keep_holding`, returns the HOLD task for the caller to stop at the ACK."""
         fetch, self.fetch = self.fetch, None
         if fetch is None:
             return None
@@ -2002,10 +1770,7 @@ class Bridge:
         await gone(fetch.holding)
         return None
 
-    # -- The two loops --
-
     async def handle(self, frame: bytes) -> None:
-        """Processes one frame from the keyboard."""
         kind = frame[0]
         if kind == STATUS and len(frame) >= 4:
             self.version = frame[1]
@@ -2020,9 +1785,8 @@ class Bridge:
         elif kind == RESULT and len(frame) >= 2 and frame[1] != 0:
             log(f"keyboard refused the clip (code {frame[1]})")
         elif kind == POKE:
-            # The keyboard saw a copy shortcut go by. Looking now, rather than
-            # on the next poll, is what lets a quick switch-and-paste carry
-            # the new clip instead of the one before it.
+            # The keyboard saw a copy shortcut. Checking right away lets a quick
+            # switch-and-paste carry the new clip.
             self.quick_looks = POKE_LOOKS
             self.poked.set()
         elif kind == BEGIN:
@@ -2036,8 +1800,7 @@ class Bridge:
             if clip is None:
                 log("a delivered clip arrived damaged")
                 return
-            # Until it is acknowledged the keyboard still counts it as
-            # being delivered.
+            # The keyboard counts it as still being delivered until it is ACKed.
             self.accepting = True
             try:
                 await self.accept(*clip)
@@ -2047,12 +1810,10 @@ class Bridge:
             await self.on_relay(frame[1:])
 
     async def listen(self) -> None:
-        """Takes the keyboard's frames, in the order they come."""
         while True:
             await self.handle(await self.incoming.get())
 
     async def watch(self) -> None:
-        """Looks at the clipboard, sends what is copied here, and keeps the keyboard's trust."""
         loop = asyncio.get_running_loop()
         # Only copies made from here on are carried.
         async with self.board:
@@ -2070,14 +1831,13 @@ class Bridge:
             self.quick_looks = max(0, self.quick_looks - 1)
             await self.check_clipboard(poked)
 
-            # The firmware stops waiting on a helper that misses an
-            # acknowledgement; this is what gets it trusted again.
+            # The firmware stops waiting on a helper that misses an ACK. A HELLO
+            # makes it trust the helper again.
             if loop.time() - said_hello >= HELLO_SECONDS and not self.busy():
                 said_hello = loop.time()
                 await self.send(bytes([HELLO, VERSION, 0]))
 
     async def run(self) -> None:
-        """Runs until the link drops."""
         await self.client.start_notify(TX_UUID, self.on_notify)
         await self.send(bytes([HELLO, VERSION, 0]))
         log("ready")
@@ -2094,18 +1854,13 @@ class Bridge:
                 raise task.exception()
 
     async def close(self) -> None:
-        """Stops what was running beside the loops. The link is gone or going."""
         await self.end_fetch()
         await gone(self.answering)
         await gone(self.pushing)
 
 
 async def session(client, clipboard, name: str, endpoint: Endpoint) -> None:
-    """One connection's worth of carrying, from HELLO until the link goes.
-
-    Whatever goes wrong in it is logged, not raised. Nothing the keyboard,
-    the clipboard or bleak does is a reason for the helper to stop.
-    """
+    """Runs one connection. Errors are logged and not raised, so they never stop the helper."""
     bridge = Bridge(client, clipboard, name, endpoint)
     try:
         await bridge.run()
@@ -2115,8 +1870,7 @@ async def session(client, clipboard, name: str, endpoint: Endpoint) -> None:
         try:
             await bridge.close()
             if client.is_connected:
-                # So the next paste here does not wait on an acknowledgement
-                # that will never come.
+                # So the next paste here does not wait for an ACK that will never come.
                 await bridge.send(bytes([BYE]))
         except Exception:
             pass
@@ -2125,7 +1879,6 @@ async def session(client, clipboard, name: str, endpoint: Endpoint) -> None:
 async def attempt(
     args: argparse.Namespace, clipboard, endpoint: Endpoint, state: dict, find=None, make_client=None
 ) -> None:
-    """Finds the keyboard, joins its link, and carries until that link goes."""
     if make_client is None:
         from bleak import BleakClient as make_client
 
@@ -2135,10 +1888,9 @@ async def attempt(
 
     options = {}
     if sys.platform == "win32":
-        # Windows caches a paired device's services, and a cache from before
-        # the firmware gained the clipboard service would hide it. It also
-        # sometimes wants to be told what kind of address it is being given;
-        # each kind is tried in turn until one is found.
+        # Windows caches a paired device's services, and a cache from before the
+        # firmware had the clipboard service would hide it. Windows also sometimes
+        # needs the address type, so each type is tried in turn until one works.
         kinds = (None, "random", "public")
         kind = kinds[state.get("address_kind", 0) % len(kinds)]
         options = {"winrt": {"use_cached_services": False, **({"address_type": kind} if kind else {})}}
@@ -2151,9 +1903,8 @@ async def attempt(
         try:
             await asyncio.shield(joining)
         except asyncio.CancelledError:
-            # Told to stop in the middle of joining. Cancelled there, bleak
-            # disconnects the keyboard on its way out on Linux. Left to
-            # finish, it does not, and the link can then be let go of.
+            # Stopped while connecting. On Linux a cancelled connect makes bleak
+            # disconnect the keyboard, so let it finish and then release it.
             await asyncio.wait([joining], timeout=10)
             if joining.done() and not joining.cancelled():
                 joining.exception()
@@ -2173,16 +1924,15 @@ async def attempt(
             state["unreleased"] = True
 
     if unsupported:
-        # Let go of first, and only then left alone for a while.
+        # Release first, then leave the keyboard alone for a while.
         await asyncio.sleep(UNSUPPORTED_SECONDS)
 
 
 async def serve(args: argparse.Namespace, clipboard, endpoint: Endpoint, state: dict, once=attempt) -> None:
-    """Carries for as long as the helper runs, through every loss of the link."""
     while True:
         try:
             await once(args, clipboard, endpoint, state)
-        except Exception as error:  # nothing short of being told to stop ends the helper
+        except Exception as error:  # only a stop signal ends the helper
             log_once(f"no link to the keyboard ({describe(error)})")
         await asyncio.sleep(RETRY_SECONDS)
 
@@ -2199,9 +1949,8 @@ async def main(args: argparse.Namespace) -> None:
     state: dict = {}
     serving = asyncio.ensure_future(serve(args, clipboard, endpoint, state))
 
-    # Stopped by signal rather than by KeyboardInterrupt where that can be
-    # had: what is in hand is then put down in order, and on Linux nothing is
-    # cancelled that would take the keyboard's link down with it.
+    # Use signal handlers instead of KeyboardInterrupt so shutdown is orderly, and on
+    # Linux nothing cancels the bleak task that would drop the keyboard's link.
     stop = asyncio.Event()
     try:
         for number in (signal.SIGINT, signal.SIGTERM):
@@ -2220,10 +1969,8 @@ async def main(args: argparse.Namespace) -> None:
             clipboard.close()
 
     if state.get("unreleased") and sys.platform != "win32":
-        # bleak could not be made to let go of the keyboard. Winding the
-        # event loop down the usual way would cancel the task of its that
-        # disconnects the keyboard when cancelled, so the process ends here
-        # instead, without that.
+        # bleak could not release the keyboard. A normal event loop shutdown
+        # would cancel bleak's task that disconnects the keyboard, so exit now.
         sys.stdout.flush()
         os._exit(0)
 

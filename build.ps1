@@ -1,14 +1,8 @@
-# Builds M0110HUD for Windows into build\M0110HUD\, a folder that runs on its
-# own: the executable and the Swift runtime it needs.
-#
+# Builds M0110HUD for Windows into build\M0110HUD\, with the Swift runtime included.
+# Needs the Swift toolchain for Windows.
 #   .\build.ps1             build
-#   .\build.ps1 -Install    and copy it to %LOCALAPPDATA%\Programs\M0110HUD,
-#                           replacing and restarting a running copy
-#   .\build.ps1 -NoRuntime  leave the Swift runtime out, for a machine that
-#                           has Swift installed and on PATH
-#
-# Needs the Swift toolchain for Windows, which brings Visual Studio's build
-# tools and the Windows SDK with it.
+#   .\build.ps1 -Install    also install to %LOCALAPPDATA%\Programs\M0110HUD and restart it
+#   .\build.ps1 -NoRuntime  leave out the Swift runtime (for a PC with Swift on PATH)
 [CmdletBinding()]
 param(
     [switch]$Install,
@@ -24,8 +18,7 @@ $Out = Join-Path $PSScriptRoot "build\$Name"
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 Write-Host '==> Compiling (release)'
-# Debug information in CodeView, so the .pdb beside the executable names the
-# frames in hang.log.
+# CodeView debug info, so the .pdb next to the exe names the frames in hang.log.
 $Flags = @('-Xswiftc', '-g', '-Xswiftc', '-debug-info-format=codeview', '-Xlinker', '-debug')
 swift build -c release --product $Name @Flags
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -39,15 +32,12 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 Copy-Item $Exe $Out
 $Pdb = Join-Path $Bin "$Name.pdb"
 if (Test-Path $Pdb) { Copy-Item $Pdb $Out }
-# The window's interface, served to its WebView2 from this folder.
 Copy-Item -Recurse (Join-Path $PSScriptRoot 'WindowsUI') (Join-Path $Out 'ui')
 $Built = Join-Path $Out "$Name.exe"
 
-# SwiftPM links every executable as a console program, which opens a console
-# window when started from Explorer or at login. The subsystem is one field
-# in the PE optional header, 68 bytes in for both PE32 and PE32+; marking it
-# GUI is all /SUBSYSTEM:WINDOWS would have done, and leaves `swift run`
-# printing to its console as usual.
+# SwiftPM links executables as console programs, which open a console window
+# when started from Explorer or at login. Set the PE subsystem field (68 bytes
+# into the optional header, for PE32 and PE32+) to GUI instead.
 $bytes = [System.IO.File]::ReadAllBytes($Built)
 $pe = [BitConverter]::ToInt32($bytes, 0x3C)
 if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550) { throw "$Built is not a PE file" }
@@ -57,8 +47,7 @@ $bytes[$subsystem + 1] = 0
 [System.IO.File]::WriteAllBytes($Built, $bytes)
 
 if (-not $NoRuntime) {
-    # The runtime directory the toolchain put on PATH. All of it, rather than
-    # working out which DLLs pull in which: Foundation alone needs a handful.
+    # Copy every DLL in the runtime folder, since Foundation alone needs several.
     $core = (where.exe swiftCore.dll 2>$null | Select-Object -First 1)
     if (-not $core) { throw 'swiftCore.dll is not on PATH; install the Swift runtime, or pass -NoRuntime' }
     $runtime = Split-Path $core

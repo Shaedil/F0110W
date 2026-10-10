@@ -1,6 +1,5 @@
 #!/bin/sh
-# Rebuilds WindowsUI/fixture.json, the sample data the Windows page shows when
-# opened in a browser, from the shared Swift that builds the real thing.
+# Rebuilds WindowsUI/fixture.json (sample data for browser previews) from the shared Swift.
 set -e
 cd "$(dirname "$0")/.."
 src=Sources/M0110HUD

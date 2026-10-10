@@ -4,11 +4,8 @@ import XCTest
 
 @testable import M0110HUD
 
-// The profile names on Windows: the rules shared with the Mac, against a
-// settings.json-shaped store, and this PC's own name.
-
 final class WinProfileNamesTests: XCTestCase {
-    /// A store over a WinSettings, as WinApp keeps one.
+    /// A name store backed by WinSettings, like the one WinApp uses.
     private final class Settings {
         var value = WinSettings()
         lazy var store = ProfileNameStore(
@@ -36,7 +33,7 @@ final class WinProfileNamesTests: XCTestCase {
         XCTAssertGreaterThan(m0110_windows_build(), 0)
     }
 
-    /// A hand-written settings.json from before the keyboard kept names.
+    /// A settings.json from before the keyboard stored names.
     func testCarriesOverOldSettings() throws {
         let old = #"{ "profileNames": ["MacBook", "Windows PC"] }"#
         let settings = Settings()
@@ -59,7 +56,6 @@ final class WinProfileNamesTests: XCTestCase {
         XCTAssertEqual(settings.value.profileName(2), "Profile 3")
     }
 
-    /// A blank profile of its own gets this PC's name; the keyboard numbers it.
     func testNamesItself() {
         XCTAssertEqual(
             ProfileNameSync.writes(keyboard: ["MacBook Air M4", "", "", "", ""],
@@ -67,7 +63,6 @@ final class WinProfileNamesTests: XCTestCase {
             [ProfileNameSync.Write(op: .auto, index: 1, name: DeviceName.current())])
     }
 
-    /// The pending renames survive a round trip through settings.json.
     func testPendingSurvivesSaving() throws {
         let settings = Settings()
         settings.store.edit(3, "Apple TV")

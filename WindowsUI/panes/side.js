@@ -1,13 +1,10 @@
-// The Bluetooth, Battery and Gestures panes: the Mac's settings groups and
-// its FeatureGapPane, each with the board's stage beside it.
+// The Bluetooth, Battery and Gestures panes, matching the Mac's.
 
 import { h, panel, stepper } from '../ui.js';
 
 function group(title, ...children) {
   return panel(h('div.group', {}, h('div.section-title', {}, title), ...children));
 }
-
-// ---- Bluetooth ----
 
 export function bluetoothPane(host, app) {
   const fields = [];
@@ -33,8 +30,6 @@ export function bluetoothPane(host, app) {
     },
   };
 }
-
-// ---- Battery ----
 
 function stepperRow(label, key, range, app) {
   const value = h('span.value');
@@ -67,8 +62,6 @@ export function batteryPane(host, app) {
     },
   };
 }
-
-// ---- Gestures ----
 
 function bullets(title, items, colour) {
   return panel(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },

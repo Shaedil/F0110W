@@ -9,8 +9,7 @@ extension DeviceName {
             cpuBrand: sysctlString("machdep.cpu.brand_string") ?? "")
     }
 
-    /// "MacBook Air (13-inch, M4, 2025)", from the device tree. Apple silicon
-    /// Macs have it; Intel ones do not.
+    /// e.g. "MacBook Air (13-inch, M4, 2025)" from the device tree. Only Apple silicon Macs have it.
     private static func productName() -> String? {
         let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
         guard entry != 0 else { return nil }

@@ -19,7 +19,7 @@ enum Pane: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Warm-leaning icon tints, in the Altar II palette.
+    /// Icon tints from the Altar II palette.
     var tint: Color {
         switch self {
         case .keys: return Color(red: 0.85, green: 0.72, blue: 0.50)
@@ -39,35 +39,24 @@ struct RootView: View {
     @State private var fullScreen = false
     /// Read here too, so the 3D board can follow the Settings tab.
     @AppStorage("settingsTab") private var settingsTab: SettingsTab = .popup
-    /// The keyboard's link and battery, for the 3D battery's gauge.
     @ObservedObject private var status = StatusModel.shared
-    /// The detail pane's inset from its leading and trailing edges.
     private static let contentPadding: CGFloat = 28
     @Environment(\.classicSnapshot) private var snapshot
     var onClose: (() -> Void)?
     var onPaneChange: ((Pane) -> Void)?
-    /// The window sizes itself to what is on screen, so it has to hear when
-    /// that changes. Absent for offscreen renders, which have no window.
+    /// Nil for offscreen renders, which have no window.
     var onLayoutChange: ((WindowLayout) -> Void)?
 
-    /// Sidebar metrics. It floats over the content rather than dividing the
-    /// window, so it needs margins of its own on all four sides.
     private static let sidebarWidth: CGFloat = 214
-    /// Small, because the traffic lights live *inside* the sidebar, the way
-    /// Finder does it. AppKit puts them at a fixed offset from the window's
-    /// corner, so the panel has to reach nearly into that corner to enclose
-    /// them; inset it much further and they end up sitting on the background
-    /// beside the panel instead of on it.
+    /// Small so the panel reaches into the window corner and encloses the
+    /// traffic lights, which AppKit places at a fixed offset.
     private static let sidebarInset: CGFloat = 8
 
-    /// Total width the sidebar occupies, itself plus both margins. The window
-    /// gives back exactly this much when the sidebar is hidden, which is what
-    /// leaves the board the same size in both states.
+    /// Sidebar plus both margins. The window shrinks by this much when the
+    /// sidebar hides.
     static var sidebarSpan: CGFloat { sidebarWidth + sidebarInset * 2 }
     /// Height inside the sidebar reserved for the window controls.
     private static let trafficLightBand: CGFloat = 44
-    /// How far the content is held off the window's leading edge while the
-    /// sidebar is showing.
     private var contentInset: CGFloat {
         sidebarVisible ? Self.sidebarSpan : 0
     }
@@ -84,12 +73,8 @@ struct RootView: View {
         self.onLayoutChange = onLayoutChange
     }
 
-    /// The state the window's size is computed from.
-    ///
-    /// The picker is drawn only on the Keys pane, and only once there is a
-    /// board to draw it under. Sizing the window from the selection alone would
-    /// leave it tall on the Settings pane, or while the keyboard is locked and
-    /// the board is a placeholder.
+    /// The picker only shows on the Keys pane once a board is drawn, so a
+    /// selected key alone does not open it.
     private var windowLayout: WindowLayout {
         WindowLayout(
             sidebarVisible: sidebarVisible,
@@ -113,10 +98,8 @@ struct RootView: View {
                 floatingSidebar
                     .transition(.move(edge: .leading).combined(with: .opacity))
             } else {
-                // With the sidebar hidden its own copy goes with it, so this is
-                // the only way back. It sits beside the window controls, which
-                // are now over the content; in full screen there are none, so
-                // it lines up with the content's edge instead.
+                // The only way back once the sidebar is hidden. It sits beside
+                // the window controls, or at the content edge in full screen.
                 toggleButton(onSidebar: false)
                     .padding(.leading, fullScreen ? Self.contentPadding
                                                   : MainWindowController.controlsTrailingX + 12)
@@ -124,17 +107,11 @@ struct RootView: View {
                                    - Self.toggleSize.height / 2)
             }
         }
-        // The window uses `fullSizeContentView`, but SwiftUI still insets its
-        // content by the title bar's safe area, which pushed the toggle a full
-        // title bar below the traffic lights it is supposed to sit beside, and
-        // everything else down with it. The theme paints under the title bar on
-        // purpose, so the inset is not wanted here.
+        // SwiftUI still insets by the title bar's safe area under
+        // `fullSizeContentView`, which pushed everything a title bar too low.
         .ignoresSafeArea(.container, edges: .top)
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarVisible)
-        // Watched rather than fired from the toggle's action or the keycap's
-        // tap, so every route into these states moves the window: the keyboard
-        // shortcut, the picker's Done button, switching panes, a reload that
-        // empties the board.
+        // Watched here, so every path that changes the layout resizes the window.
         .onChange(of: windowLayout) { layout in onLayoutChange?(layout) }
         .onChange(of: pane) { pane in onPaneChange?(pane) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
@@ -148,13 +125,9 @@ struct RootView: View {
 
     // MARK: - Sidebar
 
-    /// A floating sidebar: a rounded slab inset from every edge, laid over the
-    /// content rather than partitioning the window, the way macOS 26 does it.
-    ///
-    /// The blur comes from AppKit. SwiftUI's own materials sample the window's
-    /// backing, and over this theme's near-black gradient they resolve to flat
-    /// grey. An `NSVisualEffectView` in `.withinWindow` mode blurs what is
-    /// behind it, which is what the treatment needs.
+    /// The blur is AppKit's. SwiftUI materials turn flat grey over this theme's
+    /// near-black gradient, but an `NSVisualEffectView` in `.withinWindow` mode
+    /// blurs what is behind it.
     private var floatingSidebar: some View {
         let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         return sidebarContent
@@ -185,10 +158,7 @@ struct RootView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        // Leave the top of the panel to the window controls.
         .padding(.top, Self.trafficLightBand)
-        // Put the toggle at the other end of that same row, inside the sidebar
-        // rather than floating on the content beside it.
         .overlay(alignment: .topTrailing) {
             toggleButton(onSidebar: true)
                 .padding(.trailing, 10)
@@ -199,13 +169,8 @@ struct RootView: View {
 
     private static let toggleSize = CGSize(width: 28, height: 22)
 
-    /// The toggle, without placement, since it is mounted in two different
-    /// places. While the sidebar is open it belongs to the sidebar, on the same
-    /// row as the window controls and at the far end of it; hidden, it has to
-    /// live on the content instead, because its host has gone.
-    ///
-    /// Inked for the surface it is mounted on rather than for `sidebarVisible`,
-    /// so the copy sliding out with the sidebar keeps the sidebar's colours.
+    /// Mounted on the sidebar when open and on the content when hidden. Colors
+    /// follow `onSidebar` so the copy sliding out keeps the sidebar colors.
     private func toggleButton(onSidebar: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
         return Button {
@@ -257,31 +222,25 @@ struct RootView: View {
         }
     }
 
-    /// The side panes are a column of text; the 3D board fills the rest of the
-    /// width beside them. It stays mounted on the Keyboard pane, collapsed and
-    /// paused, so leaving that pane flies the camera in from the whole board
-    /// instead of starting cold.
+    /// The 3D board fills the width beside the side panes. It stays mounted,
+    /// collapsed and paused, on the Keyboard pane so the camera can fly in from
+    /// the whole board when you leave it.
     private var detail: some View {
-        // The Clipboard and Logs tabs have nothing on the board worth
-        // pointing at.
+        // The Clipboard and Logs tabs have nothing to show on the board.
         let showStage = pane != .keys
             && !(pane == .settings && [.clipboard, .logs].contains(settingsTab))
-        // No spacing: the column's own trailing padding is the gap, and on
-        // the Keyboard pane any spacing would come out of the board's width.
+        // No spacing, since on the Keyboard pane it would come out of the
+        // board's width.
         return HStack(alignment: .top, spacing: 0) {
             paneColumn
                 .frame(maxWidth: pane == .keys ? .infinity : Self.paneColumnWidth,
                        alignment: .leading)
-            // The Popup tab shows the popup itself rather than the board. The
-            // stage stays underneath, paused, so the camera has somewhere to
-            // fly from when another tab is picked.
+            // The Popup tab shows the popup instead of the board. The stage
+            // stays underneath, paused, so the camera can fly from it later.
             let popupDemo = pane == .settings && settingsTab == .popup
-            // Centred in the column, so the short popup preview sits level
-            // with the middle of the settings beside it.
-            //
-            // Swapped without animation: the column also changes width when
-            // coming from a tab without the stage, and animating the two
-            // together dragged a sliver of the board across the preview.
+            // Swapped without animation. The column can change width at the
+            // same time, and animating both dragged part of the board across
+            // the preview.
             ZStack {
                 BoardStageView(focus: BoardFocus(pane: pane, settingsTab: settingsTab),
                                active: showStage && !popupDemo,
@@ -303,8 +262,7 @@ struct RootView: View {
     private static let paneColumnWidth: CGFloat = 620 + contentPadding * 2
 
     private var paneColumn: some View {
-        // The Keyboard pane is laid out to fit; scrolling it only ever moved
-        // it a few points and back.
+        // The Keyboard pane is laid out to fit, so it does not scroll.
         ClassicScroll(scrolls: pane != .keys) {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .center, spacing: 14) {
@@ -317,8 +275,7 @@ struct RootView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Self.contentPadding)
-            // Clear of the title bar and the sidebar toggle, both of which the
-            // content now runs underneath.
+            // Clears the title bar and the sidebar toggle.
             .padding(.top, 54)
             .padding(.bottom, 24)
         }

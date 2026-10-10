@@ -1,6 +1,5 @@
-// The page's line to the app. In the M0110 window this is WebView2's
-// postMessage; opened in an ordinary browser (for previews) it falls back to
-// demo.js, which plays the app's part with sample data.
+// Talks to the app through WebView2 postMessage. In a normal browser it uses
+// demo.js and sample data instead.
 const webview = window.chrome && window.chrome.webview;
 const listeners = new Set();
 
@@ -15,14 +14,12 @@ if (webview) {
   demo = import('./demo.js').then((module) => module.start(deliver));
 }
 
-/** Sends `type` and `body` to the app. */
 export function send(type, body = {}) {
   const message = { type, ...body };
   if (webview) webview.postMessage(message);
   else demo.then((d) => d.receive(message));
 }
 
-/** Calls `listener` with each message from the app. */
 export function listen(listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);

@@ -2,40 +2,28 @@ import AppKit
 import SceneKit
 import SwiftUI
 
-/// The 3D M0110: a chamfered solid at the real board's proportions, surfaced
-/// with `BoardArtView`'s vector art.
-///
-/// The model is not an imported asset. Proportions come from `BoardHull`, which
-/// derives them from the same layout table the Keys pane draws, and the top
-/// face is the same drawing the editor shows, so the board that spins in the
-/// HUD and the board you edit keys on cannot be restyled apart.
-///
-/// Built as a value rather than baked into the view so the same scene can be
-/// rendered offscreen for review (`--board-snapshot`) without a HUD, a window,
-/// or a screen capture.
+/// The 3D M0110: a chamfered solid at the real board's proportions, with `BoardArtView`'s art.
+/// Proportions come from `BoardHull`, which uses the same layout table as the Keys pane, so
+/// the HUD board and the editor board always match. Built as a value so `--board-snapshot`
+/// can render it offscreen without a HUD or window.
 struct BoardScene {
     let scene = SCNScene()
-    /// The node to turn. Rotating this rather than the geometry keeps the
-    /// camera and lights fixed, which is what makes the light sweep across the
-    /// case as it goes round.
+    /// The node to rotate. The camera and lights stay fixed, so light moves across the case as it turns.
     let boardNode = SCNNode()
-    /// Unit-hundredths to a scene unit. One constant, because the wedge, the
-    /// caps and the textures all have to agree about it.
+    /// Key-unit hundredths per scene unit. The wedge, caps and textures must all use the same value.
     static let sceneUnit: CGFloat = 1000
 
     private let topMaterial = SCNMaterial()
     private let bottomMaterial = SCNMaterial()
     private let backMaterial = SCNMaterial()
 
-    /// Case beige, matching `Theme.caseFlat`. The sides of the real case are
-    /// the same plastic as the top, just turned away from the light.
+    /// Matches `Theme.caseFlat`. The real case sides are the same plastic as the top.
     private static let caseCream = NSColor(srgbRed: 0.839, green: 0.824, blue: 0.765, alpha: 1)
 
     init() {
         scene.rootNode.addChildNode(boardNode)
         boardNode.addChildNode(SCNNode(geometry: makeWedge()))
-        // The caps are solids standing in the well, not paint on its floor.
-        // They turn with the case, so they hang off the same node.
+        // The caps are solid shapes, added to the board node so they rotate with the case.
         let hull = BoardHull.m0110
         for cap in BoardCaps.make(hull: hull, u: Self.sceneUnit,
                                   deckY: { BoardWedge.deckY(hull: hull, u: Self.sceneUnit, z: $0) }) {
@@ -45,9 +33,6 @@ struct BoardScene {
         for light in makeLights() { scene.rootNode.addChildNode(light) }
     }
 
-    /// `BoardHull` measures in hundredths of a key unit; the scene works in
-    /// scene units, so everything divides by the same constant and the
-    /// proportions carry over untouched.
     private func makeWedge() -> SCNGeometry {
         let geometry = BoardWedge.make(hull: BoardHull.m0110, u: Self.sceneUnit)
 
@@ -81,27 +66,17 @@ struct BoardScene {
 
     private func makeCamera() -> SCNNode {
         let camera = SCNCamera()
-        // Fix the field of view to the horizontal, then frame the board's long
-        // axis in it. Left on the default the framing tracks whichever edge of
-        // the view happens to be longer, so the board changes size when the HUD
-        // is rescaled, which is what `--scale` does.
+        // Fix the field of view to the horizontal axis. By default it follows the longer view
+        // edge, so the board would change size when `--scale` resizes the HUD.
         camera.projectionDirection = .horizontal
         camera.fieldOfView = 44
         camera.zNear = 0.01
 
         let node = SCNNode()
         node.camera = camera
-        // 35° up, and far enough back for the tallest pose of the roll.
-        //
-        // The board turns about its long axis, so its horizontal extent is the
-        // case width at every angle and the framing never has to chase it. What
-        // moves is the vertical: it sweeps between the case seen edge-on, which
-        // is only its thickness, and the full depth of the top face when that
-        // comes round to face the camera. 2.4 back clears the tall pose.
-        //
-        // The elevation is a look rather than a fit. 35° is where the top face
-        // reads like the reference photograph instead of like a plan view, and
-        // it sets which face leads into the roll.
+        // 35 degrees up and 2.4 back. The board rotates about its long axis, so only its height
+        // changes, from edge-on thickness to the full top face. 2.4 back fits the tallest pose.
+        // 35 degrees makes the top face look like the reference photo.
         node.position = SCNVector3(0, 1.7, 2.4)
         node.look(at: SCNVector3(0, 0, 0))
         return node
@@ -114,9 +89,8 @@ struct BoardScene {
         let ambientNode = SCNNode()
         ambientNode.light = ambient
 
-        // One key light, high and to the left, matching the direction the flat
-        // drawing is lit from: its chamfers run bright top-left to dark
-        // bottom-right, and a light from the other side would fight the texture.
+        // Key light high and to the left, to match the flat drawing's chamfers (bright top-left,
+        // dark bottom-right).
         let key = SCNLight()
         key.type = .directional
         key.color = NSColor(white: 0.80, alpha: 1)
@@ -128,11 +102,8 @@ struct BoardScene {
         return [ambientNode, keyNode]
     }
 
-    /// Lay the vector art on the two drawn faces for a given theme.
-    ///
-    /// Separate from `init` because the art is built from dynamic colours,
-    /// which resolve only once something knows which appearance it is in, and
-    /// it has to be redone when that changes under a HUD already on screen.
+    /// Separate from `init` because the art uses dynamic colors that resolve only once the
+    /// appearance is known, and it must be redone when the appearance changes on a visible HUD.
     @MainActor
     func applyArt(colorScheme: ColorScheme, pixelsWide: CGFloat = 1024) {
         if let top = BoardArt.topFace(pixelsWide: pixelsWide, colorScheme: colorScheme) {

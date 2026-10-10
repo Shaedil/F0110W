@@ -1,13 +1,7 @@
-"""Sculpts the Gestures pane's hand and writes Resources/Hand.usdz.
+"""Builds the Gestures pane's hand and writes Resources/Hand.usdz.
 
-An upright fist, knuckles up, fingers curled toward -x, the forearm
-rising from below, z up (the model's Blender axes), in metres. The file says Y-up regardless: SceneKit
-turns a Z-up file over on import, and the app wants these axes as they are. Built as a signed distance field of
-tapered capsules blended with a smooth minimum, then meshed with marching
-cubes, so the joints run into each other the way skin does.
-
-Two meshes: "Hand", and "Thumb" (from its first knuckle out) on its own so
-the app can rub it against the index finger.
+The model is z up, in meters, but the file says Y-up because SceneKit flips a
+Z-up file on import. "Thumb" is its own mesh so the app can move it.
 
     uv run --with scikit-image --with numpy tools/make-hand.py
 """
@@ -39,9 +33,7 @@ def smin(a, b, k=0.006):
     return b + (a - b) * h - k * h * (1 - h)
 
 
-# Upright, knuckles up: the forearm rises from below, the curled fingers
-# face -x, and the thumb lies along the index finger's outer side.
-# Index at -y, pinky at +y: y, radius, length scale.
+# Index finger at -y, pinky at +y. Each entry is y, radius, length scale.
 FINGERS = [
     (-0.026, 0.0088, 1.0),
     (-0.0085, 0.0091, 1.05),
@@ -63,16 +55,14 @@ def hand(p):
         f = smin(f, capsule(p, pip, dip, r, r * 0.95), 0.003)
         f = smin(f, capsule(p, dip, tip, r * 0.95, r * 0.88), 0.003)
         d = smin(d, f, 0.009)
-    # The curled fingers press against the palm: fill between them, or the
-    # seam is a deep slot the grid draws as a jagged line.
+    # Fill the gap between the curled fingers and the palm, or the mesh shows a
+    # jagged seam there.
     d = smin(d, rounded_box(p, (-0.016, -0.001, 0.006), (0.009, 0.031, 0.013), 0.006), 0.006)
-    # The thumb's metacarpal, the fleshy base of the thumb.
     d = smin(d, capsule(p, (-0.002, -0.026, -0.034), THUMB_BASE, 0.0135, 0.0118), 0.008)
     return d
 
 
 def thumb(p):
-    # Up the index finger's outer side, the tip at its middle knuckle.
     ip = (-0.025, -0.038, 0.004)
     tip = (-0.026, -0.033, 0.019)
     d = capsule(p, THUMB_BASE, ip, 0.0115, 0.0103)
@@ -82,12 +72,11 @@ def thumb(p):
 def mesh(field, lo, hi):
     axes = [np.arange(l, h, STEP) for l, h in zip(lo, hi)]
     grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
-    # A light blur rounds off the seams where the fingers meet, which the
-    # grid otherwise steps along in a ripple.
+    # A light blur smooths out the steps where the fingers meet.
     values = filters.gaussian(field(grid), sigma=1.5, preserve_range=True)
     verts, faces, normals, _ = measure.marching_cubes(values, 0, spacing=(STEP,) * 3)
     verts += np.array([a[0] for a in axes])
-    # marching_cubes' normals point down the gradient, into the solid.
+    # marching_cubes returns normals that point into the solid, so flip them.
     return verts, faces, -normals
 
 

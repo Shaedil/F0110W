@@ -1,11 +1,9 @@
 import CM0110Win
 
-/// Text for the HUD, drawn by GDI.
 struct GDIText: TextRasterizer {
-    /// Segoe UI rather than Segoe UI Variable: GDI picks the variable font's
-    /// weights by name, not by number, and would synthesise a bold instead.
+    /// Not Segoe UI Variable, because GDI picks its weights by name and would fake the bold.
     static let faces = "Segoe UI;Tahoma".wide
-    /// KeyboardClassic lives in both: Fluent on Windows 11, MDL2 on 10.
+    /// Both have KeyboardClassic. Fluent is on Windows 11, MDL2 on 10.
     static let iconFaces = "Segoe Fluent Icons;Segoe MDL2 Assets".wide
 
     func render(_ text: String, size: Int, weight: Int, maxWidth: Int) -> TextMask {

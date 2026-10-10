@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// Miniature of the board for the sidebar header.
-///
-/// Renders the same `DisplayKey` table the Keys pane draws, so the thumbnail is
-/// always the actual M0110 or M0110A geometry, stepped modifiers and ISO return
-/// and numpad included, rather than a generic keyboard that drifts out of sync.
+/// Small copy of the board for the sidebar header, drawn from the same
+/// `DisplayKey` table as the Keys pane so it always matches.
 struct KeyboardThumbnail: View {
     let keys: [DisplayKey]
     /// Board width in hundredths of a key unit.

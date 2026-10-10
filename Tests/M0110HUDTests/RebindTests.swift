@@ -2,8 +2,7 @@ import XCTest
 
 @testable import M0110HUD
 
-// Behaviour table as the firmware reports it, by the display names in ZMK's
-// behaviour .dtsi files. Ids are arbitrary but distinct.
+// Display names match ZMK's behavior .dtsi files. The IDs are arbitrary.
 private let keyPress = BehaviorInfo(id: 5, displayName: "Key Press", param1: .hidUsage)
 private let transparent = BehaviorInfo(id: 9, displayName: "Transparent", param1: .none)
 private let none = BehaviorInfo(id: 8, displayName: "None", param1: .none)
@@ -19,8 +18,6 @@ final class RebindTests: XCTestCase {
                        BehaviorBinding(behaviorID: 5, param1: volumeUp, param2: 0))
     }
 
-    /// The Fn layer is mostly `&trans`. Those slots had no keycode to swap, so
-    /// the picker refused them and only base-layer keys could be rebound.
     func testTransparentSlotBecomesAKeyPress() {
         let trans = BehaviorBinding(behaviorID: 9, param1: 0, param2: 0)
         XCTAssertEqual(trans.sending(volumeUp, behaviors: table),
