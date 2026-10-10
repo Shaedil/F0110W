@@ -62,17 +62,9 @@
   --sun-x: 50%;
   --sun-y: 22%;
   /* PrismTokens, several times prismorphism's web strengths, for a desktop
-     window at arm's length. The triad runs corner to corner. */
-  --prism-wash: linear-gradient(to bottom right, rgba(var(--prism-t1), 0.08), rgba(var(--prism-t2), 0.08),
-                                rgba(var(--prism-t3), 0.08));
-  --prism-rim: linear-gradient(to bottom right, rgba(var(--prism-t1), 0.9), rgba(var(--prism-t2), 0.9),
-                               rgba(var(--prism-t3), 0.9));
+     window at arm's length. The corner-to-corner ones are below. */
   --prism-shine: linear-gradient(to right, rgba(var(--prism-t1), 0) 5%, rgb(var(--prism-t1)) 20%,
                                  rgb(var(--prism-t2)) 50%, rgb(var(--prism-t3)) 80%, rgba(var(--prism-t3), 0) 95%);
-  --prism-selected: linear-gradient(to bottom right, rgba(var(--prism-m1), 0.38), rgba(var(--prism-m2), 0.38),
-                                    rgba(var(--prism-m3), 0.38));
-  --prism-selected-rim: linear-gradient(to bottom right, rgb(var(--prism-m1)), rgb(var(--prism-m2)),
-                                        rgb(var(--prism-m3)));
   --prism-marks: linear-gradient(to right, rgb(var(--prism-m1)), rgb(var(--prism-m2)), rgb(var(--prism-m3)));
 
   --corner: 14px;
@@ -80,6 +72,22 @@
   --font-title: "Georgia", "Cambria", serif;
   --font-cap: "Helvetica", "Arial", sans-serif;
   --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+}
+
+/* The triad corner to corner, top left to bottom right along the box's own
+   diagonal, as SwiftUI runs it: a wide box goes mostly left to right, the
+   tall sidebar mostly top to bottom. CSS's "to bottom right" would do the
+   reverse, so prism.js gives each such box its diagonal's angle as --diag.
+   Declared on every element, so var(--diag) is each box's own. */
+* {
+  --prism-wash: linear-gradient(var(--diag, 135deg), rgba(var(--prism-t1), 0.08), rgba(var(--prism-t2), 0.08),
+                                rgba(var(--prism-t3), 0.08));
+  --prism-rim: linear-gradient(var(--diag, 135deg), rgba(var(--prism-t1), 0.9), rgba(var(--prism-t2), 0.9),
+                               rgba(var(--prism-t3), 0.9));
+  --prism-selected: linear-gradient(var(--diag, 135deg), rgba(var(--prism-m1), 0.38),
+                                    rgba(var(--prism-m2), 0.38), rgba(var(--prism-m3), 0.38));
+  --prism-selected-rim: linear-gradient(var(--diag, 135deg), rgb(var(--prism-m1)), rgb(var(--prism-m2)),
+                                        rgb(var(--prism-m3)));
 }
 
 @media (prefers-color-scheme: light) {
@@ -129,15 +137,17 @@ html, body {
 /* The ground: near-black with prismorphism's sun-tracking ambient in it,
    pm-ambient-chronos. Three soft glows of the triad, the strongest centred
    where the sun is, so it climbs the window through the morning and sets at
-   the far edge, and all of them dim, though not out, at night. */
+   the far edge, and all of them dim, though not out, at night. The Mac
+   draws the sun's glow first, so it is the bottom layer: CSS lists layers
+   top first. */
 body {
   background:
-    radial-gradient(ellipse 70% 55% at var(--sun-x) var(--sun-y),
-                    rgba(var(--prism-t1), calc(0.55 * var(--prism-glow))), transparent 60%),
-    radial-gradient(ellipse 60% 50% at calc(var(--sun-x) + 18%) calc(var(--sun-y) + 12%),
-                    rgba(var(--prism-t2), calc(0.4 * var(--prism-glow))), transparent 60%),
     radial-gradient(ellipse 80% 70% at 50% 60%,
                     rgba(var(--prism-t3), calc(0.2 * var(--prism-glow))), transparent 60%),
+    radial-gradient(ellipse 60% 50% at calc(var(--sun-x) + 18%) calc(var(--sun-y) + 12%),
+                    rgba(var(--prism-t2), calc(0.4 * var(--prism-glow))), transparent 60%),
+    radial-gradient(ellipse 70% 55% at var(--sun-x) var(--sun-y),
+                    rgba(var(--prism-t1), calc(0.55 * var(--prism-glow))), transparent 60%),
     var(--ink);
 }
 

@@ -4,7 +4,7 @@
 
 import { listen, send } from './bridge.js';
 import { ditheredTitle, pixelIcon, racingStripes, rgb } from './art.js';
-import { followSky } from './prism.js';
+import { followDiagonals, followSky } from './prism.js';
 import { h } from './ui.js';
 import { keyboardPane } from './panes/keyboard.js';
 import { bluetoothPane, batteryPane, gesturesPane } from './panes/side.js';
@@ -147,6 +147,7 @@ if (!window.chrome?.webview) window.m0110 = app;
 if (preview.has('select')) app.ui.selected = Number(preview.get('select'));
 if (preview.has('layer')) app.ui.layer = Number(preview.get('layer'));
 if (preview.get('sidebar') === '0') setSidebar(false);
+followDiagonals();
 // The sky, kept current each minute; ?sky=HH:MM pins it, to review any time
 // of day.
 followSky((prism) => {

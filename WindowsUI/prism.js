@@ -47,6 +47,41 @@ export class Prism {
   }
 }
 
+/** The boxes whose triad runs corner to corner. */
+const DIAGONAL = '.panel, #sidebar, .pill.prominent, .segments button.active';
+
+/** Gives each corner-to-corner box its own diagonal's angle as --diag, kept
+ *  as it resizes and as boxes come and go. SwiftUI's topLeading to
+ *  bottomTrailing gradient runs along that diagonal; CSS's "to bottom right"
+ *  runs across the other one, which turns a wide box's triad top to bottom. */
+export function followDiagonals(root = document.body) {
+  const watched = new Set();
+  const sizes = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const box = entry.borderBoxSize?.[0];
+      const width = box?.inlineSize ?? entry.contentRect.width;
+      const height = box?.blockSize ?? entry.contentRect.height;
+      if (!width || !height) continue;
+      // CSS angles run clockwise from "to top"; this one points down the
+      // diagonal, at 135deg for a square.
+      const angle = 180 - Math.atan(width / height) * 180 / Math.PI;
+      entry.target.style.setProperty('--diag', `${angle.toFixed(2)}deg`);
+    }
+  });
+  const scan = () => {
+    for (const el of watched) {
+      if (!el.isConnected || !el.matches(DIAGONAL)) { sizes.unobserve(el); watched.delete(el); }
+    }
+    for (const el of root.querySelectorAll(DIAGONAL)) {
+      if (!watched.has(el)) { watched.add(el); sizes.observe(el); }
+    }
+  };
+  // Classes only: the --diag writes themselves change style, not class.
+  new MutationObserver(scan).observe(root, { subtree: true, childList: true, attributes: true,
+                                             attributeFilter: ['class'] });
+  scan();
+}
+
 /** Keeps the sky current: once now, then each minute, the original's own
  *  cadence. `pinned` ("HH:MM") holds it to a time of day instead, as the
  *  Mac's --snapshot-time does. `changed` hears each new Prism. */
